@@ -1,0 +1,80 @@
+name: Node.js CI with SQLite
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    # ⚠️ Keep this name fixed. Required status checks are configured per-organization
+    # by check name, so renaming the job here silently exempts this repository
+    # from the merge gate.
+    name: CI Test
+
+    # private repository: self-hosted
+    # public repository: github-hosted
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted", "light"]' || '["ubuntu-latest"]') }}
+
+    timeout-minutes: 60
+
+    # Declared for the whole job rather than exported into $GITHUB_ENV from a step,
+    # so the value is readable here instead of in the log of a step that ran earlier.
+    env:
+      NODE_ENV: development
+
+    steps:
+      - name: 🛎️ Checkout repository code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 🏗️ Use Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # ⚠️ The npm cache only pays off where ~/.npm is discarded between jobs.
+          # On a persistent [self-hosted] runner it re-ships what is already on disk,
+          # adding a measured 2.7 GB and ~2m30s to this step so that the next one,
+          # npm ci, can finish in 5s instead of 7s.
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+          package-manager-cache: false
+          # A floating LTS alias keeps every repository current without a scheduled
+          # sweep to bump a pinned major across all of them. Pin a concrete version
+          # here only in a repository that genuinely needs one.
+          node-version: lts/*
+
+      - name: 🖨️ Print environment
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          echo
+          echo "runner: $RUNNER_ENVIRONMENT"
+          echo "node  : $(node -v)"
+          echo "npm   : $(npm -v)"
+
+      # ⚠️ This gate runs before npm ci because npm audit resolves the tree from
+      # package-lock.json alone and needs no node_modules. Putting the cheapest check
+      # first keeps a vulnerable dependency tree from paying for an install and a test run.
+      #
+      # ⚠️ When this step fails, check whether npm is answering before reading it as a
+      # finding. A 503 from the advisory service exits 1 exactly as an advisory does, and
+      # npm does not retry the bulk POST — `--fetch-retries=4` still sends one request.
+      # Telling the two apart takes a script that reads `npm audit --json`, and that is
+      # worth carrying only while the service is degraded, which is a passing condition.
+      - name: 🛡️ npm audit
+        run: npm audit
+
+      - name: 📦 Install packages
+        run: npm ci
+
+      - name: 🧪 Jest
+        # ⚠️ Keep the `--` before the mode. Without it npm eats `--empty` / `--seeded`
+        # as its own config, and test.sh falls through to a branch that names no group
+        # and runs jest without the `--detectOpenHandles` that `_orders/` is given.
+        run: npm test -- --empty
+      - run: npm test -- --seeded
