@@ -1,7 +1,7 @@
 {
-  "name": "TODO: Fulfill here ❌️",
+  "name": "tsdg-ai-backend",
   "version": "0.0.0",
-  "description": "TODO: Fulfill here",
+  "description": "AI service reached over REST by a partner backend. Each request becomes an asynchronous run whose result is posted back on a signed callback.",
   "main": "index.js",
   "type": "module",
   "scripts": {
