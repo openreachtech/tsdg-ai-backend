@@ -20,6 +20,21 @@ const DEFAULT_REFRESH_TOKEN_LIFETIME_DAYS = 14
  */
 export default class BaseAppGraphqlServerEngine extends BaseGraphqlServerEngine {
   /**
+   * get: The environment these settings are read from.
+   *
+   * The two getters below read the environment through here rather than reaching for the imported
+   * facade, so that a test can hand them an environment of its own. `renchan-env`'s facade refuses
+   * every write, by design — without this seam the fallback branches state a default nothing can
+   * reach, and the tests covering them pass only on a machine whose `.env` happens to leave those
+   * two values empty.
+   *
+   * @returns {import('../../app/globals/env.js').default} - Environment facade.
+   */
+  static get env () {
+    return env
+  }
+
+  /**
    * get: Shared refresh-token cookie configuration.
    *
    * @returns {RefreshTokenCookieBaseConfig} - Shared config; the name is added per audience.
@@ -39,7 +54,7 @@ export default class BaseAppGraphqlServerEngine extends BaseGraphqlServerEngine 
    * @returns {number} - Days.
    */
   static get refreshTokenCookieLifetimeDays () {
-    const normalizedDays = Number(env.AUTH_REFRESH_TOKEN_TTL_DAYS)
+    const normalizedDays = Number(this.env.AUTH_REFRESH_TOKEN_TTL_DAYS)
 
     if (!normalizedDays) {
       return DEFAULT_REFRESH_TOKEN_LIFETIME_DAYS
@@ -57,7 +72,7 @@ export default class BaseAppGraphqlServerEngine extends BaseGraphqlServerEngine 
    * @returns {boolean} - true: emit `Secure`.
    */
   static get usesSecureRefreshTokenCookie () {
-    return env.AUTH_COOKIE_SECURE !== 'false'
+    return this.env.AUTH_COOKIE_SECURE !== 'false'
   }
 }
 
