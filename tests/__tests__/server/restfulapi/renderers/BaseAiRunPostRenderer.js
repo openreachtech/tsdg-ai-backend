@@ -28,6 +28,10 @@ describe('BaseAiRunPostRenderer', () => {
             statusCode: 422,
             errorMessage: 'Idempotency-Key header is required',
           },
+          InvalidIdempotencyKey: {
+            statusCode: 422,
+            errorMessage: 'Invalid Idempotency-Key header',
+          },
           InvalidRequestBody: {
             statusCode: 422,
             errorMessage: 'Invalid request body',

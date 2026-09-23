@@ -10,6 +10,11 @@
  * `401` and `403` are not here — they are the engine's, because they are decided before a renderer
  * is reached.
  *
+ * The idempotency key carries two of these and every other field one, because the contract states
+ * two `422` lines for that header and one for everything else: it may not have been sent at all,
+ * and it may have been sent carrying a value the schema does not accept. Both are `422`, and a
+ * caller reading the message can tell which it was.
+ *
  * They sit in a module of their own so the renderer that spreads them stays the size of the thing
  * it does, and so a second AI service's renderer answers refusals in the same words as the first.
  */
@@ -17,6 +22,10 @@ const AI_RUN_REFUSAL_ENVELOPE = {
   MissingIdempotencyKey: {
     statusCode: 422,
     errorMessage: 'Idempotency-Key header is required',
+  },
+  InvalidIdempotencyKey: {
+    statusCode: 422,
+    errorMessage: 'Invalid Idempotency-Key header',
   },
   InvalidRequestBody: {
     statusCode: 422,
