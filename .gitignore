@@ -1,5 +1,6 @@
 #### for Application
 sequelize/storage/
+logs/
 
 #### environment
 .env
