@@ -19,6 +19,9 @@ describe('BaseAppGraphqlServerEngine', () => {
   describe('.get:refreshTokenCookieLifetimeDays', () => {
     describe('to fall back to the default when the env value is unset', () => {
       test('should be fourteen days', () => {
+        jest.spyOn(BaseAppGraphqlServerEngine, 'env', 'get')
+          .mockReturnValue({}) // no value set, so both getters fall back
+
         const actual = BaseAppGraphqlServerEngine.refreshTokenCookieLifetimeDays
 
         expect(actual)
@@ -32,6 +35,9 @@ describe('BaseAppGraphqlServerEngine', () => {
   describe('.get:usesSecureRefreshTokenCookie', () => {
     describe('to keep the secure flag on when the env value is unset', () => {
       test('should be truthy', () => {
+        jest.spyOn(BaseAppGraphqlServerEngine, 'env', 'get')
+          .mockReturnValue({}) // no value set, so both getters fall back
+
         const actual = BaseAppGraphqlServerEngine.usesSecureRefreshTokenCookie
 
         expect(actual)
@@ -45,12 +51,18 @@ describe('BaseAppGraphqlServerEngine', () => {
   describe('.get:refreshTokenCookieConfig', () => {
     describe('to carry the shared cookie attributes', () => {
       test('should be the default config', () => {
+        jest.spyOn(BaseAppGraphqlServerEngine, 'env', 'get')
+          .mockReturnValue({}) // no value set, so both getters fall back
+
         const expected = {
           lifetimeDays: 14,
           secure: true,
           sameSite: 'lax',
           httpOnly: true,
         }
+
+        jest.spyOn(BaseAppGraphqlServerEngine, 'env', 'get')
+          .mockReturnValue({}) // no value set, so both getters fall back
 
         const actual = BaseAppGraphqlServerEngine.refreshTokenCookieConfig
 

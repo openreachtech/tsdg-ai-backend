@@ -23,6 +23,9 @@ describe('AdminGraphqlServerEngine', () => {
 describe('AdminGraphqlServerEngine', () => {
   describe('.get:config', () => {
     test('to be fixed value', () => {
+      jest.spyOn(AdminGraphqlServerEngine, 'env', 'get')
+        .mockReturnValue({}) // no value set, so both getters fall back
+
       const expected = {
         graphqlEndpoint: '/graphql-admin',
         refreshTokenCookie: {
@@ -52,6 +55,9 @@ describe('AdminGraphqlServerEngine', () => {
   describe('.buildRefreshTokenCookieConfig()', () => {
     describe('to combine the shared config with the audience cookie name', () => {
       test('should be the admin cookie config', () => {
+        jest.spyOn(AdminGraphqlServerEngine, 'env', 'get')
+          .mockReturnValue({}) // no value set, so both getters fall back
+
         const expected = {
           lifetimeDays: 14,
           secure: true,

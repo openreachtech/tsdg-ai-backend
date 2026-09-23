@@ -23,6 +23,9 @@ describe('CustomerGraphqlServerEngine', () => {
 describe('CustomerGraphqlServerEngine', () => {
   describe('.get:config', () => {
     test('to be fixed value', () => {
+      jest.spyOn(CustomerGraphqlServerEngine, 'env', 'get')
+        .mockReturnValue({}) // no value set, so both getters fall back
+
       const expected = {
         graphqlEndpoint: '/graphql-customer',
         refreshTokenCookie: {
@@ -52,6 +55,9 @@ describe('CustomerGraphqlServerEngine', () => {
   describe('.buildRefreshTokenCookieConfig()', () => {
     describe('to combine the shared config with the audience cookie name', () => {
       test('should be the customer cookie config', () => {
+        jest.spyOn(CustomerGraphqlServerEngine, 'env', 'get')
+          .mockReturnValue({}) // no value set, so both getters fall back
+
         const expected = {
           lifetimeDays: 14,
           secure: true,
