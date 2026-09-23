@@ -6,6 +6,9 @@ import {
 
 const ENCRYPTION_ALGORITHM_NAME = 'aes-256-gcm'
 const ENCRYPTION_KEY_ENCODING = 'hex'
+// 64 hex characters, which are the 32 bytes AES-256 takes and nothing either side of them.
+const ENCRYPTION_KEY_PATTERN = /^[0-9a-f]{64}$/iu
+const UNUSABLE_ENCRYPTION_KEY_MESSAGE = 'API_CLIENT_SECRET_ENCRYPTION_KEY must be 64 hex characters, the 32 bytes AES-256-GCM takes'
 const INITIALIZATION_VECTOR_BYTE_SIZE = 12
 const ENVELOPE_DELIMITER = ':'
 const ENVELOPE_PART_COUNT = 3
@@ -49,7 +52,10 @@ const SECRET_ENCODING = 'utf8'
  * unusable encryption key is an operator error, and it throws.
  *
  * **The key** is read from `env.API_CLIENT_SECRET_ENCRYPTION_KEY`, which holds the 32 bytes of
- * an AES-256 key written as 64 hex characters.
+ * an AES-256 key written as 64 hex characters. Anything else — absent, empty, short, or not hex
+ * — is refused at construction rather than carried into a cipher, because a key that cannot open
+ * an envelope would otherwise turn every client in the deployment away as though each of their
+ * signatures were wrong. See `.buildEncryptionKey()`.
  */
 export default class ApiClientSecretCipher {
   /**
@@ -103,11 +109,42 @@ export default class ApiClientSecretCipher {
   /**
    * Build the encryption key the environment declares.
    *
+   * **A key that is not an AES-256 key stops this class here, at construction.** Until it did,
+   * nothing checked: an empty variable — which is what `.env.live` ships — produced a zero-byte
+   * buffer, `createDecipheriv()` threw on it, `#decryptSecret()` caught that and answered `null`
+   * as it does for any envelope it cannot open, and every client in the deployment was refused
+   * `401` with nothing anywhere saying the key was the reason. A variable nobody declared at all
+   * threw a `TypeError` out of the request instead, and every request became a `500`.
+   *
+   * **Why construction rather than a boot-time check.** A boot step would have to live in
+   * `server/index.js`, which guards the API server alone — and the other consumer of this class is
+   * the seeder that encrypts a development client's secret, which is run by the Sequelize CLI and
+   * never loads that file. Checking where the key is built guards every consumer, and there is no
+   * second place to keep in step with the first.
+   *
+   * **It refuses more than it used to, never less.** The throw replaces a path that already
+   * refused everything, so no request that was turned away before is let through now; what changes
+   * is that the operator is told why, at the first use rather than never.
+   *
+   * **Where being told actually happens.** Throwing is the whole of this method's part in it. On
+   * the request path the exception becomes a `500` answering `Unknown Error` and prints nothing in
+   * production, so `AppRestfulApiContext.createApiClientSecretCipher()` writes the line that names
+   * the variable before letting the exception through. A consumer that runs in a terminal — the
+   * seeder that encrypts a development client's secret — is told by the throw itself and needs no
+   * line.
+   *
    * @returns {Buffer} AES-256 key, as its 32 raw bytes.
+   * @throws {Error} When the environment declares no usable key.
    */
   static buildEncryptionKey () {
+    const encryptionKeyText = this.env.API_CLIENT_SECRET_ENCRYPTION_KEY
+
+    if (!ENCRYPTION_KEY_PATTERN.test(encryptionKeyText)) {
+      throw new Error(UNUSABLE_ENCRYPTION_KEY_MESSAGE)
+    }
+
     return Buffer.from(
-      this.env.API_CLIENT_SECRET_ENCRYPTION_KEY,
+      encryptionKeyText,
       ENCRYPTION_KEY_ENCODING
     )
   }
