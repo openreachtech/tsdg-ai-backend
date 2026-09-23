@@ -2,16 +2,27 @@ import {
   BaseRestfulApiContext,
 } from '@openreachtech/renchan'
 
+import ApiClientAuthenticationLogger from '../../../app/apiClient/ApiClientAuthenticationLogger.js'
 import ApiClientSecretCipher from '../../../app/apiClient/ApiClientSecretCipher.js'
 import ApiClientSignatureVerifier from '../../../app/apiClient/ApiClientSignatureVerifier.js'
 import RequestTimestampWindowInspector from '../../../app/apiClient/RequestTimestampWindowInspector.js'
 
+import API_CLIENT_AUTHENTICATION_CONSTANT_HASH from '../../../app/constants/apiClientAuthenticationConstants.js'
+
 import ApiClient from '../../../sequelize/models/ApiClient.js'
+
+const {
+  API_CLIENT_AUTHENTICATION_REFUSAL_REASON,
+} = API_CLIENT_AUTHENTICATION_CONSTANT_HASH
 
 const CLIENT_ID_HEADER_NAME = 'x-ort-client-id'
 const TIMESTAMP_HEADER_NAME = 'x-ort-timestamp'
 const SIGNATURE_HEADER_NAME = 'x-ort-signature'
 const RAW_BODY_PROPERTY_NAME = 'rawBody'
+const SECRET_ENVELOPE_FIELD_NAMES = [
+  'secretCiphertext',
+  'previousSecretCiphertext',
+]
 
 /**
  * App RESTful API context.
@@ -43,6 +54,32 @@ const RAW_BODY_PROPERTY_NAME = 'rawBody'
  * — so the switched-off client is resolved like any other, and `is_active` is read by the
  * engine's `hasAuthorized` visa issuer.
  *
+ * **Why the client is read twice.** `ApiClient` excludes its two secret envelopes by default, so
+ * the row `.findApiClient()` answers with — the row that goes on to be `context.userEntity` and is
+ * reachable from every renderer — carries no secret at all. Verifying a signature does need them,
+ * so `.findSecretBearingApiClient()` asks for those two fields alone, by an `unscoped()` read that
+ * says out loud what it is for, and the row it answers with is handed to the signature check and
+ * dropped there. One extra read per request buys a client secret that no renderer can reach even
+ * by accident.
+ *
+ * **Why a refusal is written to the log.** A refused request is answered with a bare status and is
+ * told nothing more, which is right for the caller and useless for the operator: until it was
+ * logged, a client key naming no row and a signature that did not verify looked identical from
+ * outside and left nothing to count. A refusal that names a client key writes one line saying
+ * which check refused, through `ApiClientAuthenticationLogger`, which is also the class that holds
+ * what such a line may never carry.
+ *
+ * **Why a request naming no client key writes nothing.** That is the one refusal reachable without
+ * a credential of any kind: a caller that sends no `x-ort-client-id` at all is refused before a
+ * row is read, so anyone who can reach this service can drive that path as fast as it answers. One
+ * line per such request is one disk write per request, and the rotated files those writes fill are
+ * pruned by nothing this project owns. The line would also say nothing: no client was named, so
+ * there is no id to record, and the reason is the same every time — it would carry no more than
+ * "a request arrived", which the access log already says. The lines that are kept are the ones a
+ * caller had to know a valid client key to produce — a wrong signature, a timestamp outside the
+ * window, a switched-off client — because each of those says somebody is working on one
+ * particular client, which is worth counting.
+ *
  * @extends {BaseRestfulApiContext}
  */
 export default class AppRestfulApiContext extends BaseRestfulApiContext {
@@ -53,6 +90,15 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
    */
   static get ApiClientModel () {
     return ApiClient
+  }
+
+  /**
+   * get: ApiClientAuthenticationLogger class — a seam so tests can substitute it.
+   *
+   * @returns {typeof ApiClientAuthenticationLogger} - The class.
+   */
+  static get ApiClientAuthenticationLoggerCtor () {
+    return ApiClientAuthenticationLogger
   }
 
   /**
@@ -118,13 +164,32 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
     })
 
     if (apiClient === null) {
+      this.logRefusedAuthentication({
+        reasonCode: API_CLIENT_AUTHENTICATION_REFUSAL_REASON.UNKNOWN_CLIENT_KEY,
+        apiClientId: null,
+      })
+
+      return null
+    }
+
+    const secretBearingApiClient = await this.findSecretBearingApiClient({
+      clientKey,
+    })
+
+    if (secretBearingApiClient === null) {
+      this.logRefusedAuthentication({
+        reasonCode: API_CLIENT_AUTHENTICATION_REFUSAL_REASON.UNKNOWN_CLIENT_KEY,
+        apiClientId: apiClient.id,
+      })
+
       return null
     }
 
     const isAcceptable = this.isAcceptableRequest({
       expressRequest,
-      apiClient,
+      apiClient: secretBearingApiClient,
       requestedAt,
+      apiClientId: apiClient.id,
     })
 
     if (!isAcceptable) {
@@ -184,7 +249,41 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
   }
 
   /**
+   * Write the line a refused authentication leaves behind.
+   *
+   * @param {{
+   *   reasonCode: string
+   *   apiClientId: number | null
+   * }} params - Parameters.
+   * @returns {void}
+   */
+  static logRefusedAuthentication ({
+    reasonCode,
+    apiClientId,
+  }) {
+    const logger = this.createApiClientAuthenticationLogger()
+
+    logger.logRefusedAuthentication({
+      reasonCode,
+      apiClientId,
+    })
+  }
+
+  /**
+   * Create the logger a refused authentication is written through.
+   *
+   * @returns {ApiClientAuthenticationLogger} - The logger.
+   */
+  static createApiClientAuthenticationLogger () {
+    return this.ApiClientAuthenticationLoggerCtor.create()
+  }
+
+  /**
    * Find the registered client a client key names.
+   *
+   * The row this answers with is the one that becomes `context.userEntity`, so it carries no
+   * secret: `ApiClient`'s default scope leaves both envelopes out, and this read does not ask for
+   * them back.
    *
    * @param {{
    *   clientKey: string
@@ -205,22 +304,52 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
   }
 
   /**
+   * Find the two secret envelopes a client key's row holds, and nothing else of it.
+   *
+   * This is the one read in the application that asks for a client secret, which is why it is the
+   * one place `unscoped()` is written: the word at this call site is what tells a reader the
+   * omission everywhere else is deliberate. The row is handed to the signature check and dropped
+   * there — it never becomes `context.userEntity` and never reaches a renderer.
+   *
+   * @param {{
+   *   clientKey: string
+   * }} params - Parameters.
+   * @returns {Promise<model.ApiClient | null>} - The API client carrying its secret envelopes, or
+   * null when no row carries that client key.
+   */
+  static async findSecretBearingApiClient ({
+    clientKey,
+  }) {
+    return /** @type {*} */ (
+      this.ApiClientModel
+        .unscoped()
+        .findOne({
+          where: {
+            clientKey,
+          },
+          attributes: SECRET_ENVELOPE_FIELD_NAMES,
+        })
+    )
+  }
+
+  /**
    * Check whether a request is one the named client may be held to have sent.
    *
    * Freshness is settled before the signature, so a request outside the window never reaches the
    * client's secrets at all.
    *
-   * @param {{
-   *   expressRequest: ExpressType.Request
-   *   apiClient: model.ApiClient
-   *   requestedAt: Date
-   * }} params - Parameters.
+   * This is also the only place that knows which of the two checks refused, so it is where the
+   * two reason codes they are logged under are written. `apiClientId` is carried in for that line
+   * alone — the row handed in holds the secret envelopes and nothing that names the client.
+   *
+   * @param {IsAcceptableRequestParams} params - Parameters.
    * @returns {boolean} - True when the request is fresh and signed.
    */
   static isAcceptableRequest ({
     expressRequest,
     apiClient,
     requestedAt,
+    apiClientId,
   }) {
     const isFresh = this.isFreshRequest({
       expressRequest,
@@ -228,13 +357,29 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
     })
 
     if (!isFresh) {
+      this.logRefusedAuthentication({
+        reasonCode: API_CLIENT_AUTHENTICATION_REFUSAL_REASON.STALE_TIMESTAMP,
+        apiClientId,
+      })
+
       return false
     }
 
-    return this.isSignedRequest({
+    const isSigned = this.isSignedRequest({
       expressRequest,
       apiClient,
     })
+
+    if (isSigned) {
+      return true
+    }
+
+    this.logRefusedAuthentication({
+      reasonCode: API_CLIENT_AUTHENTICATION_REFUSAL_REASON.SIGNATURE_MISMATCH,
+      apiClientId,
+    })
+
+    return false
   }
 
   /**
@@ -340,10 +485,42 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
   /**
    * Create the cipher that opens a stored secret envelope.
    *
+   * **Why the failure is logged here rather than inside the cipher.** The cipher refuses an
+   * encryption key that is not an AES-256 key, and refusing is all it should do — it is reached
+   * from a seeder as well as from a request, and only one of those two ends in a framework that
+   * swallows the reason. This is that one: the exception leaves here, the engine turns it into a
+   * `500` answering `Unknown Error`, and in production no stack trace is printed anywhere. Logging
+   * at the construction site is what gives the operator the sentence the caller never gets, and it
+   * leaves the seeder's operator the terminal output they already had.
+   *
+   * **Log, then rethrow.** The caller still meets the exception unchanged — nothing is swallowed,
+   * so a deployment with an unusable key goes on refusing every request exactly as it did.
+   *
    * @returns {ApiClientSecretCipher} - The cipher.
+   * @throws {Error} When the environment declares no usable encryption key.
    */
   static createApiClientSecretCipher () {
-    return this.ApiClientSecretCipherCtor.create()
+    try {
+      return this.ApiClientSecretCipherCtor.create()
+    } catch (unusableEncryptionKeyFailure) {
+      this.logUnusableEncryptionKey()
+
+      throw unusableEncryptionKeyFailure
+    }
+  }
+
+  /**
+   * Write the line an unusable secret encryption key leaves behind.
+   *
+   * The line names the environment variable and carries nothing of what it holds — the logger's
+   * method takes no argument, so there is nothing here that could pass one.
+   *
+   * @returns {void}
+   */
+  static logUnusableEncryptionKey () {
+    const logger = this.createApiClientAuthenticationLogger()
+
+    logger.logUnusableEncryptionKey()
   }
 
   /**
@@ -416,3 +593,12 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
     return this.userId
   }
 }
+
+/**
+ * @typedef {{
+ *   expressRequest: ExpressType.Request
+ *   apiClient: model.ApiClient
+ *   requestedAt: Date
+ *   apiClientId: number | null
+ * }} IsAcceptableRequestParams
+ */

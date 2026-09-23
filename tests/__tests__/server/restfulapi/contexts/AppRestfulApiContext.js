@@ -4,11 +4,14 @@ import {
   BaseRestfulApiContext,
 } from '@openreachtech/renchan'
 
+import ApiClientAuthenticationLogger from '../../../../../app/apiClient/ApiClientAuthenticationLogger.js'
 import ApiClientSecretCipher from '../../../../../app/apiClient/ApiClientSecretCipher.js'
 import ApiClientSignatureVerifier from '../../../../../app/apiClient/ApiClientSignatureVerifier.js'
 import RequestTimestampWindowInspector from '../../../../../app/apiClient/RequestTimestampWindowInspector.js'
 
 import ApiClient from '../../../../../sequelize/models/ApiClient.js'
+
+const UNUSABLE_ENCRYPTION_KEY_MESSAGE = 'API_CLIENT_SECRET_ENCRYPTION_KEY must be 64 hex characters, the 32 bytes AES-256-GCM takes'
 
 describe('AppRestfulApiContext', () => {
   describe('inheritance', () => {
@@ -81,6 +84,83 @@ describe('AppRestfulApiContext', () => {
 
         expect(received)
           .toBeInstanceOf(ApiClientSecretCipher)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.createApiClientSecretCipher()', () => {
+    /*
+     * An unusable key refuses every client in the deployment, and the framework answers the throw
+     * with a `500` saying `Unknown Error` and prints nothing in production — so the line is the
+     * operator's only account of why. Both halves are pinned in one test on purpose: a line
+     * written instead of the exception would leave the request answered as though nothing were
+     * wrong, and an exception with no line is the state this replaces.
+     */
+    describe('should write one line saying why, and let the exception through', () => {
+      /** @type {Array<{ label: string, input: { encryptionKeyText: * } }>} */
+      const cases = /** @type {Array<*>} */ ([
+        {
+          label: 'a variable declared with an empty value',
+          input: {
+            encryptionKeyText: '', // what .env.live ships
+          },
+        },
+        {
+          label: 'a key one character short of AES-256',
+          input: {
+            encryptionKeyText: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde',
+          },
+        },
+        {
+          label: 'a passphrase somebody typed in place of a key',
+          input: {
+            encryptionKeyText: 'change-me-before-going-live',
+          },
+        },
+      ])
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        jest.spyOn(ApiClientSecretCipher, 'env', 'get')
+          .mockReturnValue(/** @type {*} */ ({
+            API_CLIENT_SECRET_ENCRYPTION_KEY: input.encryptionKeyText,
+          }))
+        const logSpy = jest.spyOn(
+          ApiClientAuthenticationLogger.prototype,
+          'logUnusableEncryptionKey'
+        )
+
+        const received = () => AppRestfulApiContext.createApiClientSecretCipher()
+
+        expect(received)
+          .toThrow(UNUSABLE_ENCRYPTION_KEY_MESSAGE)
+        expect(logSpy)
+          .toHaveBeenCalledWith() // no argument at all, so no key can reach the line
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.logUnusableEncryptionKey()', () => {
+    /*
+     * The context holds no wording of its own for this line — it asks the logger, which is the one
+     * class that knows what such a line may never carry.
+     */
+    describe('when called as is', () => {
+      test('should hand the line to the logger, carrying nothing', () => {
+        const logSpy = jest.spyOn(
+          ApiClientAuthenticationLogger.prototype,
+          'logUnusableEncryptionKey'
+        )
+
+        AppRestfulApiContext.logUnusableEncryptionKey()
+
+        expect(logSpy)
+          .toHaveBeenCalledWith()
       })
     })
   })
@@ -1630,6 +1710,534 @@ describe('AppRestfulApiContext', () => {
 
         expect(received)
           .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.get:ApiClientAuthenticationLoggerCtor', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const received = AppRestfulApiContext.ApiClientAuthenticationLoggerCtor
+
+        expect(received)
+          .toBe(ApiClientAuthenticationLogger) // same reference
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.createApiClientAuthenticationLogger()', () => {
+    describe('when called as is', () => {
+      test('should be an instance of ApiClientAuthenticationLogger', () => {
+        const received = AppRestfulApiContext.createApiClientAuthenticationLogger()
+
+        expect(received)
+          .toBeInstanceOf(ApiClientAuthenticationLogger)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.logRefusedAuthentication()', () => {
+    describe('should hand the refusal to the logger unchanged', () => {
+      const cases = [
+        {
+          tally: {
+            reasonCode: 'UNKNOWN_CLIENT_KEY',
+            apiClientId: null,
+          },
+        },
+        {
+          tally: {
+            reasonCode: 'SIGNATURE_MISMATCH',
+            apiClientId: 10000001,
+          },
+        },
+      ]
+
+      test.each(cases)('reasonCode: $tally.reasonCode', ({
+        tally,
+      }) => {
+        const logSpy = jest.spyOn(
+          ApiClientAuthenticationLogger.prototype,
+          'logRefusedAuthentication'
+        )
+
+        AppRestfulApiContext.logRefusedAuthentication(tally)
+
+        expect(logSpy)
+          .toHaveBeenCalledWith(tally)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.findApiClient()', () => {
+    /*
+     * The row this answers with becomes `context.userEntity`, which every renderer can read, so
+     * neither secret envelope may be on it. `dataValues` is what the read actually brought back —
+     * the model declares a getter for every attribute either way.
+     */
+    describe('should carry no client secret', () => {
+      const cases = [
+        {
+          input: {
+            clientKey: 'client-key-signing-10000001',
+          },
+        },
+        {
+          input: {
+            clientKey: 'client-key-rotating-10000002',
+          },
+        },
+        {
+          input: {
+            clientKey: 'client-key-switched-off-10000003',
+          },
+        },
+      ]
+
+      test.each(cases)('clientKey: $input.clientKey', async ({
+        input,
+      }) => {
+        const apiClient = await AppRestfulApiContext.findApiClient(input)
+        const received = apiClient.dataValues
+
+        expect(received)
+          .not
+          .toHaveProperty('secretCiphertext')
+        expect(received)
+          .not
+          .toHaveProperty('previousSecretCiphertext')
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.findApiClient()', () => {
+    describe('should still carry what a renderer reads', () => {
+      const cases = [
+        {
+          input: {
+            clientKey: 'client-key-signing-10000001',
+          },
+          expected: 10000001,
+        },
+        {
+          input: {
+            clientKey: 'client-key-rotating-10000002',
+          },
+          expected: 10000002,
+        },
+        {
+          input: {
+            clientKey: 'client-key-switched-off-10000003',
+          },
+          expected: 10000003,
+        },
+      ]
+
+      test.each(cases)('clientKey: $input.clientKey', async ({
+        input,
+        expected,
+      }) => {
+        const apiClient = await AppRestfulApiContext.findApiClient(input)
+        const received = apiClient.id
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.findSecretBearingApiClient()', () => {
+    /*
+     * The whole of `dataValues` is pinned, because the point of this read is that it brings back
+     * the two envelopes and nothing else of the row. The envelopes themselves carry a fresh
+     * initialization vector per encryption, so there is no fixed value to write for them.
+     */
+    describe('should carry the secret envelopes and nothing else', () => {
+      const cases = [
+        {
+          input: {
+            clientKey: 'client-key-signing-10000001',
+          },
+          expected: {
+            secretCiphertext: expect.any(String),
+            previousSecretCiphertext: null, // no rotation is under way
+          },
+        },
+        {
+          input: {
+            clientKey: 'client-key-rotating-10000002',
+          },
+          expected: {
+            secretCiphertext: expect.any(String),
+            previousSecretCiphertext: expect.any(String),
+          },
+        },
+        {
+          input: {
+            clientKey: 'client-key-switched-off-10000003',
+          },
+          expected: {
+            secretCiphertext: expect.any(String),
+            previousSecretCiphertext: null, // no rotation is under way
+          },
+        },
+      ]
+
+      test.each(cases)('clientKey: $input.clientKey', async ({
+        input,
+        expected,
+      }) => {
+        const apiClient = await AppRestfulApiContext.findSecretBearingApiClient(input)
+        const received = apiClient.dataValues
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.findSecretBearingApiClient()', () => {
+    describe('when no row carries the key', () => {
+      const cases = [
+        {
+          input: {
+            clientKey: 'client-key-unregistered-0003',
+          },
+        },
+        {
+          input: {
+            clientKey: 'client-key-unregistered-0004',
+          },
+        },
+      ]
+
+      test.each(cases)('clientKey: $input.clientKey', async ({
+        input,
+      }) => {
+        const received = await AppRestfulApiContext.findSecretBearingApiClient(input)
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.findUser()', () => {
+    /*
+     * A request naming no client key is the one refusal reachable with no credential at all, so a
+     * line per such request is a disk write anyone can drive as fast as the service answers. What
+     * is pinned is that the logger is not reached at all — not that it is reached with a different
+     * reason code — because any line on this path grows with the request stream.
+     */
+    describe('should write no line when the request names no client', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {},
+            }),
+            accessToken: null,
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': '',
+              },
+            }),
+            accessToken: null,
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': [
+                  'client-key-signing-10000001',
+                  'client-key-rotating-10000002',
+                ], // what a duplicated header arrives as, which names no one client
+              },
+            }),
+            accessToken: null,
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('headers: $input.expressRequest.headers', async ({
+        input,
+      }) => {
+        const logSpy = jest.spyOn(AppRestfulApiContext, 'logRefusedAuthentication')
+
+        await AppRestfulApiContext.findUser(input)
+
+        expect(logSpy)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.findUser()', () => {
+    describe('should log a refusal when the client key names no row', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-unregistered-0005',
+                'x-ort-timestamp': '1790157600',
+                'x-ort-signature': '83e5ebe4db10e738036474dfa7898dd4b45836c5b9ed11d2728eaa6d8491286a',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            accessToken: null,
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          },
+          expected: {
+            reasonCode: 'UNKNOWN_CLIENT_KEY',
+            apiClientId: null,
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-unregistered-0006',
+                'x-ort-timestamp': '1790157600',
+                'x-ort-signature': '83e5ebe4db10e738036474dfa7898dd4b45836c5b9ed11d2728eaa6d8491286a',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            accessToken: null,
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          },
+          expected: {
+            reasonCode: 'UNKNOWN_CLIENT_KEY',
+            apiClientId: null,
+          },
+        },
+      ]
+
+      test.each(cases)('headers: $input.expressRequest.headers', async ({
+        input,
+        expected,
+      }) => {
+        const logSpy = jest.spyOn(AppRestfulApiContext, 'logRefusedAuthentication')
+
+        await AppRestfulApiContext.findUser(input)
+
+        expect(logSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.isAcceptableRequest()', () => {
+    describe('should log a refusal when the clock stands outside the window', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-signature': 'e93656e71a8792c2a3aedcdd9060a4a654d869e3f48fea4f8ed4daa92e9c2aae',
+                'x-ort-timestamp': '1790157600',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            apiClient: /** @type {*} */ ({
+              secretCiphertext: 'fa2e6f6dfcb333d268a389e2:29d5191aa14aa6518ed67920dea538a8:b5fa82754e4b83894e9820',
+              previousSecretCiphertext: '702ce6ad393fd1ac8f968545:589c00b5c7f12488b57f810d90226dda:029fc48126af6398b7b8f5',
+            }),
+            requestedAt: new Date('2026-09-23T10:05:01.000Z'), // 301 seconds behind
+            apiClientId: 10000001,
+          },
+          expected: {
+            reasonCode: 'STALE_TIMESTAMP',
+            apiClientId: 10000001,
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-signature': 'e93656e71a8792c2a3aedcdd9060a4a654d869e3f48fea4f8ed4daa92e9c2aae',
+                'x-ort-timestamp': '1790157600',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            apiClient: /** @type {*} */ ({
+              secretCiphertext: 'fa2e6f6dfcb333d268a389e2:29d5191aa14aa6518ed67920dea538a8:b5fa82754e4b83894e9820',
+              previousSecretCiphertext: '702ce6ad393fd1ac8f968545:589c00b5c7f12488b57f810d90226dda:029fc48126af6398b7b8f5',
+            }),
+            requestedAt: new Date('2026-09-23T09:54:59.000Z'), // 301 seconds ahead
+            apiClientId: 10000002,
+          },
+          expected: {
+            reasonCode: 'STALE_TIMESTAMP',
+            apiClientId: 10000002,
+          },
+        },
+      ]
+
+      test.each(cases)('requestedAt: $input.requestedAt', ({
+        input,
+        expected,
+      }) => {
+        const logSpy = jest.spyOn(AppRestfulApiContext, 'logRefusedAuthentication')
+
+        AppRestfulApiContext.isAcceptableRequest(input)
+
+        expect(logSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.isAcceptableRequest()', () => {
+    describe('should log a refusal when the signature does not verify', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                // computed under secret-0003, which is neither of this client's secrets
+                'x-ort-signature': 'bac66d147046d2a5ebfa06c11bb09b84b99306be4f26e7b6b33183763f3794b8',
+                'x-ort-timestamp': '1790157600',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            apiClient: /** @type {*} */ ({
+              secretCiphertext: 'fa2e6f6dfcb333d268a389e2:29d5191aa14aa6518ed67920dea538a8:b5fa82754e4b83894e9820',
+              previousSecretCiphertext: '702ce6ad393fd1ac8f968545:589c00b5c7f12488b57f810d90226dda:029fc48126af6398b7b8f5',
+            }),
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+            apiClientId: 10000001,
+          },
+          expected: {
+            reasonCode: 'SIGNATURE_MISMATCH',
+            apiClientId: 10000001,
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                // the signature of `{"externalRef":"external-ref-0001"}`, presented with another
+                // body
+                'x-ort-signature': 'e93656e71a8792c2a3aedcdd9060a4a654d869e3f48fea4f8ed4daa92e9c2aae',
+                'x-ort-timestamp': '1790157600',
+              },
+              rawBody: '{"externalRef":"external-ref-0002"}',
+            }),
+            apiClient: /** @type {*} */ ({
+              secretCiphertext: 'fa2e6f6dfcb333d268a389e2:29d5191aa14aa6518ed67920dea538a8:b5fa82754e4b83894e9820',
+              previousSecretCiphertext: '702ce6ad393fd1ac8f968545:589c00b5c7f12488b57f810d90226dda:029fc48126af6398b7b8f5',
+            }),
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+            apiClientId: 10000002,
+          },
+          expected: {
+            reasonCode: 'SIGNATURE_MISMATCH',
+            apiClientId: 10000002,
+          },
+        },
+      ]
+
+      test.each(cases)('rawBody: $input.expressRequest.rawBody', ({
+        input,
+        expected,
+      }) => {
+        const logSpy = jest.spyOn(AppRestfulApiContext, 'logRefusedAuthentication')
+
+        AppRestfulApiContext.isAcceptableRequest(input)
+
+        expect(logSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.isAcceptableRequest()', () => {
+    describe('should log nothing when the request is fresh and signed', () => {
+      const cases = [
+        {
+          label: 'a request signed with the current secret',
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                // computed under secret-0001, the current secret
+                'x-ort-signature': 'e93656e71a8792c2a3aedcdd9060a4a654d869e3f48fea4f8ed4daa92e9c2aae',
+                'x-ort-timestamp': '1790157600',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            apiClient: /** @type {*} */ ({
+              secretCiphertext: 'fa2e6f6dfcb333d268a389e2:29d5191aa14aa6518ed67920dea538a8:b5fa82754e4b83894e9820',
+              previousSecretCiphertext: '702ce6ad393fd1ac8f968545:589c00b5c7f12488b57f810d90226dda:029fc48126af6398b7b8f5',
+            }),
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+            apiClientId: 10000001,
+          },
+        },
+        {
+          label: 'a request signed with the secret being rotated out',
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                // computed under secret-0002, the secret being rotated out
+                'x-ort-signature': '1145c145c9a45ebac65a1d94b2155ab7e5bef061e21824a7257c1659b0629bdd',
+                'x-ort-timestamp': '1790157600',
+              },
+              rawBody: '{"externalRef":"external-ref-0001"}',
+            }),
+            apiClient: /** @type {*} */ ({
+              secretCiphertext: 'fa2e6f6dfcb333d268a389e2:29d5191aa14aa6518ed67920dea538a8:b5fa82754e4b83894e9820',
+              previousSecretCiphertext: '702ce6ad393fd1ac8f968545:589c00b5c7f12488b57f810d90226dda:029fc48126af6398b7b8f5',
+            }),
+            requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+            apiClientId: 10000002,
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const logSpy = jest.spyOn(AppRestfulApiContext, 'logRefusedAuthentication')
+
+        AppRestfulApiContext.isAcceptableRequest(input)
+
+        expect(logSpy)
+          .not
+          .toHaveBeenCalled()
       })
     })
   })

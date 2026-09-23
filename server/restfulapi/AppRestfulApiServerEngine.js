@@ -7,8 +7,16 @@ import {
 
 import rootPath from '../../app/globals/root-path.js'
 
+import ApiClientAuthenticationLogger from '../../app/apiClient/ApiClientAuthenticationLogger.js'
+
+import API_CLIENT_AUTHENTICATION_CONSTANT_HASH from '../../app/constants/apiClientAuthenticationConstants.js'
+
 import AppRestfulApiShare from './contexts/AppRestfulApiShare.js'
 import AppRestfulApiContext from './contexts/AppRestfulApiContext.js'
+
+const {
+  API_CLIENT_AUTHENTICATION_REFUSAL_REASON,
+} = API_CLIENT_AUTHENTICATION_CONSTANT_HASH
 
 /**
  * App RESTful API server engine.
@@ -45,6 +53,15 @@ export default class AppRestfulApiServerEngine extends BaseRestfulApiServerEngin
   /** @override */
   static get Context () {
     return AppRestfulApiContext
+  }
+
+  /**
+   * get: ApiClientAuthenticationLogger class — a seam so tests can substitute it.
+   *
+   * @returns {typeof ApiClientAuthenticationLogger} - The class.
+   */
+  static get ApiClientAuthenticationLoggerCtor () {
+    return ApiClientAuthenticationLogger
   }
 
   /**
@@ -127,6 +144,10 @@ export default class AppRestfulApiServerEngine extends BaseRestfulApiServerEngin
       }
 
       if (!context.hasAuthorized()) {
+        this.logRefusedAuthentication({
+          context,
+        })
+
         return this.errorResponseHash
           .Unauthorized
           .createAsError()
@@ -140,6 +161,40 @@ export default class AppRestfulApiServerEngine extends BaseRestfulApiServerEngin
 
       return null
     }
+  }
+
+  /**
+   * Write the line a client refused for what its record says leaves behind.
+   *
+   * The `401` refusals are not logged here. Each of them is decided inside
+   * `AppRestfulApiContext.findUser()`, which knows which of the four checks refused and writes
+   * that; by the time the filter sees one, all it could add is a second line saying less.
+   *
+   * @param {{
+   *   context: AppRestfulApiContext
+   * }} params - Parameters.
+   * @returns {void}
+   */
+  logRefusedAuthentication ({
+    context,
+  }) {
+    const logger = this.createApiClientAuthenticationLogger()
+
+    logger.logRefusedAuthentication({
+      reasonCode: API_CLIENT_AUTHENTICATION_REFUSAL_REASON.INACTIVE_CLIENT,
+      apiClientId: context.apiClientId,
+    })
+  }
+
+  /**
+   * Create the logger a refused authentication is written through.
+   *
+   * @returns {ApiClientAuthenticationLogger} - The logger.
+   */
+  createApiClientAuthenticationLogger () {
+    return this.Ctor
+      .ApiClientAuthenticationLoggerCtor
+      .create()
   }
 
   /**

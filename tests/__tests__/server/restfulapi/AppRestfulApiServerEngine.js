@@ -7,6 +7,8 @@ import {
 import AppRestfulApiShare from '../../../../server/restfulapi/contexts/AppRestfulApiShare.js'
 import AppRestfulApiContext from '../../../../server/restfulapi/contexts/AppRestfulApiContext.js'
 
+import ApiClientAuthenticationLogger from '../../../../app/apiClient/ApiClientAuthenticationLogger.js'
+
 import rootPath from '../../../../app/globals/root-path.js'
 
 describe('AppRestfulApiServerEngine', () => {
@@ -678,6 +680,227 @@ describe('AppRestfulApiServerEngine', () => {
 
         expect(received)
           .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('.get:ApiClientAuthenticationLoggerCtor', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const received = AppRestfulApiServerEngine.ApiClientAuthenticationLoggerCtor
+
+        expect(received)
+          .toBe(ApiClientAuthenticationLogger) // same reference
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('#createApiClientAuthenticationLogger()', () => {
+    describe('when called as is', () => {
+      test('should be an instance of ApiClientAuthenticationLogger', () => {
+        const engine = AppRestfulApiServerEngine.create({
+          share: /** @type {*} */ (null),
+        })
+
+        const received = engine.createApiClientAuthenticationLogger()
+
+        expect(received)
+          .toBeInstanceOf(ApiClientAuthenticationLogger)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('#logRefusedAuthentication()', () => {
+    describe('should name the switched-off client and the reason it was refused', () => {
+      const cases = [
+        {
+          input: {
+            apiClientId: 10000003,
+          },
+          expected: {
+            reasonCode: 'INACTIVE_CLIENT',
+            apiClientId: 10000003,
+          },
+        },
+        {
+          input: {
+            apiClientId: 10000004,
+          },
+          expected: {
+            reasonCode: 'INACTIVE_CLIENT',
+            apiClientId: 10000004,
+          },
+        },
+      ]
+
+      test.each(cases)('apiClientId: $input.apiClientId', ({
+        input,
+        expected,
+      }) => {
+        const logSpy = jest.spyOn(
+          ApiClientAuthenticationLogger.prototype,
+          'logRefusedAuthentication'
+        )
+        const engine = AppRestfulApiServerEngine.create({
+          share: /** @type {*} */ (null),
+        })
+        const args = {
+          context: /** @type {*} */ ({
+            apiClientId: input.apiClientId,
+          }),
+        }
+
+        engine.logRefusedAuthentication(args)
+
+        expect(logSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('#generateFilterHandler()', () => {
+    /*
+     * The `403` is the one refusal the engine decides on its own — it is the only one a client
+     * that signed correctly can meet — so it is the one the engine logs. The `401`s are written
+     * by `AppRestfulApiContext.findUser()`, which knows which of its four checks refused.
+     */
+    describe('should log the refusal when the caller is who it claims and may not', () => {
+      const cases = [
+        {
+          input: {
+            visa: /** @type {*} */ ({
+              hasAuthenticated: true,
+              hasAuthorized: false,
+              hasPathPermission: true,
+            }),
+            userId: 10000003,
+          },
+          expected: {
+            reasonCode: 'INACTIVE_CLIENT',
+            apiClientId: 10000003,
+          },
+        },
+        {
+          input: {
+            visa: /** @type {*} */ ({
+              hasAuthenticated: true,
+              hasAuthorized: false,
+              hasPathPermission: false,
+            }),
+            userId: 10000005,
+          },
+          expected: {
+            reasonCode: 'INACTIVE_CLIENT',
+            apiClientId: 10000005,
+          },
+        },
+      ]
+
+      test.each(cases)('userId: $input.userId', async ({
+        input,
+        expected,
+      }) => {
+        const logSpy = jest.spyOn(
+          ApiClientAuthenticationLogger.prototype,
+          'logRefusedAuthentication'
+        )
+        const engine = AppRestfulApiServerEngine.create({
+          share: /** @type {*} */ (null),
+        })
+        const context = new AppRestfulApiContext({
+          expressRequest: /** @type {*} */ ({}),
+          engine,
+          userEntity: /** @type {*} */ ({
+            id: input.userId,
+          }),
+          visa: input.visa,
+          requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          uuid: '98765432-abcd-0000-1234-000000000002',
+        })
+        const handler = engine.generateFilterHandler()
+        const args = {
+          body: null,
+          query: null,
+          context,
+          request: /** @type {*} */ (null),
+        }
+
+        await handler(args)
+
+        expect(logSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('#generateFilterHandler()', () => {
+    describe('should log nothing when the caller is who it claims and may', () => {
+      const cases = [
+        {
+          input: {
+            visa: /** @type {*} */ ({
+              hasAuthenticated: true,
+              hasAuthorized: true,
+              hasPathPermission: true,
+            }),
+            userId: 10000001,
+          },
+        },
+        {
+          input: {
+            visa: /** @type {*} */ ({
+              hasAuthenticated: true,
+              hasAuthorized: true,
+              hasPathPermission: true,
+            }),
+            userId: 10000002,
+          },
+        },
+      ]
+
+      test.each(cases)('userId: $input.userId', async ({
+        input,
+      }) => {
+        const logSpy = jest.spyOn(
+          ApiClientAuthenticationLogger.prototype,
+          'logRefusedAuthentication'
+        )
+        const engine = AppRestfulApiServerEngine.create({
+          share: /** @type {*} */ (null),
+        })
+        const context = new AppRestfulApiContext({
+          expressRequest: /** @type {*} */ ({}),
+          engine,
+          userEntity: /** @type {*} */ ({
+            id: input.userId,
+          }),
+          visa: input.visa,
+          requestedAt: new Date('2026-09-23T10:00:00.000Z'),
+          uuid: '98765432-abcd-0000-1234-000000000003',
+        })
+        const handler = engine.generateFilterHandler()
+        const args = {
+          body: null,
+          query: null,
+          context,
+          request: /** @type {*} */ (null),
+        }
+
+        await handler(args)
+
+        expect(logSpy)
+          .not
+          .toHaveBeenCalled()
       })
     })
   })
