@@ -25,5 +25,7 @@ export default /** @type {*} */ (
  *   AUTH_COOKIE_SAME_SITE: string
  *   AUTH_COOKIE_PATH: string
  *   AUTH_COOKIE_DOMAIN: string
+ *   API_CLIENT_SECRET_ENCRYPTION_KEY: string
+ *   DEVELOPMENT_API_CLIENT_SECRET: string
  * }} EnvType
  */
