@@ -410,9 +410,13 @@ describe('AiAgentRoleInstruction', () => {
      * describes above — the mixin's effect is a row in another table rather than a return value.
      *
      * Each case works on an agent id of its own, so the two cases cannot see each other's rows and
-     * neither can disturb the accumulating expectations earlier in this file. Both hand in a
-     * `savedAt` that is thrown away; the sink is read in ascending order of the instant the server
-     * assigned, so the created wording has to come back first and the reworded one second.
+     * neither can disturb the accumulating expectations earlier in this file. The sink is read in
+     * ascending order of the instant the server assigned, so the created wording comes back first
+     * and the reworded one second.
+     *
+     * That ordering is **not** evidence that the writer's `savedAt` was discarded, and is not
+     * offered as any: the stamp steps past whatever the row already held, so the created wording
+     * sorts first either way. The `#save()` describes above are what establish the discarding.
      */
     describe('should append the generation an instance update wrote', () => {
       const cases = [

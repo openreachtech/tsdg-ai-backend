@@ -79,12 +79,17 @@ describe('AiAgentDefaultInstruction', () => {
      * Under that flag Sequelize never computes the `upsertKeys` that `updateOnDuplicate` needs, and
      * deletes both `ignoreDuplicates` and `fields` outright — so a duplicate raises where it would
      * have been skipped, and a caller who named a subset of fields has every attribute written
-     * without being told. An `include` naming a `hasMany` inserts its parent twice; a `belongsTo`
-     * include survives, because `save()` writes that association itself.
+     * without being told. An `include` naming a `hasMany` writes the associated rows twice, which
+     * their table's primary key then rejects; a `belongsTo` include survives, because `save()`
+     * writes that association itself.
      *
      * The guard reads the option name, not its value, so the refusal is deliberately wider than the
-     * hazard: an empty or absent `include` is refused too. Each case is refused before a row is
-     * written, which is why these live here rather than beside the writing half of the same method.
+     * hazard: an empty `include` is refused too. **Neither include case below carries the hazard
+     * shape, and neither claims to.** This model declares one association and it is a `belongsTo`,
+     * so no case written here can be a `hasMany` include; the two cases witness that the guard
+     * fires on the option name whatever the value is, and the `hasMany` mechanism stays prose in
+     * the model. Each case is refused before a row is written, which is why these live here rather
+     * than beside the writing half of the same method.
      */
     describe('should refuse an option the forced per-row hooks stop honoring', () => {
       const cases = [
@@ -148,12 +153,12 @@ describe('AiAgentDefaultInstruction', () => {
             options: {
               include: [
                 {
-                  association: 'aiAgentDefaultInstructions',
+                  association: 'AiAgent',
                 },
               ],
             },
           },
-          label: 'include naming a hasMany, the shape that inserts a parent twice',
+          label: 'include naming the one association this model has',
           expected: 'AiAgentDefaultInstruction.bulkCreate() refuses the option: include',
         },
         {
@@ -168,7 +173,7 @@ describe('AiAgentDefaultInstruction', () => {
               include: [],
             },
           },
-          label: 'include carrying nothing, refused because the guard reads the name',
+          label: 'include carrying nothing at all',
           expected: 'AiAgentDefaultInstruction.bulkCreate() refuses the option: include',
         },
       ]

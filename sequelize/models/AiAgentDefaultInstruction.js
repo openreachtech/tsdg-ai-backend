@@ -199,8 +199,10 @@ export default class AiAgentDefaultInstruction extends BaseAppRenchanModel {
    * `upsertKeys` the insert path then reads. `ignoreDuplicates` is deleted by that branch, so a
    * duplicate raises where it would have been skipped. `fields` is deleted in the same breath, so
    * every attribute is written and a caller who named a subset is never told the subset was
-   * ignored. `include` inserts a `hasMany` parent twice, which that table's own key then rejects —
-   * a `belongsTo` include survives, because `save()` writes that association itself.
+   * ignored. An `include` naming a `hasMany` writes the associated rows twice — the per-row `save()`
+   * the flag forces persists them, and `bulkCreate`'s own child-include step then re-inserts the
+   * same rows carrying the ids the first write assigned — which their table's primary key rejects.
+   * A `belongsTo` include survives, because `save()` writes that association itself.
    *
    * The guard keys on the option being present at all rather than on its value, so a harmless
    * `include: []` is refused too. That is the safe direction: a truthiness check would let
