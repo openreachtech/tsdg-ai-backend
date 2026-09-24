@@ -19,9 +19,10 @@ describe('AiAgentDefaultInstruction', () => {
      * generation the live row never carried — and the live row's own marker then resolves to a
      * wording that has already been replaced.
      *
-     * Both cases are refused, and the second is the one that matters: a `where` matching two rows
-     * is the shape that takes the branch a single-row update can never reach, so a guard covering
-     * only one row would pass this describe while leaving the defect open.
+     * The refusal is unconditional and throws before the `where` is ever read, so the two cases
+     * below cannot tell one implementation from another today. The second is kept for the shape it
+     * pins rather than the branch it reaches: it is the case that fails if the refusal is ever
+     * softened into a conditional one, which is the only way the defect above returns.
      */
     describe('should refuse every static update', () => {
       const cases = [
@@ -73,18 +74,19 @@ describe('AiAgentDefaultInstruction', () => {
 describe('AiAgentDefaultInstruction', () => {
   describe('.bulkCreate()', () => {
     /*
-     * The three options the forced `individualHooks` breaks are refused by name.
+     * The four options the forced `individualHooks` stops honoring are refused by name.
      *
-     * Under that flag Sequelize takes a branch which never computes the `upsertKeys` that
-     * `updateOnDuplicate` needs, deletes `ignoreDuplicates` outright, and skips the `BelongsTo`
-     * pre-creation that `include` relies on. Only the first of the three fails loudly on its own;
-     * the other two would do nothing and say nothing, which is the failure this table is built
-     * against.
+     * Under that flag Sequelize never computes the `upsertKeys` that `updateOnDuplicate` needs, and
+     * deletes both `ignoreDuplicates` and `fields` outright — so a duplicate raises where it would
+     * have been skipped, and a caller who named a subset of fields has every attribute written
+     * without being told. An `include` naming a `hasMany` inserts its parent twice; a `belongsTo`
+     * include survives, because `save()` writes that association itself.
      *
-     * Each case is refused before any row is written, which is why these live here rather than in
-     * the order tests beside the writing half of the same method.
+     * The guard reads the option name, not its value, so the refusal is deliberately wider than the
+     * hazard: an empty or absent `include` is refused too. Each case is refused before a row is
+     * written, which is why these live here rather than beside the writing half of the same method.
      */
-    describe('should refuse an option the forced per-row hooks break', () => {
+    describe('should refuse an option the forced per-row hooks stop honoring', () => {
       const cases = [
         {
           params: {
@@ -127,10 +129,46 @@ describe('AiAgentDefaultInstruction', () => {
               },
             ],
             options: {
+              fields: [
+                'AiAgentId',
+              ],
+            },
+          },
+          label: 'fields',
+          expected: 'AiAgentDefaultInstruction.bulkCreate() refuses the option: fields',
+        },
+        {
+          params: {
+            records: [
+              {
+                AiAgentId: 10130001,
+                instruction: 'A row no refused bulk create ever writes',
+              },
+            ],
+            options: {
+              include: [
+                {
+                  association: 'aiAgentDefaultInstructions',
+                },
+              ],
+            },
+          },
+          label: 'include naming a hasMany, the shape that inserts a parent twice',
+          expected: 'AiAgentDefaultInstruction.bulkCreate() refuses the option: include',
+        },
+        {
+          params: {
+            records: [
+              {
+                AiAgentId: 10130001,
+                instruction: 'A row no refused bulk create ever writes',
+              },
+            ],
+            options: {
               include: [],
             },
           },
-          label: 'include',
+          label: 'include carrying nothing, refused because the guard reads the name',
           expected: 'AiAgentDefaultInstruction.bulkCreate() refuses the option: include',
         },
       ]
@@ -172,6 +210,17 @@ describe('AiAgentDefaultInstruction', () => {
           },
           label: 'ignoreDuplicates',
           expected: 'ignoreDuplicates',
+        },
+        {
+          params: {
+            options: {
+              fields: [
+                'AiAgentId',
+              ],
+            },
+          },
+          label: 'fields',
+          expected: 'fields',
         },
         {
           params: {

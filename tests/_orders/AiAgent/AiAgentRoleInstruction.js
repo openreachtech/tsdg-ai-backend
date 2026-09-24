@@ -395,3 +395,96 @@ describe('AiAgentRoleInstruction', () => {
     })
   })
 })
+
+describe('AiAgentRoleInstruction', () => {
+  describe('#update()', () => {
+    /*
+     * The refusal of the static `.update()` must not have taken the instance one with it.
+     *
+     * That method is the replacement callers are told to use, so a change that closed the static
+     * path by closing both would satisfy every refusal test and leave nothing able to reword a row.
+     * Nothing else in this suite would notice: the describes above reach the sink through `#save()`
+     * and `.bulkCreate()`, never through `#update()`.
+     *
+     * The create and the update are both Arrange and reading the sink is the Act, as in the
+     * describes above — the mixin's effect is a row in another table rather than a return value.
+     *
+     * Each case works on an agent id of its own, so the two cases cannot see each other's rows and
+     * neither can disturb the accumulating expectations earlier in this file. Both hand in a
+     * `savedAt` that is thrown away; the sink is read in ascending order of the instant the server
+     * assigned, so the created wording has to come back first and the reworded one second.
+     */
+    describe('should append the generation an instance update wrote', () => {
+      const cases = [
+        {
+          params: {
+            seed: {
+              AiAgentId: 10137017,
+              role: 'Role created before its first rewording',
+              savedAt: new Date('2020-07-07T07:07:07.007Z'),
+            },
+            values: {
+              role: 'Role written by an instance update',
+            },
+          },
+          expected: [
+            expect.objectContaining({
+              AiAgentId: 10137017,
+              role: 'Role created before its first rewording',
+            }),
+            expect.objectContaining({
+              AiAgentId: 10137017,
+              role: 'Role written by an instance update',
+            }),
+          ],
+        },
+        {
+          params: {
+            seed: {
+              AiAgentId: 10137018,
+              role: 'Role created before its second rewording',
+              savedAt: new Date('2020-08-08T08:08:08.008Z'),
+            },
+            values: {
+              role: 'Role written by another instance update',
+            },
+          },
+          expected: [
+            expect.objectContaining({
+              AiAgentId: 10137018,
+              role: 'Role created before its second rewording',
+            }),
+            expect.objectContaining({
+              AiAgentId: 10137018,
+              role: 'Role written by another instance update',
+            }),
+          ],
+        },
+      ]
+
+      test.each(cases)('role: $params.values.role', async ({
+        params,
+        expected,
+      }) => {
+        const entity = await AiAgentRoleInstruction.create(params.seed) // Arrange
+
+        await entity.update(params.values)
+
+        const received = await AiAgentRoleInstructionBk.findAll({ // Act
+          where: {
+            AiAgentId: params.seed.AiAgentId,
+          },
+          order: [
+            [
+              'savedAt',
+              'ASC',
+            ],
+          ],
+        })
+
+        expect(received) // Assert
+          .toEqual(expected)
+      })
+    })
+  })
+})

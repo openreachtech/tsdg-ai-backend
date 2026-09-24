@@ -12,6 +12,7 @@ const REFUSED_BULK_CREATE_MESSAGE_HEAD = 'AiAgentRoleInstruction.bulkCreate() re
 const REFUSED_BULK_CREATE_OPTION_NAMES = [
   'updateOnDuplicate',
   'ignoreDuplicates',
+  'fields',
   'include',
 ]
 
@@ -191,13 +192,19 @@ export default class AiAgentRoleInstruction extends BaseAppRenchanModel {
    * reaches neither the stamp nor the sink. Forcing it from the model rather than asking every call
    * site to pass it is what makes it unbypassable.
    *
-   * Three of Sequelize's own options stop working under that flag, so they are refused by name
-   * instead of failing somewhere deeper: `updateOnDuplicate` raises a `TypeError`, because the
-   * flag's branch never computes the `upsertKeys` the insert path then reads; `ignoreDuplicates` is
-   * deleted by that branch and quietly does nothing; and `include` is skipped, because the
-   * `BelongsTo` pre-creation sits in the branch the flag does not take (`sequelize/lib/model.js`,
-   * `bulkCreate()`). The first is loud, the other two are silent, and silence is what this class is
-   * built against.
+   * Four of Sequelize's own options stop behaving under that flag, so they are refused by name
+   * instead of failing somewhere deeper (`sequelize/lib/model.js`, `bulkCreate()`).
+   *
+   * `updateOnDuplicate` raises a `TypeError`, because the flag's branch never computes the
+   * `upsertKeys` the insert path then reads. `ignoreDuplicates` is deleted by that branch, so a
+   * duplicate raises where it would have been skipped. `fields` is deleted in the same breath, so
+   * every attribute is written and a caller who named a subset is never told the subset was
+   * ignored. `include` inserts a `hasMany` parent twice, which that table's own key then rejects —
+   * a `belongsTo` include survives, because `save()` writes that association itself.
+   *
+   * The guard keys on the option being present at all rather than on its value, so a harmless
+   * `include: []` is refused too. That is the safe direction: a truthiness check would let
+   * `include: undefined` through into a path a later change could make meaningful.
    *
    * @override
    * @param {Array<object>} records - Records to create
