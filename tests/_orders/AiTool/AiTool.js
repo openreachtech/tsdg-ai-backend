@@ -22,7 +22,7 @@ describe('AiTool', () => {
       const cases = [
         {
           input: {
-            id: 10070011,
+            id: 10135011,
             name: 'visible_fixture_tool', // the name of a seeded fixture tool
             description: 'Fixture tool claiming a name a seeded tool already holds.',
             payload: '{"name":"visible_fixture_tool"}',
@@ -33,7 +33,7 @@ describe('AiTool', () => {
         },
         {
           input: {
-            id: 10070012,
+            id: 10135012,
             name: 'shared_fixture_tool', // the name of another seeded fixture tool
             description: 'Fixture tool claiming the name of the shared seeded tool.',
             payload: '{"name":"shared_fixture_tool"}',
@@ -71,7 +71,7 @@ describe('AiTool', () => {
       const cases = [
         {
           input: {
-            id: 10070021,
+            id: 10135021,
             name: 'alpha_fixture_vendor_tool',
             description: 'Fixture tool naming one vendor\'s form of a shared capability.',
             payload: '{"name":"alpha_fixture_vendor_tool"}',
@@ -80,7 +80,7 @@ describe('AiTool', () => {
             savedAt: new Date('2026-09-12T03:03:03.003Z'),
           },
           expected: expect.objectContaining({
-            id: 10070021,
+            id: 10135021,
             name: 'alpha_fixture_vendor_tool',
             description: 'Fixture tool naming one vendor\'s form of a shared capability.',
             payload: '{"name":"alpha_fixture_vendor_tool"}',
@@ -91,7 +91,7 @@ describe('AiTool', () => {
         },
         {
           input: {
-            id: 10070022,
+            id: 10135022,
             name: 'beta_fixture_vendor_tool',
             description: 'Fixture tool naming another vendor\'s form of the same capability.',
             payload: '{"name":"beta_fixture_vendor_tool"}',
@@ -100,7 +100,7 @@ describe('AiTool', () => {
             savedAt: new Date('2026-09-12T04:04:04.004Z'),
           },
           expected: expect.objectContaining({
-            id: 10070022,
+            id: 10135022,
             name: 'beta_fixture_vendor_tool',
             description: 'Fixture tool naming another vendor\'s form of the same capability.',
             payload: '{"name":"beta_fixture_vendor_tool"}',

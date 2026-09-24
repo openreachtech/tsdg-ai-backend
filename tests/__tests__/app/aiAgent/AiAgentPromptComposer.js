@@ -17,10 +17,10 @@ describe('AiAgentPromptComposer', () => {
       describe('#aiAgentId', () => {
         const cases = [
           {
-            tally: 10020001,
+            tally: 10130001,
           },
           {
-            tally: 10020003,
+            tally: 10130003,
           },
           {
             tally: AI_AGENT.ASSET_MEDIA_EXTRACTION.ID,
@@ -48,12 +48,12 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020001,
+            aiAgentId: 10130001,
           },
         },
         {
           input: {
-            aiAgentId: 10020002,
+            aiAgentId: 10130002,
           },
         },
       ]
@@ -76,12 +76,12 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           tally: {
-            aiAgentId: 10020003,
+            aiAgentId: 10130003,
           },
         },
         {
           tally: {
-            aiAgentId: 10020005,
+            aiAgentId: 10130005,
           },
         },
       ]
@@ -170,7 +170,7 @@ describe('AiAgentPromptComposer', () => {
       tally,
     }) => {
       const composer = tally.create({
-        aiAgentId: 10020001, // neutral value; the class is what is under test
+        aiAgentId: 10130001, // neutral value; the class is what is under test
       })
 
       const received = composer.Ctor
@@ -194,7 +194,7 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020001,
+            aiAgentId: 10130001,
           },
           expected: {
             instruction: '<instruction><agent_preset>Fixture instruction of the alpha agent.</agent_preset></instruction>',
@@ -239,7 +239,7 @@ describe('AiAgentPromptComposer', () => {
         },
         {
           input: {
-            aiAgentId: 10020003,
+            aiAgentId: 10130003,
           },
           expected: {
             instruction: '<instruction><agent_preset>Fixture instruction of the gamma agent.</agent_preset></instruction>',
@@ -374,19 +374,19 @@ describe('AiAgentPromptComposer', () => {
         {
           // an agent row with neither an instruction nor a role beneath it
           input: {
-            aiAgentId: 10020004,
+            aiAgentId: 10130004,
           },
         },
         {
           // an agent row with an instruction and no role
           input: {
-            aiAgentId: 10020005,
+            aiAgentId: 10130005,
           },
         },
         {
           // a bound tool whose payload cannot be read
           input: {
-            aiAgentId: 10020002,
+            aiAgentId: 10130002,
           },
         },
         {
@@ -417,13 +417,13 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020001,
+            aiAgentId: 10130001,
           },
           expected: 'Fixture instruction of the alpha agent.',
         },
         {
           input: {
-            aiAgentId: 10020003,
+            aiAgentId: 10130003,
           },
           expected: 'Fixture instruction of the gamma agent.',
         },
@@ -458,7 +458,7 @@ describe('AiAgentPromptComposer', () => {
         {
           // an agent row with no instruction beneath it
           input: {
-            aiAgentId: 10020004,
+            aiAgentId: 10130004,
           },
         },
         {
@@ -489,13 +489,13 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020001,
+            aiAgentId: 10130001,
           },
           expected: 'Fixture role of the alpha agent.',
         },
         {
           input: {
-            aiAgentId: 10020003,
+            aiAgentId: 10130003,
           },
           expected: 'Fixture role of the gamma agent.',
         },
@@ -530,7 +530,7 @@ describe('AiAgentPromptComposer', () => {
         {
           // an agent row with an instruction and no role
           input: {
-            aiAgentId: 10020005,
+            aiAgentId: 10130005,
           },
         },
         {
@@ -567,27 +567,27 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020001,
+            aiAgentId: 10130001,
           },
           expected: [
             expect.objectContaining({
-              id: 10080002,
-              AiToolId: 10070002,
+              id: 10136002,
+              AiToolId: 10135002,
             }),
             expect.objectContaining({
-              id: 10080001,
-              AiToolId: 10070001,
+              id: 10136001,
+              AiToolId: 10135001,
             }),
           ],
         },
         {
           input: {
-            aiAgentId: 10020003,
+            aiAgentId: 10130003,
           },
           expected: [
             expect.objectContaining({
-              id: 10080005,
-              AiToolId: 10070004,
+              id: 10136005,
+              AiToolId: 10135004,
             }),
           ],
         },
@@ -621,7 +621,7 @@ describe('AiAgentPromptComposer', () => {
         {
           // an agent with no binding of its own, though another agent has bindings
           input: {
-            aiAgentId: 10020004,
+            aiAgentId: 10130004,
           },
         },
       ]
@@ -650,7 +650,7 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020001,
+            aiAgentId: 10130001,
           },
           expected: [
             {
@@ -687,7 +687,7 @@ describe('AiAgentPromptComposer', () => {
         },
         {
           input: {
-            aiAgentId: 10020003,
+            aiAgentId: 10130003,
           },
           expected: [
             {
@@ -739,7 +739,7 @@ describe('AiAgentPromptComposer', () => {
       const cases = [
         {
           input: {
-            aiAgentId: 10020002,
+            aiAgentId: 10130002,
           },
         },
       ]
@@ -802,7 +802,7 @@ describe('AiAgentPromptComposer', () => {
         expected,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020001, // neutral value; no row is read by this method
+          aiAgentId: 10130001, // neutral value; no row is read by this method
         })
 
         const received = composer.extractToolSchema(input)
@@ -853,7 +853,7 @@ describe('AiAgentPromptComposer', () => {
             // parses, and its name is not a name
             input: {
               aiTool: {
-                payload: '{"name":10070006}',
+                payload: '{"name":10135006}',
               },
             },
           },
@@ -892,7 +892,7 @@ describe('AiAgentPromptComposer', () => {
           input,
         }) => {
           const composer = AiAgentPromptComposer.create({
-            aiAgentId: 10020001, // neutral value; no row is read by this method
+            aiAgentId: 10130001, // neutral value; no row is read by this method
           })
 
           const received = composer.extractToolSchema(input)
@@ -935,9 +935,9 @@ describe('AiAgentPromptComposer', () => {
         },
         {
           input: {
-            payload: '10070013',
+            payload: '10135013',
           },
-          expected: 10070013,
+          expected: 10135013,
         },
       ]
 
@@ -946,7 +946,7 @@ describe('AiAgentPromptComposer', () => {
         expected,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020001, // neutral value; no row is read by this method
+          aiAgentId: 10130001, // neutral value; no row is read by this method
         })
 
         const received = composer.parseToolPayload(input)
@@ -984,7 +984,7 @@ describe('AiAgentPromptComposer', () => {
         input,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020001, // neutral value; no row is read by this method
+          aiAgentId: 10130001, // neutral value; no row is read by this method
         })
 
         const received = composer.parseToolPayload(input)
@@ -1031,7 +1031,7 @@ describe('AiAgentPromptComposer', () => {
         input,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020001, // neutral value; no row is read by this method
+          aiAgentId: 10130001, // neutral value; no row is read by this method
         })
 
         const received = composer.isValidToolSchema(input)
@@ -1070,7 +1070,7 @@ describe('AiAgentPromptComposer', () => {
           // named by something that is not a name
           input: {
             toolSchema: {
-              name: 10070023,
+              name: 10135023,
             },
           },
         },
@@ -1088,7 +1088,7 @@ describe('AiAgentPromptComposer', () => {
         },
         {
           input: {
-            toolSchema: 10070026,
+            toolSchema: 10135026,
           },
         },
         {
@@ -1102,7 +1102,7 @@ describe('AiAgentPromptComposer', () => {
         input,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020001, // neutral value; no row is read by this method
+          aiAgentId: 10130001, // neutral value; no row is read by this method
         })
 
         const received = composer.isValidToolSchema(input)
@@ -1170,7 +1170,7 @@ describe('AiAgentPromptComposer', () => {
         expected,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020003, // neutral value; no row is read by this method
+          aiAgentId: 10130003, // neutral value; no row is read by this method
         })
 
         const received = composer.generateComposedInstruction(input)
@@ -1242,7 +1242,7 @@ describe('AiAgentPromptComposer', () => {
         expected,
       }) => {
         const composer = AiAgentPromptComposer.create({
-          aiAgentId: 10020003, // neutral value; no row is read by this method
+          aiAgentId: 10130003, // neutral value; no row is read by this method
         })
 
         const received = composer.generateEscapedPartText(input)

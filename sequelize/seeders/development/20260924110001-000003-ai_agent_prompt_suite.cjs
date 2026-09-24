@@ -23,18 +23,18 @@ const TimestampSeedsSupplier = require('@openreachtech/renchan-sequelize/lib/too
  *
  * The rows that carry the cases:
  *
- *   - 10020001 composes, and holds three bound tools. Two are switched on and one of those two is
+ *   - 10130001 composes, and holds three bound tools. Two are switched on and one of those two is
  *              hidden from an operator, which must not keep it out of what is sent; the third is
  *              switched off and must never reach a model. The two that are sent are displayed in
  *              the reverse of the order their bindings were written in, so a composer answering in
  *              insertion order is caught.
- *   - 10020002 error path — its one bound tool holds a payload that is not JSON. Nothing about it
+ *   - 10130002 error path — its one bound tool holds a payload that is not JSON. Nothing about it
  *              can be composed, and the whole composition is refused rather than quietly shortened.
- *   - 10020003 composes, with one bound tool, and that tool is the one 10020001 has switched off.
+ *   - 10130003 composes, with one bound tool, and that tool is the one 10130001 has switched off.
  *              One binding switched off for one agent and on for another is what shows the switch
  *              is read per binding rather than per tool.
- *   - 10020004 error path — an agent row with neither an instruction nor a role beneath it.
- *   - 10020005 error path — an agent row with an instruction but no role.
+ *   - 10130004 error path — an agent row with neither an instruction nor a role beneath it.
+ *   - 10130005 error path — an agent row with an instruction but no role.
  *
  * The history sinks are seeded beside the live instruction rows, and that is not a duplicate: a
  * seeder inserts through `queryInterface`, which fires no model hook, so a generation installed here
@@ -82,7 +82,7 @@ const GAMMA_ROLE = 'Fixture role of the gamma agent.'
 const aiAgentSeeds = [
   {
     // composes — two bound tools switched on, a third switched off
-    id: 10020001,
+    id: 10130001,
     name: 'alpha-fixture-agent',
     description: 'Fixture agent composing with two of its three bound tools.',
     registered_at: new Date('2026-09-11T01:01:01.001Z'),
@@ -90,15 +90,15 @@ const aiAgentSeeds = [
   },
   {
     // error path — its one bound tool holds an unreadable payload
-    id: 10020002,
+    id: 10130002,
     name: 'beta-fixture-agent',
     description: 'Fixture agent bound to a tool whose payload is unreadable.',
     registered_at: new Date('2026-09-11T01:11:11.011Z'),
     saved_at: new Date('2026-09-11T02:12:12.012Z'),
   },
   {
-    // composes — one bound tool, switched on for this agent and off for 10020001
-    id: 10020003,
+    // composes — one bound tool, switched on for this agent and off for 10130001
+    id: 10130003,
     name: 'gamma-fixture-agent',
     description: 'Fixture agent composing with the one tool it shares with another agent.',
     registered_at: new Date('2026-09-11T01:21:21.021Z'),
@@ -106,7 +106,7 @@ const aiAgentSeeds = [
   },
   {
     // error path — no instruction row and no role row beneath it
-    id: 10020004,
+    id: 10130004,
     name: 'delta-fixture-agent',
     description: 'Fixture agent left without an instruction and without a role.',
     registered_at: new Date('2026-09-11T01:31:31.031Z'),
@@ -114,7 +114,7 @@ const aiAgentSeeds = [
   },
   {
     // error path — an instruction row, and no role row
-    id: 10020005,
+    id: 10130005,
     name: 'omega-fixture-agent',
     description: 'Fixture agent left without a role.',
     registered_at: new Date('2026-09-11T01:41:41.041Z'),
@@ -124,26 +124,26 @@ const aiAgentSeeds = [
 
 const aiAgentDefaultInstructionSeeds = [
   {
-    id: 10030001,
-    ai_agent_id: 10020001,
+    id: 10131001,
+    ai_agent_id: 10130001,
     instruction: ALPHA_INSTRUCTION,
     saved_at: ALPHA_INSTRUCTION_SAVED_AT,
   },
   {
-    id: 10030002,
-    ai_agent_id: 10020002,
+    id: 10131002,
+    ai_agent_id: 10130002,
     instruction: BETA_INSTRUCTION,
     saved_at: BETA_INSTRUCTION_SAVED_AT,
   },
   {
-    id: 10030003,
-    ai_agent_id: 10020003,
+    id: 10131003,
+    ai_agent_id: 10130003,
     instruction: GAMMA_INSTRUCTION,
     saved_at: GAMMA_INSTRUCTION_SAVED_AT,
   },
   {
-    id: 10030005,
-    ai_agent_id: 10020005,
+    id: 10131005,
+    ai_agent_id: 10130005,
     instruction: OMEGA_INSTRUCTION,
     saved_at: OMEGA_INSTRUCTION_SAVED_AT,
   },
@@ -152,26 +152,26 @@ const aiAgentDefaultInstructionSeeds = [
 // The baseline generation of the rows above, in the sink the mixin would have written them to.
 const aiAgentDefaultInstructionBkSeeds = [
   {
-    id: 10040001,
-    ai_agent_id: 10020001,
+    id: 10132001,
+    ai_agent_id: 10130001,
     instruction: ALPHA_INSTRUCTION,
     saved_at: ALPHA_INSTRUCTION_SAVED_AT,
   },
   {
-    id: 10040002,
-    ai_agent_id: 10020002,
+    id: 10132002,
+    ai_agent_id: 10130002,
     instruction: BETA_INSTRUCTION,
     saved_at: BETA_INSTRUCTION_SAVED_AT,
   },
   {
-    id: 10040003,
-    ai_agent_id: 10020003,
+    id: 10132003,
+    ai_agent_id: 10130003,
     instruction: GAMMA_INSTRUCTION,
     saved_at: GAMMA_INSTRUCTION_SAVED_AT,
   },
   {
-    id: 10040005,
-    ai_agent_id: 10020005,
+    id: 10132005,
+    ai_agent_id: 10130005,
     instruction: OMEGA_INSTRUCTION,
     saved_at: OMEGA_INSTRUCTION_SAVED_AT,
   },
@@ -179,20 +179,20 @@ const aiAgentDefaultInstructionBkSeeds = [
 
 const aiAgentRoleInstructionSeeds = [
   {
-    id: 10050001,
-    ai_agent_id: 10020001,
+    id: 10133001,
+    ai_agent_id: 10130001,
     role: ALPHA_ROLE,
     saved_at: ALPHA_ROLE_SAVED_AT,
   },
   {
-    id: 10050002,
-    ai_agent_id: 10020002,
+    id: 10133002,
+    ai_agent_id: 10130002,
     role: BETA_ROLE,
     saved_at: BETA_ROLE_SAVED_AT,
   },
   {
-    id: 10050003,
-    ai_agent_id: 10020003,
+    id: 10133003,
+    ai_agent_id: 10130003,
     role: GAMMA_ROLE,
     saved_at: GAMMA_ROLE_SAVED_AT,
   },
@@ -201,20 +201,20 @@ const aiAgentRoleInstructionSeeds = [
 // The baseline generation of the rows above, in the sink the mixin would have written them to.
 const aiAgentRoleInstructionBkSeeds = [
   {
-    id: 10060001,
-    ai_agent_id: 10020001,
+    id: 10134001,
+    ai_agent_id: 10130001,
     role: ALPHA_ROLE,
     saved_at: ALPHA_ROLE_SAVED_AT,
   },
   {
-    id: 10060002,
-    ai_agent_id: 10020002,
+    id: 10134002,
+    ai_agent_id: 10130002,
     role: BETA_ROLE,
     saved_at: BETA_ROLE_SAVED_AT,
   },
   {
-    id: 10060003,
-    ai_agent_id: 10020003,
+    id: 10134003,
+    ai_agent_id: 10130003,
     role: GAMMA_ROLE,
     saved_at: GAMMA_ROLE_SAVED_AT,
   },
@@ -223,7 +223,7 @@ const aiAgentRoleInstructionBkSeeds = [
 const aiToolSeeds = [
   {
     // displayed second, and shown to an operator
-    id: 10070001,
+    id: 10135001,
     name: 'visible_fixture_tool',
     description: 'Fixture tool an operator can see.',
     payload: JSON.stringify({
@@ -247,7 +247,7 @@ const aiToolSeeds = [
   },
   {
     // displayed first, and hidden from an operator — hidden must not mean withheld from a model
-    id: 10070002,
+    id: 10135002,
     name: 'hidden_fixture_tool',
     description: 'Fixture tool an operator cannot see.',
     payload: JSON.stringify({
@@ -271,7 +271,7 @@ const aiToolSeeds = [
   },
   {
     // error path — the payload is deliberately not JSON
-    id: 10070003,
+    id: 10135003,
     name: 'unreadable_fixture_tool',
     description: 'Fixture tool whose payload is not the JSON it claims to be.',
     payload: 'unreadable-fixture-payload-{',
@@ -281,7 +281,7 @@ const aiToolSeeds = [
   },
   {
     // bound to two agents, switched off for one of them and on for the other
-    id: 10070004,
+    id: 10135004,
     name: 'shared_fixture_tool',
     description: 'Fixture tool bound to two agents under opposite switches.',
     payload: JSON.stringify({
@@ -308,45 +308,45 @@ const aiToolSeeds = [
 const aiAgentAvailableAiToolSeeds = [
   {
     // written first, displayed second
-    id: 10080001,
-    ai_agent_id: 10020001,
-    ai_tool_id: 10070001,
+    id: 10136001,
+    ai_agent_id: 10130001,
+    ai_tool_id: 10135001,
     is_enabled: true,
     is_default: true,
     saved_at: new Date('2026-09-11T14:14:14.014Z'),
   },
   {
     // written second, displayed first
-    id: 10080002,
-    ai_agent_id: 10020001,
-    ai_tool_id: 10070002,
+    id: 10136002,
+    ai_agent_id: 10130001,
+    ai_tool_id: 10135002,
     is_enabled: true,
     is_default: false,
     saved_at: new Date('2026-09-11T15:15:15.015Z'),
   },
   {
     // switched off, and so never sent
-    id: 10080003,
-    ai_agent_id: 10020001,
-    ai_tool_id: 10070004,
+    id: 10136003,
+    ai_agent_id: 10130001,
+    ai_tool_id: 10135004,
     is_enabled: false,
     is_default: false,
     saved_at: new Date('2026-09-11T16:16:16.016Z'),
   },
   {
     // switched on, and unreadable
-    id: 10080004,
-    ai_agent_id: 10020002,
-    ai_tool_id: 10070003,
+    id: 10136004,
+    ai_agent_id: 10130002,
+    ai_tool_id: 10135003,
     is_enabled: true,
     is_default: true,
     saved_at: new Date('2026-09-11T17:17:17.017Z'),
   },
   {
-    // the same tool 10080003 has switched off, switched on for this agent
-    id: 10080005,
-    ai_agent_id: 10020003,
-    ai_tool_id: 10070004,
+    // the same tool 10136003 has switched off, switched on for this agent
+    id: 10136005,
+    ai_agent_id: 10130003,
+    ai_tool_id: 10135004,
     is_enabled: true,
     is_default: false,
     saved_at: new Date('2026-09-11T18:18:18.018Z'),
