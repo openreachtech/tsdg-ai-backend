@@ -5,6 +5,16 @@ import {
 
 import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
 
+const REFUSED_UPDATE_MESSAGE = 'AiAgentRoleInstruction.update() is refused. Load the rows and save() each one.'
+
+const REFUSED_BULK_CREATE_MESSAGE_HEAD = 'AiAgentRoleInstruction.bulkCreate() refuses the option: '
+
+const REFUSED_BULK_CREATE_OPTION_NAMES = [
+  'updateOnDuplicate',
+  'ignoreDuplicates',
+  'include',
+]
+
 /**
  * AiAgentRoleInstruction model
  *
@@ -18,15 +28,21 @@ import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
  *
  * `savedAt` is stamped by `setupHooks()` on every save and is not the writer's to supply: a value
  * the caller sets is overwritten, so no wording can be filed under a generation that already holds
- * different text. `.update()` and `.bulkCreate()` are overridden to force `individualHooks` on, so
- * those two are stamped and appended exactly as `.save()` is; no call site has to remember to
- * prefer one write method over another.
+ * different text. `.bulkCreate()` is overridden to force `individualHooks` on, so it is stamped and
+ * appended exactly as `.save()` is. `.update()` is refused outright, because no flag makes it
+ * honor this contract — the method's own docblock says why.
  *
- * Three ways of writing this table still reach neither the stamp nor the sink. `queryInterface` and
- * raw SQL reach no model hook at all, and the seeders depend on that — they insert their own sink
- * row beside the live one. `.upsert()` reaches no per-row hook either: Sequelize gives it
- * `beforeUpsert` / `afterUpsert` only, and no `individualHooks` option to turn into one, so it
- * cannot be closed the way the other two were. Nothing in this application upserts these rows.
+ * Four ways of writing this table reach neither the stamp nor the sink. `queryInterface` and raw
+ * SQL reach no model hook at all, and the seeders depend on that — they insert their own sink row
+ * beside the live one. `save({ hooks: false })` is the same thing spelled differently. `.upsert()`
+ * reaches no per-row hook either: Sequelize gives it `beforeUpsert` / `afterUpsert` only, and no
+ * `individualHooks` option to turn into one, so it cannot be closed the way `.bulkCreate()` was;
+ * nothing in this application upserts these rows. `.increment()` / `.decrement()` likewise bypass
+ * both, and are listed only for completeness — this table holds no field worth incrementing.
+ *
+ * One more gap is the mixin's, not this class's: the sink append runs in `afterSave`, outside any
+ * transaction a bare `.save()` opened, so a sink write that fails leaves the live row already
+ * committed. See Q54.
  *
  * @class AiAgentRoleInstruction
  * @extends {BaseAppRenchanModel}
@@ -142,24 +158,67 @@ export default class AiAgentRoleInstruction extends BaseAppRenchanModel {
   }
 
   /**
-   * Update rows, with the per-row hooks forced on.
+   * Refuse a static update.
    *
-   * Sequelize skips `beforeUpdate` / `afterUpdate` on a multi-row update unless `individualHooks`
-   * is set, which would let a caller reword a row without stamping `savedAt` and without appending
-   * to the sink. Forcing it here rather than asking every call site to pass it is what makes it
-   * unbypassable.
+   * `Model.update()` cannot leave the trail this class promises, and which way it fails is decided
+   * by the data rather than by the call. Sequelize runs the per-row hooks for every matched row and
+   * then compares the changed-value sets: identical sets are written as one statement whose field
+   * list is union'd with the keys the hooks set, so `savedAt` is written; differing sets are written
+   * row by row with `hooks: false`, where that union never happens and the stamp is left out of the
+   * statement (`sequelize/lib/model.js`, `update()` and `save()`).
+   *
+   * The `afterUpdate` hooks run on both branches, so the sink is appended on both. On the second
+   * that leaves a sink row carrying a marker the live row never received, while the live row keeps
+   * an older one — and that older marker then resolves, through `PromptVersionGenerator`, to a
+   * wording the agent has already stopped sending. A call recorded under it would name text that
+   * was never sent, which is the one failure this table exists to prevent.
+   *
+   * Forcing `individualHooks` does not close it, because both branches live inside that flag. So
+   * the method is refused rather than half-honored: load the rows and `save()` each one, which is
+   * the path the stamp and the sink are guaranteed on.
    *
    * @override
-   * @param {object} values - Values to set
-   * @param {object} options - Update options
-   * @returns {Promise<*>} Update result
+   * @throws {Error} Always
    */
-  static async update (
-    values,
-    options
+  static async update () {
+    throw new Error(REFUSED_UPDATE_MESSAGE)
+  }
+
+  /**
+   * Create rows in bulk, with the per-row hooks forced on.
+   *
+   * Without `individualHooks`, `bulkCreate` writes the rows through `beforeBulkCreate` alone and
+   * reaches neither the stamp nor the sink. Forcing it from the model rather than asking every call
+   * site to pass it is what makes it unbypassable.
+   *
+   * Three of Sequelize's own options stop working under that flag, so they are refused by name
+   * instead of failing somewhere deeper: `updateOnDuplicate` raises a `TypeError`, because the
+   * flag's branch never computes the `upsertKeys` the insert path then reads; `ignoreDuplicates` is
+   * deleted by that branch and quietly does nothing; and `include` is skipped, because the
+   * `BelongsTo` pre-creation sits in the branch the flag does not take (`sequelize/lib/model.js`,
+   * `bulkCreate()`). The first is loud, the other two are silent, and silence is what this class is
+   * built against.
+   *
+   * @override
+   * @param {Array<object>} records - Records to create
+   * @param {object} [options] - Create options
+   * @returns {Promise<*>} Created entities
+   * @throws {Error} When an option the forced flag breaks is passed
+   */
+  static async bulkCreate (
+    records,
+    options = {}
   ) {
-    return super.update(
-      values,
+    const refusedOptionName = this.extractRefusedBulkCreateOptionName({
+      options,
+    })
+
+    if (refusedOptionName) {
+      throw new Error(`${REFUSED_BULK_CREATE_MESSAGE_HEAD}${refusedOptionName}`)
+    }
+
+    return super.bulkCreate(
+      records,
       {
         ...options,
         individualHooks: true,
@@ -168,27 +227,19 @@ export default class AiAgentRoleInstruction extends BaseAppRenchanModel {
   }
 
   /**
-   * Create rows in bulk, with the per-row hooks forced on.
+   * Extract the name of the first refused bulk-create option the caller passed.
    *
-   * Same reasoning as `.update()` above: without `individualHooks`, `bulkCreate` writes the rows
-   * through `beforeBulkCreate` alone and reaches neither the stamp nor the sink.
-   *
-   * @override
-   * @param {Array<object>} records - Records to create
-   * @param {object} [options] - Create options
-   * @returns {Promise<*>} Created entities
+   * @param {{
+   *   options: object
+   * }} params
+   * @returns {string | null} The option name, or null when none was passed
    */
-  static async bulkCreate (
-    records,
-    options = {}
-  ) {
-    return super.bulkCreate(
-      records,
-      {
-        ...options,
-        individualHooks: true,
-      }
-    )
+  static extractRefusedBulkCreateOptionName ({
+    options,
+  }) {
+    return REFUSED_BULK_CREATE_OPTION_NAMES
+      .find(it => it in options)
+      ?? null
   }
 
   /**

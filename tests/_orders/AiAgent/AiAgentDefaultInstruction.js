@@ -176,81 +176,6 @@ describe('AiAgentDefaultInstruction', () => {
 })
 
 describe('AiAgentDefaultInstruction', () => {
-  describe('.update()', () => {
-    /*
-     * A static `.update()` has to leave the same trail a `.save()` leaves.
-     *
-     * It was once written here that it could not: that `.update()` passes the row through without
-     * the stamp and without the sink, and that forcing `individualHooks` would stamp the instant
-     * but still skip the sink. Neither is true. `beforeSave` and `afterSave` are proxy hook types,
-     * so the stamp is also registered as `beforeUpdate` and the backup mixin's append as
-     * `afterUpdate`, and `.update()` runs both. The model turns `individualHooks` on from
-     * `beforeBulkUpdate`, so no call site has to know any of this.
-     *
-     * The update is the Arrange step and reading the sink is the Act, as in the describes above:
-     * the mixin's effect is a row in another table, and `.update()` answers with a count.
-     *
-     * The sink's **newest** generation is what is read, and each case hands `.update()` a `savedAt`
-     * older than every generation already there. A writer whose instant survived would not be the
-     * newest generation, so the wording this case wrote would not be the row that comes back —
-     * which is how one assertion covers both that the hook ran and that the writer's instant was
-     * thrown away.
-     */
-    describe('should append the generation a static update wrote', () => {
-      const cases = [
-        {
-          params: {
-            instruction: 'Default instruction generation 0006',
-            // older than every generation in the sink, and never to be honored
-            savedAt: new Date('2020-05-05T05:05:05.005Z'),
-          },
-          expected: expect.objectContaining({
-            AiAgentId: AI_AGENT.ASSET_MEDIA_EXTRACTION.ID,
-            instruction: 'Default instruction generation 0006',
-          }),
-        },
-        {
-          params: {
-            instruction: 'Default instruction generation 0007',
-            savedAt: new Date('2020-06-06T06:06:06.006Z'),
-          },
-          expected: expect.objectContaining({
-            AiAgentId: AI_AGENT.ASSET_MEDIA_EXTRACTION.ID,
-            instruction: 'Default instruction generation 0007',
-          }),
-        },
-      ]
-
-      test.each(cases)('instruction: $params.instruction', async ({
-        params,
-        expected,
-      }) => {
-        await AiAgentDefaultInstruction.update(params, {
-          where: {
-            AiAgentId: AI_AGENT.ASSET_MEDIA_EXTRACTION.ID,
-          },
-        })
-
-        const received = await AiAgentDefaultInstructionBk.findOne({
-          where: {
-            AiAgentId: AI_AGENT.ASSET_MEDIA_EXTRACTION.ID,
-          },
-          order: [
-            [
-              'savedAt',
-              'DESC',
-            ],
-          ],
-        })
-
-        expect(received)
-          .toEqual(expected)
-      })
-    })
-  })
-})
-
-describe('AiAgentDefaultInstruction', () => {
   describe('.bulkCreate()', () => {
     /*
      * A `.bulkCreate()` has to leave the same trail too, one sink row per row it writes.
@@ -265,7 +190,7 @@ describe('AiAgentDefaultInstruction', () => {
      *
      * `savedAt` is asserted only as a date. Each case hands one in, it is thrown away, and what
      * replaces it is a reading of the clock that no literal can name; that the writer's value does
-     * not survive is what the `.update()` and `#save()` describes establish. What this describe
+     * not survive is what the `#save()` describes establish. What this describe
      * establishes is that the sink is reached at all — without the hook it holds nothing for these
      * agents.
      */
