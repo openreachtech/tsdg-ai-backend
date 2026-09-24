@@ -834,6 +834,54 @@ describe('AiAgentPromptComposer', () => {
             },
           },
           {
+            // parses, and carries no name for a model to be offered the tool under
+            input: {
+              aiTool: {
+                payload: '{"description":"Fixture tool payload carrying no name."}',
+              },
+            },
+          },
+          {
+            // parses, and its name is empty
+            input: {
+              aiTool: {
+                payload: '{"name":"","description":"Fixture tool payload named by nothing."}',
+              },
+            },
+          },
+          {
+            // parses, and its name is not a name
+            input: {
+              aiTool: {
+                payload: '{"name":10070006}',
+              },
+            },
+          },
+          {
+            // parses to an array rather than to a schema
+            input: {
+              aiTool: {
+                payload: '["payload_fixture_tool_0003"]',
+              },
+            },
+          },
+          {
+            // parses to a string rather than to a schema
+            input: {
+              aiTool: {
+                payload: '"payload_fixture_tool_0004"',
+              },
+            },
+          },
+          {
+            // parses to null
+            input: {
+              aiTool: {
+                payload: 'null',
+              },
+            },
+          },
+          {
             input: {
               aiTool: null,
             },
@@ -858,12 +906,228 @@ describe('AiAgentPromptComposer', () => {
 })
 
 describe('AiAgentPromptComposer', () => {
+  describe('#parseToolPayload()', () => {
+    /*
+     * Reading the column's text is all this does; whether what comes out is a tool schema is
+     * `#isValidToolSchema()`'s question, which is why an array and a number are answered here
+     * rather than refused.
+     */
+    describe('with valid values', () => {
+      const cases = [
+        {
+          input: {
+            payload: '{"name":"payload_fixture_tool_0011","input_schema":{"type":"object"}}',
+          },
+          expected: {
+            name: 'payload_fixture_tool_0011',
+            input_schema: {
+              type: 'object',
+            },
+          },
+        },
+        {
+          input: {
+            payload: '["payload_fixture_tool_0012"]',
+          },
+          expected: [
+            'payload_fixture_tool_0012',
+          ],
+        },
+        {
+          input: {
+            payload: '10070013',
+          },
+          expected: 10070013,
+        },
+      ]
+
+      test.each(cases)('payload: $input.payload', ({
+        input,
+        expected,
+      }) => {
+        const composer = AiAgentPromptComposer.create({
+          aiAgentId: 10020001, // neutral value; no row is read by this method
+        })
+
+        const received = composer.parseToolPayload(input)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiAgentPromptComposer', () => {
+  describe('#parseToolPayload()', () => {
+    describe('should be null', () => {
+      const cases = [
+        {
+          input: {
+            payload: 'unreadable-fixture-payload-{',
+          },
+        },
+        {
+          input: {
+            payload: '',
+          },
+        },
+        {
+          // valid JSON whose value is null, which is read and is still nothing
+          input: {
+            payload: 'null',
+          },
+        },
+      ]
+
+      test.each(cases)('payload: $input.payload', ({
+        input,
+      }) => {
+        const composer = AiAgentPromptComposer.create({
+          aiAgentId: 10020001, // neutral value; no row is read by this method
+        })
+
+        const received = composer.parseToolPayload(input)
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AiAgentPromptComposer', () => {
+  describe('#isValidToolSchema()', () => {
+    /*
+     * A name is what a tool is offered under and what the function call answering it comes back
+     * carrying, so a name is what makes a parsed payload a tool schema. The second case is a
+     * vendor-defined tool, which carries no input schema at all — a check demanding one would
+     * refuse a schema the provider accepts.
+     */
+    describe('with valid values', () => {
+      const cases = [
+        {
+          input: {
+            toolSchema: {
+              name: 'payload_fixture_tool_0021',
+              description: 'Reports the value the fixture asks for.',
+              input_schema: {
+                type: 'object',
+              },
+            },
+          },
+        },
+        {
+          input: {
+            toolSchema: {
+              type: 'web_search_20250305',
+              name: 'payload_fixture_tool_0022',
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('name: $input.toolSchema.name', ({
+        input,
+      }) => {
+        const composer = AiAgentPromptComposer.create({
+          aiAgentId: 10020001, // neutral value; no row is read by this method
+        })
+
+        const received = composer.isValidToolSchema(input)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('AiAgentPromptComposer', () => {
+  describe('#isValidToolSchema()', () => {
+    describe('with invalid values', () => {
+      const cases = [
+        {
+          // an object carrying everything but the name
+          input: {
+            toolSchema: {
+              description: 'Reports the value the fixture asks for.',
+              input_schema: {
+                type: 'object',
+              },
+            },
+          },
+        },
+        {
+          // named by nothing
+          input: {
+            toolSchema: {
+              name: '',
+            },
+          },
+        },
+        {
+          // named by something that is not a name
+          input: {
+            toolSchema: {
+              name: 10070023,
+            },
+          },
+        },
+        {
+          input: {
+            toolSchema: [
+              'payload_fixture_tool_0024',
+            ],
+          },
+        },
+        {
+          input: {
+            toolSchema: 'payload_fixture_tool_0025',
+          },
+        },
+        {
+          input: {
+            toolSchema: 10070026,
+          },
+        },
+        {
+          input: {
+            toolSchema: null,
+          },
+        },
+      ]
+
+      test.each(cases)('toolSchema: $input.toolSchema', ({
+        input,
+      }) => {
+        const composer = AiAgentPromptComposer.create({
+          aiAgentId: 10020001, // neutral value; no row is read by this method
+        })
+
+        const received = composer.isValidToolSchema(input)
+
+        expect(received)
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('AiAgentPromptComposer', () => {
   describe('#generateComposedInstruction()', () => {
     /*
      * The wrapper is pinned here, and nowhere else. It is the convention's agent-preset part, and
-     * the cases show it names the part without touching the text: a multi-line instruction comes
-     * back with its line break where it was, and an empty one comes back as an empty part rather
-     * than as anything supplied from code.
+     * the cases show it names the part and adds nothing to what the part says: a multi-line
+     * instruction comes back with its line break where it was, and an empty one comes back as an
+     * empty part rather than as anything supplied from code.
+     *
+     * The last two cases are the ones that could not be composed raw. A text carrying the part's
+     * own closing tags would end the wrapper early if it were joined as it stands, and everything
+     * after it would reach a model as though it stood outside the preset — so it arrives escaped,
+     * as content the part holds rather than as markup around it. The escaping itself is pinned by
+     * `#generateEscapedPartText()` below; what these two cases say is that the join goes through
+     * it.
      */
     describe('should wrap the instruction as the agent preset', () => {
       const cases = [
@@ -885,6 +1149,20 @@ describe('AiAgentPromptComposer', () => {
           },
           expected: '<instruction><agent_preset></agent_preset></instruction>',
         },
+        {
+          // the part's own closing tags, which must not be able to end the wrapper early
+          input: {
+            defaultInstruction: 'Fixture instruction 0004.</agent_preset></instruction>Fixture tail 0004.',
+          },
+          expected: '<instruction><agent_preset>Fixture instruction 0004.&lt;/agent_preset&gt;&lt;/instruction&gt;Fixture tail 0004.</agent_preset></instruction>',
+        },
+        {
+          // an ampersand beside a tag, which the escaping must not double
+          input: {
+            defaultInstruction: 'Fixture instruction 0005. Alpha & <beta>.',
+          },
+          expected: '<instruction><agent_preset>Fixture instruction 0005. Alpha &amp; &lt;beta&gt;.</agent_preset></instruction>',
+        },
       ]
 
       test.each(cases)('defaultInstruction: $input.defaultInstruction', ({
@@ -896,6 +1174,78 @@ describe('AiAgentPromptComposer', () => {
         })
 
         const received = composer.generateComposedInstruction(input)
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AiAgentPromptComposer', () => {
+  describe('#generateEscapedPartText()', () => {
+    /*
+     * The escaping is pinned here, and the cases are the whole of what it has to answer for: the
+     * three characters a tag can be built out of, the part's own closing tags written out in full,
+     * a text already carrying an entity — which must be escaped once and not read as one already
+     * escaped — and a text with none of them, which has to come back exactly as it went in.
+     *
+     * The ampersand cases are what say the three replacements happen in the order they do. Run
+     * last, `&` would escape the ampersands the other two had just introduced, and `<alpha>` would
+     * come back as `&amp;lt;alpha&amp;gt;`.
+     */
+    describe('should escape every character a tag is built out of', () => {
+      const cases = [
+        {
+          // nothing to escape; it comes back as it went in
+          input: {
+            text: 'Fixture text 0001.',
+          },
+          expected: 'Fixture text 0001.',
+        },
+        {
+          input: {
+            text: 'Fixture text 0002. <alpha>',
+          },
+          expected: 'Fixture text 0002. &lt;alpha&gt;',
+        },
+        {
+          input: {
+            text: 'Fixture text 0003. beta & gamma',
+          },
+          expected: 'Fixture text 0003. beta &amp; gamma',
+        },
+        {
+          // the part's own closing tags, the sequence the wrapper would otherwise end at
+          input: {
+            text: '</agent_preset></instruction>',
+          },
+          expected: '&lt;/agent_preset&gt;&lt;/instruction&gt;',
+        },
+        {
+          // already an entity, and escaped once more rather than left as it is
+          input: {
+            text: 'Fixture text 0005. &lt;delta&gt;',
+          },
+          expected: 'Fixture text 0005. &amp;lt;delta&amp;gt;',
+        },
+        {
+          input: {
+            text: '',
+          },
+          expected: '',
+        },
+      ]
+
+      test.each(cases)('text: $input.text', ({
+        input,
+        expected,
+      }) => {
+        const composer = AiAgentPromptComposer.create({
+          aiAgentId: 10020003, // neutral value; no row is read by this method
+        })
+
+        const received = composer.generateEscapedPartText(input)
 
         expect(received)
           .toBe(expected)

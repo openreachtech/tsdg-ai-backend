@@ -11,7 +11,8 @@ import AiTool from '../../sequelize/models/AiTool.js'
  * text, no fallback text and no template with a sentence baked into it, so rewording what a service
  * sends is a write to a row and never a deployment. A reader can check that by scanning the file
  * for an English sentence outside a comment and finding none — the only literals here are the XML
- * tags the parts are wrapped in, which say where a part begins rather than what it says.
+ * tags the parts are wrapped in and the entities the text inside them is escaped to, which say
+ * where a part begins and ends rather than what it says.
  *
  * **The composition order is the convention's, with the parts this version has.** The convention
  * joins three parts with a blank line between them, in the order background knowledge → the
@@ -227,9 +228,9 @@ export default class AiAgentPromptComposer {
   /**
    * Build the schemas of the bound tools, in the order they were found.
    *
-   * One unreadable payload takes the whole set with it. Dropping it instead would hand a model a
-   * shorter tool set than the database describes, and the step that then failed to get the call it
-   * expected would carry no trace of which row was at fault.
+   * One payload that cannot be read as a tool schema takes the whole set with it. Dropping it
+   * instead would hand a model a shorter tool set than the database describes, and the step that
+   * then failed to get the call it expected would carry no trace of which row was at fault.
    *
    * @param {{
    *   availableAiTools: Array<*>
@@ -259,10 +260,16 @@ export default class AiAgentPromptComposer {
    * The payload is held as text and parsed here, so the schema a step may return is a value an
    * operator edits rather than a shape compiled into the service.
    *
+   * Parsing is not the whole of reading it. A payload that parses is still only whatever JSON the
+   * column happened to hold, and what is forwarded goes to a provider as a tool the model may call
+   * — so the parsed value is checked for being a tool schema before it leaves this method. A value
+   * that is not one is refused exactly as an unparseable one is.
+   *
    * @param {{
    *   aiTool: *
    * }} params - Parameters.
-   * @returns {Record<string, *> | null} The tool schema, or null when the payload is not JSON.
+   * @returns {Record<string, *> | null} The tool schema, or null when the payload is not JSON, or
+   * is JSON that is not a tool schema.
    */
   extractToolSchema ({
     aiTool,
@@ -271,6 +278,32 @@ export default class AiAgentPromptComposer {
       return null
     }
 
+    const toolSchema = this.parseToolPayload({
+      payload: aiTool.payload,
+    })
+
+    if (
+      !this.isValidToolSchema({
+        toolSchema,
+      })
+    ) {
+      return null
+    }
+
+    return toolSchema
+  }
+
+  /**
+   * Parse the text one tool's schema is stored as.
+   *
+   * @param {{
+   *   payload: *
+   * }} params - Parameters.
+   * @returns {*} The parsed payload, or null when it is not JSON.
+   */
+  parseToolPayload ({
+    payload,
+  }) {
     /*
      * The parse failure is not logged and not rethrown, because the null it becomes is what reports
      * it: the whole composition is refused, and the caller — a run step — records that refusal with
@@ -278,10 +311,43 @@ export default class AiAgentPromptComposer {
      * and leave the one nobody reads looking authoritative.
      */
     try {
-      return JSON.parse(aiTool.payload)
+      return JSON.parse(payload)
     } catch {
       return null
     }
+  }
+
+  /**
+   * Check whether a parsed payload is a tool schema.
+   *
+   * What every vendor's tool schema has in common is a name, because a name is what a model is
+   * offered a tool under and what the function call it answers with comes back carrying. Nothing
+   * else is common to all of them — a vendor-defined tool such as `web_search` carries no input
+   * schema at all — so a name is what is required, and a payload holding a number, a string, an
+   * array or an object with no usable name is not a tool schema.
+   *
+   * @param {{
+   *   toolSchema: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the parsed payload is a tool schema.
+   */
+  isValidToolSchema ({
+    toolSchema,
+  }) {
+    if (!toolSchema) {
+      return false
+    }
+
+    if (typeof toolSchema !== 'object') {
+      return false
+    }
+
+    if (Array.isArray(toolSchema)) {
+      return false
+    }
+
+    return typeof toolSchema.name === 'string'
+      && toolSchema.name.length > 0
   }
 
   /**
@@ -291,6 +357,18 @@ export default class AiAgentPromptComposer {
    * part; it states nothing about the task, which is why the text inside it is the only thing that
    * decides what the model is asked.
    *
+   * The text is escaped before it is joined, so that it can only ever be read as the content of
+   * the part and never as markup around it. Interpolated raw, a text carrying the part's own
+   * closing tags would end the wrapper early, and everything after it would reach the model as
+   * though it stood outside the preset.
+   *
+   * Today only an operator writes that text, and an operator owns it. It does not stay that way:
+   * the parts this version has no source for are joined *before* this one, so the same join is
+   * where a later version's background knowledge and task-specific instruction land — and those
+   * carry values a client sends and this service never interprets. Escaping is done now rather
+   * than then, because the day client text reaches this join is the day an unescaped one becomes
+   * prompt injection from outside, and nothing about the join itself would announce it.
+   *
    * @param {{
    *   defaultInstruction: string
    * }} params - Parameters.
@@ -299,7 +377,32 @@ export default class AiAgentPromptComposer {
   generateComposedInstruction ({
     defaultInstruction,
   }) {
-    return `<instruction><agent_preset>${defaultInstruction}</agent_preset></instruction>`
+    const escapedInstruction = this.generateEscapedPartText({
+      text: defaultInstruction,
+    })
+
+    return `<instruction><agent_preset>${escapedInstruction}</agent_preset></instruction>`
+  }
+
+  /**
+   * Generate the escaped form of a text going inside one part of the wrapper.
+   *
+   * The three characters replaced are the three a tag can be built out of, so no sequence of the
+   * escaped text opens or closes one. `&` goes first: replacing it after the other two would escape
+   * the ampersands those two had just introduced and double them.
+   *
+   * @param {{
+   *   text: string
+   * }} params - Parameters.
+   * @returns {string} The escaped text.
+   */
+  generateEscapedPartText ({
+    text,
+  }) {
+    return text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
   }
 }
 
