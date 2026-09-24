@@ -28,6 +28,7 @@ export default class AiTool extends BaseAppRenchanModel {
       name: {
         type: DataTypes.STRING(191),
         allowNull: false,
+        unique: true,
       },
       description: {
         type: DataTypes.STRING(191),

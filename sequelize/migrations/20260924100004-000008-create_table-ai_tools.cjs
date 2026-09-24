@@ -61,6 +61,28 @@ module.exports = {
       ...factory.TIMESTAMPS,
     })
 
+    /*
+     * The name is the real key of the set, so it is enforced by a UNIQUE index.
+     *
+     * A model is offered its tools by name, and a function call comes back naming one of them. Two
+     * rows sharing a name would put two schemas behind one call and leave nobody able to say which
+     * was meant, so the second row is refused here rather than discovered in a run.
+     *
+     * The per-vendor rows a single capability has do not collide with this: they are stored under
+     * the names their vendors give them (`web_search` / `web_search_preview` / `googleSearch`), and
+     * a row per name is exactly what this index allows.
+     */
+    await queryInterface.addIndex(TABLE_NAME, [
+      COLUMN_NAME.NAME,
+    ], {
+      unique: true,
+      name: [
+        TABLE_NAME,
+        COLUMN_NAME.NAME,
+        'unique',
+      ].join('_'),
+    })
+
     return Promise.resolve()
   },
 
