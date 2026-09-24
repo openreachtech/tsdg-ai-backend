@@ -61,10 +61,10 @@ module.exports = {
       ...factory.TIMESTAMPS,
     })
 
+    // The pair is UNIQUE: one agent says one thing about one tool. A second row for the
+    // same pair would leave `is_enabled` and `is_default` with two answers and no rule
+    // for which of them the agent runs on.
     await Promise.all([
-      // The pair is UNIQUE: one agent says one thing about one tool. A second row for the
-      // same pair would leave `is_enabled` and `is_default` with two answers and no rule
-      // for which of them the agent runs on.
       queryInterface.addIndex(TABLE_NAME, [
         COLUMN_NAME.AI_AGENT_ID,
         COLUMN_NAME.AI_TOOL_ID,
@@ -77,6 +77,7 @@ module.exports = {
           'unique',
         ].join('_'),
       }),
+
       // Reading from the tool's side answers which agents a tool-schema change reaches,
       // which is what an operator needs before rewriting or retiring one.
       queryInterface.addIndex(TABLE_NAME, [

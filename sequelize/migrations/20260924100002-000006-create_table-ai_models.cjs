@@ -69,6 +69,7 @@ module.exports = {
           'index',
         ].join('_'),
       }),
+
       // The system key is the real key of a master set, so it is enforced by a UNIQUE index.
       queryInterface.addIndex(TABLE_NAME, [
         COLUMN_NAME.NAME,
