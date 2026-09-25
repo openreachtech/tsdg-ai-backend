@@ -1530,3 +1530,163 @@ describe('AiRunStepRecorder', () => {
     })
   })
 })
+
+describe('AiRunStepRecorder', () => {
+  describe('#buildRecordableRejections()', () => {
+    /*
+     * The three channels checkpoint 8's re-audit found still open after the first shaper, and the
+     * payload it got through.
+     *
+     * The first pass held a rejection to three keys, so a fourth had nowhere to travel. The re-audit
+     * then put the original payload back through it, moved *inside* the three keys that are kept -
+     * a name and an address in the field path, a sentence in the reason code, and a medical status
+     * as the name of a figure whose value was a bare `1`. All three were stored verbatim in a
+     * column kept seven hundred and thirty days, while the content it describes is purged at thirty.
+     *
+     * The tell, and the reason this exists: the feature has two `fieldPath`s - one on
+     * `ai_run_field_outcomes` and one inside a rejection - and only the first had a shape. Same
+     * word, same risk, one guard.
+     *
+     * Each case names which of the three channels it drives, because a case that failed for the
+     * wrong reason would still look green.
+     */
+    describe('should drop an entry whose text carries what was read', () => {
+      const cases = [
+        {
+          input: {
+            rejections: [
+              {
+                fieldPath: 'Nguyen Van A, 09 Le Loi, phone 0912345678',
+                reasonCode: 'she told the clerk her mother is Tran Thi B, born 1954',
+                figures: {
+                  'diagnosis: hepatitis B carrier': 1,
+                },
+              },
+            ],
+          },
+          label: 'all three channels at once, the audit payload as it was written',
+        },
+        {
+          input: {
+            rejections: [
+              {
+                fieldPath: 'the owner note says sample person born 1984',
+                reasonCode: 'value-over-max-length',
+                figures: {
+                  valueLength: 51,
+                },
+              },
+            ],
+          },
+          label: 'the field path alone',
+        },
+        {
+          input: {
+            rejections: [
+              {
+                fieldPath: 'attributes.ownerNote',
+                reasonCode: 'she said her phone is 0912345678',
+                figures: {
+                  valueLength: 51,
+                },
+              },
+            ],
+          },
+          label: 'the reason code alone',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const recorder = AiRunStepRecorder.create() // Arrange
+
+        const actual = recorder.buildRecordableRejections(input) // Act
+
+        expect(actual) // Assert
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AiRunStepRecorder', () => {
+  describe('#buildRecordableRejections()', () => {
+    /*
+     * A figure whose *name* carries what was read is dropped on its own, and the entry around it
+     * stands.
+     *
+     * That asymmetry with the describe above is the method's stated policy rather than an accident:
+     * the field path and the reason code are the decision the trace is kept to hold, so an entry
+     * that cannot state either is worth nothing and goes whole - while a stray figure beside a
+     * sound decision costs only itself. The second case proves the entry is not merely surviving
+     * but arriving complete, with its legitimate figure intact.
+     */
+    describe('should drop only the figure whose name carries what was read', () => {
+      const cases = [
+        {
+          input: {
+            rejections: [
+              {
+                fieldPath: 'attributes.ownerNote',
+                reasonCode: 'value-over-max-length',
+                figures: {
+                  'patient is a carrier': 1,
+                  valueLength: 51,
+                },
+              },
+            ],
+          },
+          expected: [
+            {
+              fieldPath: 'attributes.ownerNote',
+              reasonCode: 'value-over-max-length',
+              figures: {
+                valueLength: 51,
+              },
+            },
+          ],
+          label: 'one figure named for what was read, one counted',
+        },
+        {
+          input: {
+            rejections: [
+              {
+                fieldPath: 'items.0.owner-note',
+                reasonCode: 'MEDIA_UNREADABLE',
+                figures: {
+                  'she is 41 years old': 41,
+                  agreedReadingCount: 1,
+                  totalReadingCount: 3,
+                },
+              },
+            ],
+          },
+          expected: [
+            {
+              fieldPath: 'items.0.owner-note',
+              reasonCode: 'MEDIA_UNREADABLE',
+              figures: {
+                agreedReadingCount: 1,
+                totalReadingCount: 3,
+              },
+            },
+          ],
+          label: 'a hyphenated path and an index, both legitimate, kept whole',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunStepRecorder.create() // Arrange
+
+        const actual = recorder.buildRecordableRejections(input) // Act
+
+        expect(actual) // Assert
+          .toEqual(expected)
+      })
+    })
+  })
+})

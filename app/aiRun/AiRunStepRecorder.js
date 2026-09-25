@@ -7,6 +7,72 @@ const {
   AI_RUN_STEP_CATEGORY,
 } = AI_RUN_STEP_CATEGORY_CONSTANT_HASH
 
+/*
+ * A dotted path into the schema, and nothing that is not one.
+ *
+ * A segment is an identifier of ASCII letters, digits and underscores. The first segment may not
+ * open with a digit, so a bare number is no path; a later segment may, so an index into a repeated
+ * field is. The leading bound holds the whole path to 191 characters — which nothing here enforces
+ * of its own accord, `rejections` being JSON and JSON having no width, and which is borrowed from
+ * the column that does for the reason below.
+ *
+ * What it rejects: whitespace of any kind, so a sentence can never be a path; a newline; every
+ * punctuation mark but the separating dot, the underscore and the hyphen — the colon, the comma and
+ * the slash among them; the empty path; a leading, trailing or doubled dot; and anything at all past
+ * 191 characters.
+ *
+ * **This repeats the shape `AiRunFieldOutcomeRecorder` states for `field_path`, rather than reaching
+ * for it, and the repetition is deliberate.** The two are the same word and the same risk, so they
+ * have to say the same thing — that is the whole reason this one exists. They are not the same rule:
+ * a path refused there is a `NOT NULL` column turning away a whole decision row, and a path refused
+ * here drops one entry off a step that still records. One constant over two consequences would read
+ * as one decision nobody made, and whichever of the two moved first would move the other with it —
+ * which is why `AI_RUN_FIELD_STATUS_ID_PATTERN` and `AI_RUN_ID_PATTERN` are stated twice over there
+ * for the same reason, word for word identical. What the repetition costs is that the two can drift
+ * apart and neither file would say so, and that cost is real: a shared home for this one shape is
+ * worth having, and is a third file neither recorder owns.
+ */
+const REJECTION_FIELD_PATH_PATTERN = /^(?=.{1,191}$)[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/u
+
+/*
+ * A reason code: a lookup key, not a sentence.
+ *
+ * `#run-record`'s glossary makes a reason code "a code plus JSON parameters returned in place of a
+ * human sentence", which the client system turns into the wording people read. So nothing here is
+ * ever read as it stands by the person it is about, and a code carrying prose is a code nobody
+ * asked for and nobody would display. ASCII letters and digits, the dot, the underscore and the
+ * hyphen, opening on a letter so that a bare number is no code, bounded to 64 characters — the
+ * width of `ai_run_steps.reason_code`, which is this same kind of value on this same row, one key
+ * holding the step's own reason where this one holds a dropped field's.
+ *
+ * What it rejects: whitespace, so a sentence can never be a code; a newline; the colon, the comma,
+ * the slash, the quote and every other punctuation mark; the empty code; and anything at all past 64
+ * characters. All three casings this service already writes pass — `below_agreement_threshold`,
+ * `value-over-max-length` and `MEDIA_UNREADABLE` — because which of them a caller reaches for is a
+ * naming style, and a naming style is not what this stands in the way of.
+ */
+const REJECTION_REASON_CODE_PATTERN = /^(?=.{1,64}$)[A-Za-z][A-Za-z0-9._-]*$/u
+
+/*
+ * The name of a figure: what was counted, not what was read.
+ *
+ * A figure's value was held to being a finite number from the first pass, and a number is the one
+ * thing that cannot carry a name, an address or a diagnosis. Its name was held to nothing at all,
+ * and a name is where a security audit put a person's medical status, with a bare `1` beside it as
+ * the count. So the name is now a name: ASCII letters and digits, the underscore and the hyphen,
+ * opening on a letter or an underscore, bounded to 64 characters — the width every short name on
+ * this row is held to, `step_name` and `outcome_code` and `reason_code` alike.
+ *
+ * The dot is excluded here, where the field path above allows it. `figures` is one level deep by
+ * construction, so a dotted name would be a path flattened into a key: a shape this column does not
+ * hold, and one more way for something structured to arrive wearing a label's clothes.
+ *
+ * What it rejects: whitespace, so a sentence can never be a figure name; a newline; the colon, the
+ * comma, the slash and every other punctuation mark; the empty name; and anything at all past 64
+ * characters.
+ */
+const REJECTION_FIGURE_NAME_PATTERN = /^(?=.{1,64}$)[A-Za-z_][A-Za-z0-9_-]*$/u
+
 /**
  * Writes one `ai_run_steps` row for each step a run executes, and reads a run's steps back in the
  * order they ran.
@@ -255,7 +321,15 @@ export default class AiRunStepRecorder {
       return null
     }
 
+    if (!REJECTION_FIELD_PATH_PATTERN.test(rejection.fieldPath)) {
+      return null
+    }
+
     if (typeof rejection.reasonCode !== 'string') {
+      return null
+    }
+
+    if (!REJECTION_REASON_CODE_PATTERN.test(rejection.reasonCode)) {
       return null
     }
 
@@ -278,6 +352,12 @@ export default class AiRunStepRecorder {
    * dropped while the rejection around it is kept: the field path and the reason code are the
    * decision this trace exists to hold, and losing them to remove one stray figure would take away
    * more than it protects.
+   *
+   * **The name is held to a shape as well, and that half was missing.** A security audit put a
+   * person's medical status in a figure's *name*, with a bare `1` beside it as the value — so the
+   * sentence above was true of the value and false of the key, and the key is the wider channel of
+   * the two. A name that is not an identifier is dropped the same way a value that is not a number
+   * is.
    *
    * `Infinity` and `NaN` are dropped with the rest, because neither survives JSON as itself — each
    * would land in the column as a null nobody derived, which is the substitution this class refuses
@@ -304,6 +384,7 @@ export default class AiRunStepRecorder {
     }
 
     const recordableFigureNames = Object.keys(figures)
+      .filter(it => REJECTION_FIGURE_NAME_PATTERN.test(it))
       .filter(it => Number.isFinite(figures[it]))
 
     if (recordableFigureNames.length === 0) {
