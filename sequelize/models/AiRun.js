@@ -39,10 +39,25 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() is refused when it wr
  * hook, with no `individualHooks` option to turn into one; `.bulkCreate()` with `updateOnDuplicate`
  * is the same write spelled differently. `Model.update({ hooks: false })` and
  * `instance.save({ hooks: false })` switch the guard off by asking. `queryInterface` and raw SQL
- * reach no model hook at all, which is what the seeders depend on. `.increment()` / `.decrement()`
- * reach their own hooks only, and are named for completeness — no status is reached by arithmetic.
- * `.destroy()` removes the run rather than moving it, so it is not this rule's to refuse. Nothing in
- * this application takes any of those paths against `ai_runs` today.
+ * reach no model hook at all, which is what the seeders depend on. `.destroy()` removes the run
+ * rather than moving it, so it is not this rule's to refuse.
+ *
+ * Two more, and both were got wrong the first time this list was written.
+ *
+ * **`.increment()` and `.decrement()` do move a status**, and the earlier claim that no status is
+ * reached by arithmetic was simply false — `run.increment('AiRunStatusId', { by: 1 })` emits
+ * `SET ai_run_status_id = ai_run_status_id + 1` and walked a run from succeeded to failed under a
+ * re-audit's probe. They reach their own hooks and neither of ours.
+ *
+ * **A fabricated instance passes the row-reading guard**, because `beforeUpdate` judges against
+ * `entity.previous()` and an instance built by hand supplies that itself:
+ * `AiRun.build({ id, AiRunStatusId: 1 }, { isNewRecord: false })`, then a save, moved a settled run.
+ *
+ * Nothing in this application takes any of those paths against `ai_runs` today, and each is a
+ * deliberate act by a caller rather than something reached by accident. **The point of the list is
+ * that it is exhaustive and true**, so a reader can tell what the guard is worth: one entry of it
+ * was neither, and a reader who trusted that sentence would not have looked twice at an
+ * `increment`.
  *
  * @class AiRun
  * @extends {BaseAppRenchanModel}

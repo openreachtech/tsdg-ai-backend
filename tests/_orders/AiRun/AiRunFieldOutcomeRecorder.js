@@ -563,7 +563,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
             AiRunId: 10220018,
             AiRunStepId: 10220008,
             fieldPath: 'subject.eta',
-            AiRunFieldStatusId: '4', // written through as it arrived; the column reads it as 4
+            AiRunFieldStatusId: 4, // normalized before it is written, not left for the column to coerce
             AiRunEvidenceCategoryId: null,
             suggestionConfidence: null,
             agreedReadingCount: 2,
@@ -852,6 +852,109 @@ describe('AiRunFieldOutcomeRecorder', () => {
         const received = () => recorder.saveAiRunFieldOutcome(input.fieldOutcome)
 
         await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The three channels checkpoint 8's re-audit found after the first pass had closed the ones
+     * before them, and every case below is a payload it actually got a row written with.
+     *
+     * The field state was the mirror of a defect this class had already been corrected for. The
+     * first correction normalized the state for the *decision* - so `'01'` named no state, and
+     * nothing was recorded as settled - and left the *write* raw, where the INTEGER column coerced
+     * `'01'` to 1 anyway. The row then said the field came out `extracted`, on no evidence, with no
+     * confidence: a settled row carrying neither, which is what the second use case reads when an
+     * operator asks why a field returned no value. The guard and the write have to agree on what a
+     * state id is, and now they do - the comparable id is what gets written.
+     *
+     * The two counts took free text, and the class documentation said in as many words that they
+     * did not. `agreed 99 of 1` is impossible rather than merely malformed: section 10 calls the
+     * pair "how many readings agreed out of how many".
+     *
+     * The two master ids were checked by nothing. This table declares no database foreign key, by
+     * the rule that integrity is application code, so an id naming no seeded row was written.
+     */
+    describe('should refuse a value the record cannot answer for', () => {
+      const cases = [
+        {
+          input: {
+            aiRunFieldStatusId: '01',
+          },
+          expected: 'refused a field state that is not an id',
+          label: 'a state id written with a leading zero, which the column would coerce',
+        },
+        {
+          input: {
+            aiRunFieldStatusId: '1.0',
+          },
+          expected: 'refused a field state that is not an id',
+          label: 'a state id written as a decimal',
+        },
+        {
+          input: {
+            aiRunFieldStatusId: 99,
+          },
+          expected: 'refused a field state naming no master row',
+          label: 'a state id no master row carries',
+        },
+        {
+          input: {
+            aiRunEvidenceCategoryId: 99,
+          },
+          expected: 'refused an evidence kind naming no master row',
+          label: 'an evidence kind no master row carries',
+        },
+        {
+          input: {
+            agreedReadingCount: 'sample person 090-0000-0000',
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'a count carrying what was read out of a medium',
+        },
+        {
+          input: {
+            agreedReadingCount: -5,
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'a count below zero, which no reading can agree',
+        },
+        {
+          input: {
+            agreedReadingCount: 99,
+            totalReadingCount: 1,
+          },
+          expected: 'refused more readings agreeing than there were readings',
+          label: 'more readings agreeing than there were readings',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const actual = () => recorder.saveAiRunFieldOutcome({
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          fieldPath: 'probe.refused',
+          aiRunFieldStatusId: 1,
+          aiRunEvidenceCategoryId: 1,
+          suggestionConfidence: 0.95,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:09.009Z'),
+          ...input,
+        })
+
+        await expect(actual) // Assert
           .rejects
           .toThrow(expected)
       })

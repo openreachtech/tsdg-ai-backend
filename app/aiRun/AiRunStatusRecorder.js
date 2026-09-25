@@ -13,6 +13,39 @@ const SETTLED_AI_RUN_MESSAGE = 'refused a run already settled, which a run never
 const ABSENT_FAILURE_REASON_CODE_MESSAGE = 'refused a failed run carrying no reason code'
 const REFUSED_AI_RUN_FIELD_MESSAGE = 'refused a field no transition of this class writes'
 const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evidence for'
+const INHERITED_AI_RUN_FIELD_MESSAGE = 'refused values carrying fields it did not state as its own'
+const UNKNOWN_AI_RUN_STATUS_MESSAGE = 'refused a status naming no master row'
+const EMPTY_AI_RUN_EVIDENCE_MESSAGE = 'refused a status whose evidence field carries nothing'
+
+/*
+ * The ids the status master actually carries, read from the constants the seeder seeds from.
+ *
+ * A status outside the five reaches no entry of the evidence hash below, so before this it needed
+ * no evidence at all and was written straight through — a run could be moved to a status no master
+ * row carries, and every read that joins the two would then find nothing.
+ */
+const AI_RUN_STATUS_IDS = Object.values(AI_RUN_STATUS)
+  .map(it => it.ID)
+
+/*
+ * The evidence fields that are evidence by being stated, whatever they hold.
+ *
+ * `resultBody` is the reason this list exists: section 10's second criterion says a run whose
+ * result is legitimately empty is a success, so a caller stating `resultBody: null` is recording a
+ * run that settled nothing and must not be turned away. `failureParameters` is the same shape — the
+ * contract gives only one of its seven reason codes any parameters at all, so null is the ordinary
+ * case.
+ *
+ * Every other evidence field is evidence by carrying something. That distinction was missing, and
+ * the justification written for `resultBody` had been silently extended to all of them: a failed
+ * run reached the row with `failureReasonCode: null`, which is the very state the seeded record was
+ * corrected for one commit earlier, and a succeeded run reached it with `finishedAt: null`, which
+ * makes the cancellation gap the fifth criterion promises unmeasurable.
+ */
+const STATED_AI_RUN_EVIDENCE_FIELD_NAMES = [
+  'resultBody',
+  'failureParameters',
+]
 
 /*
  * The only fields a transition writes. Everything a run was accepted with — the client it belongs
@@ -390,6 +423,17 @@ export default class AiRunStatusRecorder {
     aiRunId,
     values,
   }) {
+    if (Object.getPrototypeOf(values) !== Object.prototype) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${INHERITED_AI_RUN_FIELD_MESSAGE}: AiRunId ${aiRunId}`)
+    }
+
+    if (
+      Object.hasOwn(values, 'AiRunStatusId')
+      && !AI_RUN_STATUS_IDS.includes(values.AiRunStatusId)
+    ) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${UNKNOWN_AI_RUN_STATUS_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${values.AiRunStatusId}`)
+    }
+
     const refusedAiRunFieldName = this.extractRefusedAiRunFieldName({
       values,
     })
@@ -404,6 +448,14 @@ export default class AiRunStatusRecorder {
 
     if (absentAiRunEvidenceFieldName) {
       throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${ABSENT_AI_RUN_EVIDENCE_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${values.AiRunStatusId}, field ${absentAiRunEvidenceFieldName}`)
+    }
+
+    const emptyAiRunEvidenceFieldName = this.extractEmptyAiRunEvidenceFieldName({
+      values,
+    })
+
+    if (emptyAiRunEvidenceFieldName) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${EMPTY_AI_RUN_EVIDENCE_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${values.AiRunStatusId}, field ${emptyAiRunEvidenceFieldName}`)
     }
 
     const aiRun = await this.findAiRun({
@@ -422,7 +474,11 @@ export default class AiRunStatusRecorder {
       throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${SETTLED_AI_RUN_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${aiRun.AiRunStatusId}`)
     }
 
-    return aiRun.update(values)
+    const recordableValues = this.buildRecordableAiRunValues({
+      values,
+    })
+
+    return aiRun.update(recordableValues)
   }
 
   /**
@@ -453,6 +509,100 @@ export default class AiRunStatusRecorder {
    * }} params - Parameters.
    * @returns {string | null} The field name, or null when the status is evidenced.
    * @public
+   */
+  /**
+   * Build the values this class will write, out of the fields it states it writes.
+   *
+   * The allow-list above says what may be written; this says what *is* written, and the two are not
+   * the same guarantee. The list is read with `Object.keys`, which sees a caller's own fields;
+   * Sequelize's own setter walks the prototype chain, so a `values` carrying an inherited
+   * `callbackUrl` passed the list and reached the column — a security audit redirected a run's
+   * callback to another host that way, through the public method, after the list was already in
+   * place.
+   *
+   * A prototype-bearing `values` is refused outright before this runs, so nothing is dropped
+   * silently; this exists so that a guard and a write can never disagree about what a field is
+   * again, whatever a later caller hands over.
+   *
+   * **This is insurance, and no test can reach it while the refusal stands in front.** Replacing
+   * this with the caller's own object survives every test in the suite, and that is not a gap in
+   * the tests — it is what "behind a refusal" means. It is kept because the defect it answers was
+   * not that a particular object got through, but that the guard and the write read the same word
+   * two different ways; a later hand that softens the refusal would reopen the write with it, and
+   * this is the half that would still hold.
+   *
+   * @param {{
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {Record<string, *>} The values to write.
+   */
+  buildRecordableAiRunValues ({
+    values,
+  }) {
+    const recordableEntries = WRITABLE_AI_RUN_FIELD_NAMES
+      .filter(it => Object.hasOwn(values, it))
+      .map(it => [it, values[it]])
+
+    return Object.fromEntries(recordableEntries)
+  }
+
+  /**
+   * Extract the name of the first evidence field that was stated and carries nothing.
+   *
+   * Being named is evidence only for the two fields whose emptiness is itself a statement — a
+   * result that settled nothing, and a reason that takes no parameters. For every other, a null or
+   * a blank is the absence the status was supposed to be evidenced against.
+   *
+   * @param {{
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when each carries something.
+   */
+  extractEmptyAiRunEvidenceFieldName ({
+    values,
+  }) {
+    const evidenceFieldNames = AI_RUN_STATUS_EVIDENCE_FIELD_NAMES_HASH[values.AiRunStatusId]
+      ?? []
+
+    return evidenceFieldNames
+      .filter(it => !STATED_AI_RUN_EVIDENCE_FIELD_NAMES.includes(it))
+      .find(it => !this.carriesAiRunEvidence({
+        evidence: values[it],
+      }))
+      ?? null
+  }
+
+  /**
+   * Check whether a value stands as evidence of the status it was handed with.
+   *
+   * @param {{
+   *   evidence: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether it carries something.
+   */
+  carriesAiRunEvidence ({
+    evidence,
+  }) {
+    if (evidence === null) {
+      return false
+    }
+
+    if (typeof evidence === 'undefined') {
+      return false
+    }
+
+    return typeof evidence === 'string'
+      ? evidence.trim() !== ''
+      : true
+  }
+
+  /**
+   * Extract the name of the first evidence field the call does not state.
+   *
+   * @param {{
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when each is stated.
    */
   extractAbsentAiRunEvidenceFieldName ({
     values,

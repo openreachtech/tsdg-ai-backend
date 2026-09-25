@@ -1966,3 +1966,258 @@ describe('AiRun', () => {
     })
   })
 })
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The two ways checkpoint 8's re-audit reached past the guards that had just been put in for it.
+     *
+     * The allow-list was read with `Object.keys`, which sees a caller's own fields, while Sequelize's
+     * own setter walks the prototype chain — so a `values` whose prototype carried `callbackUrl`
+     * passed the list and reached the column, and the audit redirected a run's result to another
+     * host through this very method after the list was already in place. The guard and the write
+     * disagreed about what a field is. Both ends are now closed: a `values` carrying anything it did
+     * not state as its own is refused outright, and what is written is built from the allow-list
+     * rather than being the object the caller handed over.
+     *
+     * The evidence map asked only whether a key was named. So a failed run reached the row with no
+     * reason code — the very state the seeded record had been corrected for one commit earlier — and
+     * a succeeded run reached it with no `finishedAt`, which makes the gap the fifth criterion
+     * promises unmeasurable. Being named is evidence only for the two fields whose emptiness is
+     * itself a statement, and the case below proves that exception still stands.
+     */
+    describe('should refuse a call that reaches past what this class states it writes', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230081,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230081',
+              requestKey: 'request-key-10230081',
+              requestBodyHash: 'request-body-hash-10230081',
+              externalRef: 'external-ref-10230081',
+              subjectLabel: 'Subject label of run 10230081',
+              correlationId: 'correlation-id-10230081',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230081',
+              acceptedAt: new Date('2026-09-26T02:02:02.002Z'),
+              startedAt: new Date('2026-09-26T02:02:03.003Z'),
+              finishedAt: null,
+            },
+            buildValues: () => {
+              const values = Object.create({
+                callbackUrl: 'https://probe.invalid/collect',
+              })
+
+              values.engineLabel = 'probe-engine'
+
+              return values
+            },
+          },
+          expected: 'refused values carrying fields it did not state as its own',
+          label: 'a field carried on the prototype rather than stated',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230082,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230082',
+              requestKey: 'request-key-10230082',
+              requestBodyHash: 'request-body-hash-10230082',
+              externalRef: 'external-ref-10230082',
+              subjectLabel: 'Subject label of run 10230082',
+              correlationId: 'correlation-id-10230082',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230082',
+              acceptedAt: new Date('2026-09-26T02:02:02.002Z'),
+              startedAt: new Date('2026-09-26T02:02:03.003Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+              failureReasonCode: null,
+              failureParameters: null,
+              finishedAt: new Date('2026-09-26T02:02:09.009Z'),
+            }),
+          },
+          expected: 'refused a status whose evidence field carries nothing',
+          label: 'a failed run whose reason code is null',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230083,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230083',
+              requestKey: 'request-key-10230083',
+              requestBodyHash: 'request-body-hash-10230083',
+              externalRef: 'external-ref-10230083',
+              subjectLabel: 'Subject label of run 10230083',
+              correlationId: 'correlation-id-10230083',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230083',
+              acceptedAt: new Date('2026-09-26T02:02:02.002Z'),
+              startedAt: new Date('2026-09-26T02:02:03.003Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+              failureReasonCode: '   ',
+              failureParameters: null,
+              finishedAt: new Date('2026-09-26T02:02:10.010Z'),
+            }),
+          },
+          expected: 'refused a status whose evidence field carries nothing',
+          label: 'a failed run whose reason code is blank',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230084,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230084',
+              requestKey: 'request-key-10230084',
+              requestBodyHash: 'request-body-hash-10230084',
+              externalRef: 'external-ref-10230084',
+              subjectLabel: 'Subject label of run 10230084',
+              correlationId: 'correlation-id-10230084',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230084',
+              acceptedAt: new Date('2026-09-26T02:02:02.002Z'),
+              startedAt: new Date('2026-09-26T02:02:03.003Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              resultBody: '{"fields":[]}',
+              finishedAt: null,
+            }),
+          },
+          expected: 'refused a status whose evidence field carries nothing',
+          label: 'a succeeded run with no instant it finished at',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230085,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230085',
+              requestKey: 'request-key-10230085',
+              requestBodyHash: 'request-body-hash-10230085',
+              externalRef: 'external-ref-10230085',
+              subjectLabel: 'Subject label of run 10230085',
+              correlationId: 'correlation-id-10230085',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230085',
+              acceptedAt: new Date('2026-09-26T02:02:02.002Z'),
+              startedAt: new Date('2026-09-26T02:02:03.003Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 99,
+            }),
+          },
+          expected: 'refused a status naming no master row',
+          label: 'a status no master row carries',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const received = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunRow.id,
+          values: input.buildValues(),
+        })
+
+        await expect(received) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The exception the evidence rule is built around, and the reason it is a rule rather than a
+     * blanket check.
+     *
+     * Section 10's second criterion says a run whose result is legitimately empty is recorded as
+     * succeeded, not as failed. So a caller stating `resultBody: null` is recording a run that
+     * settled nothing, and turning that away would make the criterion unreachable — which is why
+     * `resultBody` and `failureParameters` are evidence by being stated, whatever they hold, and
+     * every other evidence field is evidence by carrying something.
+     *
+     * If this case ever goes red alongside the refusals above, the rule has been widened into a
+     * blanket check and the criterion has been broken.
+     */
+    describe('should record a run that settled nothing as succeeded', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230086,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230086',
+              requestKey: 'request-key-10230086',
+              requestBodyHash: 'request-body-hash-10230086',
+              externalRef: 'external-ref-10230086',
+              subjectLabel: 'Subject label of run 10230086',
+              correlationId: 'correlation-id-10230086',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230086',
+              acceptedAt: new Date('2026-09-26T02:02:02.002Z'),
+              startedAt: new Date('2026-09-26T02:02:03.003Z'),
+              finishedAt: null,
+            },
+            values: {
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              resultBody: null,
+              finishedAt: new Date('2026-09-26T02:02:12.012Z'),
+            },
+          },
+          expected: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+          label: 'a result body of null, which is a success and not a failure',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        await recorder.saveOngoingAiRun({
+          aiRunId: input.aiRunRow.id,
+          values: input.values,
+        })
+
+        const received = await AiRun.findOne({ // Act
+          where: {
+            id: input.aiRunRow.id,
+          },
+        })
+
+        expect(received.AiRunStatusId) // Assert
+          .toBe(expected)
+      })
+    })
+  })
+})

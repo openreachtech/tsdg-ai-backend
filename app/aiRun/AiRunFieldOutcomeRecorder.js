@@ -1,3 +1,4 @@
+import AI_RUN_EVIDENCE_CATEGORY_CONSTANT_HASH from '../constants/aiRunEvidenceCategoryConstants.js'
 import AI_RUN_FIELD_STATUS_CONSTANT_HASH from '../constants/aiRunFieldStatusConstants.js'
 
 import AiRunFieldOutcome from '../../sequelize/models/AiRunFieldOutcome.js'
@@ -7,10 +8,42 @@ const {
   AI_RUN_FIELD_STATUS,
 } = AI_RUN_FIELD_STATUS_CONSTANT_HASH
 
+const {
+  AI_RUN_EVIDENCE_CATEGORY,
+} = AI_RUN_EVIDENCE_CATEGORY_CONSTANT_HASH
+
 const DEFAULT_MISSING_AI_RUN_FIELD_STATUS_ID = AI_RUN_FIELD_STATUS.MISSING.ID
+
+/*
+ * The ids each master actually carries, read from the constants the seeders seed from.
+ *
+ * This table declares no database foreign key, by the rule that integrity is enforced in application
+ * code, so a field state or an evidence kind naming no master row is written unless something here
+ * turns it away. Reading the two masters would be two queries per field settled, on a table a run
+ * writes once per field; reading the constant hashes the seeders themselves are built from costs
+ * nothing and is exact, because a master row that is not in the hash was never seeded.
+ */
+const AI_RUN_FIELD_STATUS_IDS = Object.values(AI_RUN_FIELD_STATUS)
+  .map(it => it.ID)
+
+const AI_RUN_EVIDENCE_CATEGORY_IDS = Object.values(AI_RUN_EVIDENCE_CATEGORY)
+  .map(it => it.ID)
+
+/*
+ * A whole number of readings, written without a leading zero and without a sign.
+ *
+ * `0` on its own is a count; `007` and `+3` are not, for the same reason an id is not written with
+ * a leading zero — a value shaped that way came from somewhere that was not counting.
+ */
+const READING_COUNT_PATTERN = /^(?:0|[1-9]\d*)$/u
 
 const UNKNOWN_AI_RUN_STEP_MESSAGE = 'refused a step that does not exist'
 const FOREIGN_AI_RUN_STEP_MESSAGE = 'refused a step belonging to another run'
+const UNREADABLE_FIELD_STATUS_MESSAGE = 'refused a field state that is not an id'
+const UNKNOWN_FIELD_STATUS_MESSAGE = 'refused a field state naming no master row'
+const UNKNOWN_EVIDENCE_CATEGORY_MESSAGE = 'refused an evidence kind naming no master row'
+const UNREADABLE_READING_COUNT_MESSAGE = 'refused a reading count that is not a whole number'
+const IMPOSSIBLE_READING_COUNT_MESSAGE = 'refused more readings agreeing than there were readings'
 
 /*
  * A dotted path into the schema, and nothing that is not one.
@@ -291,6 +324,38 @@ export default class AiRunFieldOutcomeRecorder {
       throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${FOREIGN_AI_RUN_STEP_MESSAGE}: AiRunId ${aiRunId}, AiRunStepId ${aiRunStepId}, AiRunId of the step ${aiRunStep.AiRunId}`)
     }
 
+    const comparableAiRunFieldStatusId = this.generateComparableAiRunFieldStatusId({
+      aiRunFieldStatusId,
+    })
+
+    if (comparableAiRunFieldStatusId === null) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_FIELD_STATUS_MESSAGE}: AiRunId ${aiRunId}, AiRunFieldStatusId ${aiRunFieldStatusId}`)
+    }
+
+    if (!AI_RUN_FIELD_STATUS_IDS.includes(comparableAiRunFieldStatusId)) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNKNOWN_FIELD_STATUS_MESSAGE}: AiRunId ${aiRunId}, AiRunFieldStatusId ${comparableAiRunFieldStatusId}`)
+    }
+
+    const comparableAgreedReadingCount = this.generateComparableReadingCount({
+      readingCount: agreedReadingCount,
+    })
+
+    const comparableTotalReadingCount = this.generateComparableReadingCount({
+      readingCount: totalReadingCount,
+    })
+
+    if (comparableAgreedReadingCount === null) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, agreedReadingCount ${agreedReadingCount}`)
+    }
+
+    if (comparableTotalReadingCount === null) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, totalReadingCount ${totalReadingCount}`)
+    }
+
+    if (comparableAgreedReadingCount > comparableTotalReadingCount) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${IMPOSSIBLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, ${comparableAgreedReadingCount} of ${comparableTotalReadingCount}`)
+    }
+
     const settledFieldPath = this.generateSettledFieldPath({
       fieldPath,
     })
@@ -305,6 +370,13 @@ export default class AiRunFieldOutcomeRecorder {
       suggestionConfidence,
     })
 
+    if (
+      settledEvidenceCategoryId !== null
+      && !AI_RUN_EVIDENCE_CATEGORY_IDS.includes(settledEvidenceCategoryId)
+    ) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNKNOWN_EVIDENCE_CATEGORY_MESSAGE}: AiRunId ${aiRunId}, AiRunEvidenceCategoryId ${settledEvidenceCategoryId}`)
+    }
+
     const settledConfidenceMethodVersion = this.generateSettledConfidenceMethodVersion({
       confidenceMethodVersion,
     })
@@ -314,11 +386,11 @@ export default class AiRunFieldOutcomeRecorder {
         AiRunId: aiRunId,
         AiRunStepId: aiRunStepId,
         fieldPath: settledFieldPath,
-        AiRunFieldStatusId: aiRunFieldStatusId,
+        AiRunFieldStatusId: comparableAiRunFieldStatusId,
         AiRunEvidenceCategoryId: settledEvidenceCategoryId,
         suggestionConfidence: settledSuggestionConfidence,
-        agreedReadingCount,
-        totalReadingCount,
+        agreedReadingCount: comparableAgreedReadingCount,
+        totalReadingCount: comparableTotalReadingCount,
         confidenceMethodVersion: settledConfidenceMethodVersion,
         settledAt,
       })
@@ -609,6 +681,50 @@ export default class AiRunFieldOutcomeRecorder {
    *   aiRunFieldStatusId: *
    * }} params - Parameters.
    * @returns {number | null} The id as a number, or null when the value names no state.
+   */
+  /**
+   * Generate a reading count that can be compared and recorded, out of what the caller handed in.
+   *
+   * A count is a whole number of readings, so it answers the number for an integer or an
+   * integer-shaped string and null for anything else — a decimal, a sign, text, or a value of
+   * another kind. Zero is a count; a negative one is not, because there is no way to agree fewer
+   * than no times.
+   *
+   * It exists because the columns are `INTEGER` and would coerce quietly: a security audit stored a
+   * person's name and telephone number in `agreed_reading_count` and the row was written, while the
+   * class documentation said in as many words that none of these columns holds a value read out of
+   * a medium. A guarantee nothing enforces is the defect this class was already corrected for once.
+   *
+   * @param {{
+   *   readingCount: *
+   * }} params - Parameters.
+   * @returns {number | null} The count, or null when the value names none.
+   */
+  generateComparableReadingCount ({
+    readingCount,
+  }) {
+    if (Number.isInteger(readingCount)) {
+      return readingCount >= 0
+        ? readingCount
+        : null
+    }
+
+    if (typeof readingCount !== 'string') {
+      return null
+    }
+
+    return READING_COUNT_PATTERN.test(readingCount)
+      ? Number(readingCount)
+      : null
+  }
+
+  /**
+   * Generate a field-state id that can be compared, out of what the caller handed in.
+   *
+   * @param {{
+   *   aiRunFieldStatusId: *
+   * }} params - Parameters.
+   * @returns {number | null} The id, or null when the value names no state.
    */
   generateComparableAiRunFieldStatusId ({
     aiRunFieldStatusId,
