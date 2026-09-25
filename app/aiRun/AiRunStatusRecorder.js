@@ -15,7 +15,7 @@ const ABSENT_FAILURE_REASON_CODE_MESSAGE = 'refused a failed run carrying no rea
 const REFUSED_AI_RUN_FIELD_MESSAGE = 'refused a field no transition of this class writes'
 const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evidence for'
 const INHERITED_AI_RUN_FIELD_MESSAGE = 'refused values carrying fields it did not state as its own'
-const UNREADABLE_AI_RUN_VALUES_MESSAGE = 'refused values this method cannot read as an object at all'
+const UNREADABLE_AI_RUN_VALUES_MESSAGE = 'refused values that are not a plain object'
 const UNKNOWN_AI_RUN_STATUS_MESSAGE = 'refused a status naming no master row'
 const EMPTY_AI_RUN_EVIDENCE_MESSAGE = 'refused a status whose evidence field carries nothing'
 const UNRECORDABLE_AI_RUN_INSTANT_MESSAGE = 'refused an instant field carrying something that is not an instant'
@@ -536,19 +536,23 @@ export default class AiRunStatusRecorder {
   }
 
   /**
-   * Check whether the values handed in are something this method can read at all.
+   * Check whether the values handed in are a plain object at all.
    *
-   * `null`, a string, a number, and the argument left unstated. None of them carries a field, so
-   * none of them is the defect the refusal below describes — and for one commit all four reported
-   * it anyway, which is the same misstatement this class was corrected for twice already. They are
-   * also what `Object.getPrototypeOf()` faults on, so asking first is what lets both refusals name
-   * themselves instead of one of them arriving as a bare `TypeError` naming neither the defect nor
-   * the run.
+   * `null`, the argument left unstated, a string, a number, a boolean, a function. None of them
+   * carries a field, so none of them is the defect the refusal below describes — and for one commit
+   * all of them reported it anyway, which is the same misstatement this class was corrected for
+   * twice already.
+   *
+   * **Only `null` and the unstated argument would have faulted**, which an earlier wording here
+   * overstated: `Object.getPrototypeOf()` has coerced primitives since ES2015, so a string answers
+   * `String.prototype` rather than throwing. The two that do throw are reason enough to ask first,
+   * and the rest are here because the answer is the same for all of them — this is not an object
+   * whose fields can be read.
    *
    * @param {{
    *   values: *
    * }} params - Parameters.
-   * @returns {boolean} Whether the values can be read as an object.
+   * @returns {boolean} Whether the values are a plain object.
    * @public
    */
   isReadableAiRunValues ({
@@ -564,10 +568,14 @@ export default class AiRunStatusRecorder {
   /**
    * Check whether the values handed in state every field they carry as their own.
    *
-   * A plain object, and nothing else. What it turns away is state this class cannot see: a
-   * prototype, because Sequelize's own setter walks the chain while the allow-list is read from own
-   * keys, and the two disagreeing about what a field is was how a run's callback URL once reached
-   * the column.
+   * What it turns away is state this class cannot see: a prototype carrying fields, because
+   * Sequelize's own setter walks the chain while the allow-list is read from own keys, and the two
+   * disagreeing about what a field is was how a run's callback URL once reached the column.
+   *
+   * **A null prototype passes, and for one commit it did not.** `Object.create(null)` has no chain
+   * at all, so every field it carries is its own — it is the one shape that cannot hold the hazard,
+   * and refusing it under a message saying it carried inherited fields stated the exact opposite of
+   * what was true.
    *
    * @param {{
    *   values: object
@@ -578,7 +586,13 @@ export default class AiRunStatusRecorder {
   isRecordableAiRunValues ({
     values,
   }) {
-    return Object.getPrototypeOf(values) === Object.prototype
+    const prototype = Object.getPrototypeOf(values)
+
+    if (prototype === null) {
+      return true
+    }
+
+    return prototype === Object.prototype
   }
 
   /**

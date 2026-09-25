@@ -226,6 +226,22 @@ describe('AiRunInstantInspector', () => {
           },
           label: 'a real Date behind a proxy, which has no internal slot to read',
         },
+        {
+          params: {
+            instant: Proxy.revocable(new Date('2026-09-25T11:22:33.444Z'), {}).proxy,
+          },
+          label: 'a proxy whose target was revoked, where the prototype test itself throws',
+        },
+        {
+          params: {
+            instant: new Proxy({}, {
+              getPrototypeOf () {
+                throw new Error('trap')
+              },
+            }),
+          },
+          label: 'a proxy whose prototype trap throws, which is the same line one case earlier',
+        },
       ]
 
       test.each(cases)('label: $label', ({

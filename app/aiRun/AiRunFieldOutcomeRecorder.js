@@ -58,6 +58,8 @@ const UNKNOWN_FIELD_STATUS_MESSAGE = 'refused a field state naming no master row
 const UNKNOWN_EVIDENCE_CATEGORY_MESSAGE = 'refused an evidence kind naming no master row'
 const ABSENT_SETTLED_RECORD_MESSAGE = 'refused a settled field carrying none of what settling it records'
 const UNREADABLE_READING_COUNT_MESSAGE = 'refused a reading count that is not a whole number'
+const MISSPELLED_READING_COUNT_MESSAGE = 'refused a reading count written in a shape no count is written in'
+const UNRECORDABLE_SCORE_MESSAGE = 'refused a score the column cannot record'
 const OUT_OF_RANGE_READING_COUNT_MESSAGE = 'refused a reading count outside the range a count can hold'
 const IMPOSSIBLE_READING_COUNT_MESSAGE = 'refused more readings agreeing than there were readings'
 
@@ -161,9 +163,19 @@ const AI_RUN_ID_PATTERN = /^[1-9]\d*$/u
  * and read as though it were the real one — and stripping is a guess, which is the one thing this
  * class does not make. Both text columns are `NOT NULL`, so answering null refuses the whole row,
  * the way an omitted step does and the way `AiRunStepRecorder` refuses a step whose category it
- * could not derive. The score is the one exception: `suggestion_confidence` is nullable and already
- * means "no score", so a value that is not a score records as no score rather than costing the
- * trace an otherwise sound row.
+ * could not derive. **The score is refused the same way, and used not to be.** It is nullable, and
+ * for four rounds that was read as licence to write the no-score marker whenever what arrived was
+ * not a score — until section 10 was read on the point: the column is NULL **when nothing was
+ * settled**, so writing that marker against a field that settled made a dropped score
+ * indistinguishable from a field nothing scored, on the one row an operator reads to ask why a
+ * field returned no value. A settled field whose score the column cannot take costs the row now.
+ *
+ * **A refusal names the field, never the value — except where the value is an identity.** The
+ * whole purpose of these shapes is keeping something read out of a medium off a row kept for two
+ * years, and a message that then reproduces it in full has moved it into a log instead, where no
+ * purge clock is stated at all. So `field AiRunFieldStatusId` rather than the text that arrived in
+ * it. `AiRunId` and `AiRunStepId` stay written out, because they are not values under judgement —
+ * they are how an operator finds the row the message is about.
  *
  * **No field outcome exists outside a step.** `AiRunStepId` is `NOT NULL`, because a field's
  * agreement counts live on this row while the reason code for how it was settled lives on the
@@ -358,7 +370,7 @@ export default class AiRunFieldOutcomeRecorder {
     })
 
     if (comparableAiRunFieldStatusId === null) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_FIELD_STATUS_MESSAGE}: AiRunId ${aiRunId}, AiRunFieldStatusId ${aiRunFieldStatusId}`)
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_FIELD_STATUS_MESSAGE}: AiRunId ${aiRunId}, field AiRunFieldStatusId`)
     }
 
     if (!AI_RUN_FIELD_STATUS_IDS.includes(comparableAiRunFieldStatusId)) {
@@ -373,22 +385,20 @@ export default class AiRunFieldOutcomeRecorder {
       readingCount: totalReadingCount,
     })
 
-    const unreadableReadingCountFieldName = this.extractUnreadableReadingCountFieldName({
-      comparableAgreedReadingCount,
-      comparableTotalReadingCount,
+    const refusedAgreedReadingCountMessage = this.extractRefusedReadingCountMessage({
+      readingCount: agreedReadingCount,
     })
 
-    if (unreadableReadingCountFieldName) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, field ${unreadableReadingCountFieldName}`)
+    if (refusedAgreedReadingCountMessage) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${refusedAgreedReadingCountMessage}: AiRunId ${aiRunId}, field agreedReadingCount`)
     }
 
-    const outOfRangeReadingCountFieldName = this.extractOutOfRangeReadingCountFieldName({
-      comparableAgreedReadingCount,
-      comparableTotalReadingCount,
+    const refusedTotalReadingCountMessage = this.extractRefusedReadingCountMessage({
+      readingCount: totalReadingCount,
     })
 
-    if (outOfRangeReadingCountFieldName) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${OUT_OF_RANGE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, field ${outOfRangeReadingCountFieldName}`)
+    if (refusedTotalReadingCountMessage) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${refusedTotalReadingCountMessage}: AiRunId ${aiRunId}, field totalReadingCount`)
     }
 
     if (comparableAgreedReadingCount > comparableTotalReadingCount) {
@@ -420,10 +430,20 @@ export default class AiRunFieldOutcomeRecorder {
     }
 
     if (
-      settledEvidenceCategoryId !== null
-      && !AI_RUN_EVIDENCE_CATEGORY_IDS.includes(settledEvidenceCategoryId)
+      this.carriesUnrecordableScore({
+        aiRunFieldStatusId,
+        settledSuggestionConfidence,
+      })
     ) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNKNOWN_EVIDENCE_CATEGORY_MESSAGE}: AiRunId ${aiRunId}, AiRunEvidenceCategoryId ${settledEvidenceCategoryId}`)
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNRECORDABLE_SCORE_MESSAGE}: AiRunId ${aiRunId}, field suggestionConfidence`)
+    }
+
+    if (
+      this.carriesUnknownEvidenceKind({
+        settledEvidenceCategoryId,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNKNOWN_EVIDENCE_CATEGORY_MESSAGE}: AiRunId ${aiRunId}, field AiRunEvidenceCategoryId`)
     }
 
     const settledConfidenceMethodVersion = this.generateSettledConfidenceMethodVersion({
@@ -614,15 +634,73 @@ export default class AiRunFieldOutcomeRecorder {
       return 'AiRunEvidenceCategoryId'
     }
 
-    if (
-      !this.isRecordableScore({
-        suggestionConfidence: settledSuggestionConfidence,
-      })
-    ) {
+    if (settledSuggestionConfidence === null) {
       return 'suggestionConfidence'
     }
 
-    return null
+    return typeof settledSuggestionConfidence === 'undefined'
+      ? 'suggestionConfidence'
+      : null
+  }
+
+  /**
+   * Check whether an evidence kind names no row of the master.
+   *
+   * A null passes, and means the field settled nothing — by the time this is asked, a settled field
+   * with no evidence kind has already been refused above.
+   *
+   * @param {{
+   *   settledEvidenceCategoryId: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the evidence kind names no master row.
+   * @public
+   */
+  carriesUnknownEvidenceKind ({
+    settledEvidenceCategoryId,
+  }) {
+    if (settledEvidenceCategoryId === null) {
+      return false
+    }
+
+    return !AI_RUN_EVIDENCE_CATEGORY_IDS.includes(settledEvidenceCategoryId)
+  }
+
+  /**
+   * Check whether a settled field carries a score the column cannot record.
+   *
+   * Absence is the question above, and it is a different question with a different answer. A score
+   * that is **there** and is not one the column can take — text, a value outside the closed range,
+   * or a number JavaScript renders in exponent form, which `DECIMAL(5, 4)` has no room for below
+   * its fourth place — is a caller defect rather than the section 10 marker collision, and saying so
+   * is the whole of the difference. For one commit both answered the same message, which told a
+   * caller that had stated a score that it had carried none of what settling a field records.
+   *
+   * It still costs the row. The alternative is what this class did for four rounds: quietly write
+   * the no-score marker, which is the collision, and hand the caller a settled field that reads as
+   * having been scored by nothing.
+   *
+   * @param {{
+   *   aiRunFieldStatusId: *
+   *   settledSuggestionConfidence: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether a settled field's score cannot be recorded.
+   * @public
+   */
+  carriesUnrecordableScore ({
+    aiRunFieldStatusId,
+    settledSuggestionConfidence,
+  }) {
+    if (
+      !this.settlesField({
+        aiRunFieldStatusId,
+      })
+    ) {
+      return false
+    }
+
+    return !this.isRecordableScore({
+      suggestionConfidence: settledSuggestionConfidence,
+    })
   }
 
   /**
@@ -680,9 +758,13 @@ export default class AiRunFieldOutcomeRecorder {
    *
    * The score of a field that settled nothing is not a low score, it is no score, and the column
    * says so with null. A settled field records the score exactly as the scorer computed it, in
-   * whichever of the two renderings a `DECIMAL(5, 4)` reached here as — but only where what arrived
-   * is a score at all. A value outside the closed range, or text that is no number, is likewise no
-   * score: the column is nullable and already carries that meaning, so the rest of the row stands.
+   * whichever of the two renderings a `DECIMAL(5, 4)` reached here as — **untouched, and unjudged.**
+   *
+   * This method used to judge it too, and answer null for a value that was no score. That was the
+   * defect rather than the guard: the null it wrote is section 10's marker for a field that settled
+   * nothing, so a dropped score read back as one that never existed and the caller was told
+   * neither. Whether a score can be recorded is asked by `#carriesUnrecordableScore()`, above the
+   * write, where it refuses the row instead of quietly rewriting it.
    *
    * @param {{
    *   aiRunFieldStatusId: *
@@ -834,64 +916,69 @@ export default class AiRunFieldOutcomeRecorder {
   }
 
   /**
-   * Extract the name of the first reading count that is not a whole number at all.
+   * Extract the message naming why a reading count cannot be recorded, out of what arrived.
+   *
+   * Three defects, three messages, because for four rounds this class reported them as one and an
+   * operator was sent to the wrong place each time. `'Jane Doe'` is no number at all; `'007'`,
+   * `'+3'`, `'3.0'` and `' 3'` are whole numbers written in shapes a count is not written in — the
+   * constant above says exactly why, that a value shaped that way came from somewhere that was not
+   * counting — and `2147483648` is a properly written whole number the column cannot hold. Telling
+   * all three that they are not whole numbers is false of the last two.
+   *
+   * The two string defects are told apart by whether the text names a number at all, not by the
+   * pattern, which rejects both alike.
    *
    * @param {{
-   *   comparableAgreedReadingCount: number | null
-   *   comparableTotalReadingCount: number | null
+   *   readingCount: *
    * }} params - Parameters.
-   * @returns {string | null} The field name, or null when both are whole numbers.
+   * @returns {string | null} The message, or null when the count is recordable.
    * @public
    */
-  extractUnreadableReadingCountFieldName ({
-    comparableAgreedReadingCount,
-    comparableTotalReadingCount,
+  extractRefusedReadingCountMessage ({
+    readingCount,
   }) {
-    if (comparableAgreedReadingCount === null) {
-      return 'agreedReadingCount'
+    if (typeof readingCount === 'number') {
+      return this.extractRefusedReadingNumberMessage({
+        readingCount,
+      })
     }
 
-    if (comparableTotalReadingCount === null) {
-      return 'totalReadingCount'
+    if (typeof readingCount !== 'string') {
+      return UNREADABLE_READING_COUNT_MESSAGE
     }
 
-    return null
+    if (!READING_COUNT_PATTERN.test(readingCount)) {
+      return Number.isNaN(Number(readingCount))
+        ? UNREADABLE_READING_COUNT_MESSAGE
+        : MISSPELLED_READING_COUNT_MESSAGE
+    }
+
+    return this.extractRefusedReadingNumberMessage({
+      readingCount: Number(readingCount),
+    })
   }
 
   /**
-   * Extract the name of the first reading count that is a whole number no count could be.
-   *
-   * Kept apart from the question of whether the value was a whole number at all, because they are
-   * two defects and one message for both told an operator its `2147483648` was not an integer.
+   * Extract the message naming why a number is no reading count.
    *
    * @param {{
-   *   comparableAgreedReadingCount: number
-   *   comparableTotalReadingCount: number
+   *   readingCount: number
    * }} params - Parameters.
-   * @returns {string | null} The field name, or null when both are in range.
+   * @returns {string | null} The message, or null when the number is a recordable count.
    * @public
    */
-  extractOutOfRangeReadingCountFieldName ({
-    comparableAgreedReadingCount,
-    comparableTotalReadingCount,
+  extractRefusedReadingNumberMessage ({
+    readingCount,
   }) {
-    if (
-      !this.fallsWithinRecordableReadingRange({
-        readingCount: comparableAgreedReadingCount,
-      })
-    ) {
-      return 'agreedReadingCount'
+    if (!Number.isInteger(readingCount)) {
+      return UNREADABLE_READING_COUNT_MESSAGE
     }
 
-    if (
-      !this.fallsWithinRecordableReadingRange({
-        readingCount: comparableTotalReadingCount,
-      })
-    ) {
-      return 'totalReadingCount'
-    }
-
-    return null
+    return this.fallsWithinRecordableReadingRange({
+      readingCount,
+    })
+      ? null
+      : OUT_OF_RANGE_READING_COUNT_MESSAGE
   }
 
   /**

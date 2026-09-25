@@ -2499,7 +2499,7 @@ describe('AiRunStatusRecorder', () => {
             },
             values: null,
           },
-          expected: 'refused values this method cannot read as an object at all',
+          expected: 'refused values that are not a plain object',
           label: 'values of null',
         },
         {
@@ -2522,7 +2522,7 @@ describe('AiRunStatusRecorder', () => {
             },
             values: 'AiRunStatusId=3',
           },
-          expected: 'refused values this method cannot read as an object at all',
+          expected: 'refused values that are not a plain object',
           label: 'values written as a string',
         },
         {
@@ -2545,7 +2545,7 @@ describe('AiRunStatusRecorder', () => {
             },
             values: 42,
           },
-          expected: 'refused values this method cannot read as an object at all',
+          expected: 'refused values that are not a plain object',
           label: 'values written as a number',
         },
       ]
@@ -2602,7 +2602,7 @@ describe('AiRunStatusRecorder', () => {
               finishedAt: null,
             },
           },
-          expected: 'refused values this method cannot read as an object at all',
+          expected: 'refused values that are not a plain object',
           label: 'the values argument omitted altogether',
         },
       ]
@@ -2623,6 +2623,74 @@ describe('AiRunStatusRecorder', () => {
         await expect(actual) // Assert
           .rejects
           .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The one shape that cannot carry the hazard the refusal beside it describes.
+     *
+     * An object created with no prototype has no chain at all, so every field it carries is its own
+     * - which is precisely the property the allow-list needs, and the one thing a walked prototype
+     * chain cannot subvert. For one commit it was refused under a message saying it carried fields
+     * it had not stated as its own, which is the opposite of what is true of it.
+     */
+    describe('should record values on an object with no prototype', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230101,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230101',
+              requestKey: 'request-key-10230101',
+              requestBodyHash: 'request-body-hash-10230101',
+              externalRef: 'external-ref-10230101',
+              subjectLabel: 'Subject label of run 10230101',
+              correlationId: 'correlation-id-10230101',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230101',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+          },
+          expected: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+          label: 'a succeeded run stated on a null-prototype object',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const values = Object.create(null)
+
+        values.AiRunStatusId = 3 // AI_RUN_STATUS.SUCCEEDED.ID
+        values.resultBody = null
+        values.finishedAt = new Date('2026-09-26T03:03:20.020Z')
+
+        await recorder.saveOngoingAiRun({
+          aiRunId: input.aiRunRow.id,
+          values,
+        })
+
+        const received = await AiRun.findOne({ // Act
+          where: {
+            id: input.aiRunRow.id,
+          },
+        })
+
+        expect(received.AiRunStatusId) // Assert
+          .toBe(expected)
       })
     })
   })

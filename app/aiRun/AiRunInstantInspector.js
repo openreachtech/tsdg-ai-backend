@@ -86,10 +86,6 @@ export default class AiRunInstantInspector {
   isRecordableInstant ({
     instant,
   }) {
-    if (!(instant instanceof Date)) {
-      return false
-    }
-
     if (
       !this.carriesReadableTime({
         instant,
@@ -112,6 +108,11 @@ export default class AiRunInstantInspector {
    * `getTime()`, including through `Date.prototype.getTime.call()`, so there is no way to ask
    * except by asking.
    *
+   * **`instanceof` is asked inside the same `try`, because it throws too.** A revoked proxy, or one
+   * whose `getPrototypeOf` trap throws, faults on the test itself — so leaving it outside would
+   * have left the method faulting one line above the line that stopped it faulting, which is how
+   * the first version of this guard was written.
+   *
    * **Nothing is logged here, and that is deliberate rather than an omission.** The failure is not
    * swallowed: the caller refuses the write and names the field it refused, which is strictly more
    * than a log line from inside a predicate would say. What this method must not do is what it did
@@ -128,6 +129,10 @@ export default class AiRunInstantInspector {
     instant,
   }) {
     try {
+      if (!(instant instanceof Date)) {
+        return false
+      }
+
       return !Number.isNaN(instant.getTime())
     } catch (error) {
       return false

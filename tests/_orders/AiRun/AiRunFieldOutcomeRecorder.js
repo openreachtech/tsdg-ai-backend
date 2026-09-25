@@ -461,7 +461,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
      * scored nothing, in the very row this comment calls the one that must never contradict itself.
      * It is refused now, and lives in the settled-field describe below.
      */
-    describe('when a value read out of a medium reaches a nullable column', () => {
+    describe('when the field state arrives as text', () => {
       const cases = [
         {
           input: {
@@ -1167,6 +1167,209 @@ describe('AiRunFieldOutcomeRecorder', () => {
 
         expect(received) // Assert
           .toEqual(expect.objectContaining(expected))
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * Three defects that were reported as one for four rounds, now told apart.
+     *
+     * An operator reading `refused a reading count that is not a whole number` about `2147483648`
+     * goes looking for the place a number stopped being a number, and there is no such place - the
+     * value is a whole number the column cannot hold. `007` is a whole number too, written the way
+     * something that was not counting writes one. Only the first two cases here are values that are
+     * not whole numbers at all.
+     *
+     * The score is the same split, one guard over: absent is section 10's marker colliding with a
+     * settled field, and present-but-unrecordable is a caller defect. Both cost the row; they do not
+     * cost it for the same reason, and for one commit they said they did.
+     */
+    describe('should name the defect that actually happened', () => {
+      const cases = [
+        {
+          input: {
+            fieldPath: 'probe.message.prose',
+            agreedReadingCount: 'sample person 090-0000-0000',
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'a count naming no number at all',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.fraction',
+            agreedReadingCount: 2.5,
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'a count that is a number but not a whole one',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.leading-zero',
+            agreedReadingCount: '007',
+          },
+          expected: 'refused a reading count written in a shape no count is written in',
+          label: 'a whole number written with a leading zero',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.signed',
+            agreedReadingCount: '+3',
+          },
+          expected: 'refused a reading count written in a shape no count is written in',
+          label: 'a whole number written with a sign',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.padded',
+            agreedReadingCount: ' 3',
+          },
+          expected: 'refused a reading count written in a shape no count is written in',
+          label: 'a whole number written with a leading space',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.decimal-point',
+            agreedReadingCount: '3.0',
+          },
+          expected: 'refused a reading count written in a shape no count is written in',
+          label: 'a whole number written with a decimal point',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.too-large',
+            agreedReadingCount: 2147483648,
+            totalReadingCount: 2147483648,
+          },
+          expected: 'refused a reading count outside the range a count can hold',
+          label: 'a whole number above what the column holds',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.score-absent',
+            suggestionConfidence: null,
+          },
+          expected: 'refused a settled field carrying none of what settling it records',
+          label: 'a settled field whose score is absent',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.score-text',
+            suggestionConfidence: 'read from the medium: the owner is a sample person',
+          },
+          expected: 'refused a score the column cannot record',
+          label: 'a settled field whose score is stated and is no score',
+        },
+        {
+          input: {
+            fieldPath: 'probe.message.score-exponent',
+            suggestionConfidence: '1e-7',
+          },
+          expected: 'refused a score the column cannot record',
+          label: 'a settled field whose score is finer than the column records',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const actual = () => recorder.saveAiRunFieldOutcome({ // Act
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID - a state that settles
+          aiRunEvidenceCategoryId: 1,
+          suggestionConfidence: 0.95,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:14.014Z'),
+          ...input,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The refusal names the field and stops there, and this is what says so.
+     *
+     * Every other case asserts a substring, which a message that went on to reproduce the rejected
+     * value would still satisfy - so none of them would notice the guard arguing against itself.
+     * These anchor the end of the message instead. The whole purpose of these shapes is keeping
+     * something read out of a medium off a row kept for two years, and a message carrying it in
+     * full has moved it into a log where no purge clock is stated at all.
+     *
+     * The values below are invented for the probe and name nobody.
+     */
+    describe('should stop at the field name, carrying no rejected value', () => {
+      const cases = [
+        {
+          input: {
+            fieldPath: 'probe.quiet.state',
+            aiRunFieldStatusId: 'read from the medium: the owner is a sample person',
+          },
+          expected: /refused a field state that is not an id: AiRunId \d+, field AiRunFieldStatusId$/u,
+          label: 'a field state carrying what was read out of the medium',
+        },
+        {
+          input: {
+            fieldPath: 'probe.quiet.evidence',
+            aiRunEvidenceCategoryId: 'read from the medium: 12 Sample Street',
+          },
+          expected: /refused an evidence kind naming no master row: AiRunId \d+, field AiRunEvidenceCategoryId$/u,
+          label: 'an evidence kind carrying what was read out of the medium',
+        },
+        {
+          input: {
+            fieldPath: 'probe.quiet.instant',
+            settledAt: 'read from the medium: 090-0000-0000',
+          },
+          expected: /refused a settled instant that is not an instant: AiRunId \d+, field settledAt$/u,
+          label: 'a settled instant carrying what was read out of the medium',
+        },
+        {
+          input: {
+            fieldPath: 'probe.quiet.count',
+            agreedReadingCount: 'read from the medium: the owner is a sample person',
+          },
+          expected: /refused a reading count that is not a whole number: AiRunId \d+, field agreedReadingCount$/u,
+          label: 'a reading count carrying what was read out of the medium',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const actual = () => recorder.saveAiRunFieldOutcome({ // Act
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+          aiRunEvidenceCategoryId: 1,
+          suggestionConfidence: 0.95,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:15.015Z'),
+          ...input,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
       })
     })
   })
