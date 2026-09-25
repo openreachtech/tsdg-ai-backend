@@ -1,8 +1,21 @@
+import {
+  Op,
+} from 'sequelize'
+
+import {
+  MentsuLogger,
+} from '@openreachtech/mentsu-logger'
+
 import AiRunInstantInspector from './AiRunInstantInspector.js'
 import AiRunKeyInspector from './AiRunKeyInspector.js'
 import AiRunTerminalStatusInspector from './AiRunTerminalStatusInspector.js'
 
 import AI_RUN_STATUS_CONSTANT_HASH from '../constants/aiRunStatusConstants.js'
+
+import {
+  env,
+  rootPath,
+} from '../globals/_.js'
 
 import AiRun from '../../sequelize/models/AiRun.js'
 
@@ -12,6 +25,7 @@ const {
 
 const UNKNOWN_AI_RUN_MESSAGE = 'refused a run that does not exist'
 const SETTLED_AI_RUN_MESSAGE = 'refused a run already settled, which a run never leaves'
+const OUTRACED_AI_RUN_MESSAGE = 'refused a run that had settled or gone by the time the write reached it'
 const ABSENT_FAILURE_REASON_CODE_MESSAGE = 'refused a failed run carrying no reason code'
 const REFUSED_AI_RUN_FIELD_MESSAGE = 'refused a field no transition of this class writes'
 const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evidence for'
@@ -33,6 +47,51 @@ const AI_RUN_FIELD_NAME_PATTERN = /^(?=.{1,64}$)[A-Za-z_][A-Za-z0-9_]*$/u
 const UNKNOWN_AI_RUN_STATUS_MESSAGE = 'refused a status naming no master row'
 const EMPTY_AI_RUN_EVIDENCE_MESSAGE = 'refused a status whose evidence field carries nothing'
 const UNRECORDABLE_AI_RUN_INSTANT_MESSAGE = 'refused an instant field carrying something that is not an instant'
+
+/*
+ * The three refusals that say there is nothing left for a writer to do, whichever of them it was.
+ *
+ * They are one answer under three causes. The run had settled before the guard read it; it settled
+ * between the read and the write; or there is no row at all. In every one of them the write this
+ * writer asked for cannot be made now and cannot be made later either, which is what the boolean
+ * spelling of a transition answers false for — see `#saveAiRunOnce()`.
+ *
+ * The third is here for a defect nobody in this application can close. A transaction whose COMMIT
+ * fails still fires its `afterCommit` hooks, because Sequelize 6.37.8 runs them from a `finally`
+ * after its `catch` has decided to re-throw — so a run whose commit failed still has its job
+ * enqueued, and the worker that picks that job up finds no row. Nothing at the hook can tell that
+ * case apart, so the agreed mitigation is the worker doing nothing about it, which it can only do
+ * if this class answers rather than refuses. See Q86.
+ *
+ * Every other refusal this class raises is a defect in the call — an absent reason code, an id
+ * that is no id, a status naming no master row, a value that is no instant — and a second delivery
+ * of the same call would carry exactly the same defect. Those are raised, as they always were.
+ */
+const UNWRITABLE_AI_RUN_MESSAGES = [
+  UNKNOWN_AI_RUN_MESSAGE,
+  SETTLED_AI_RUN_MESSAGE,
+  OUTRACED_AI_RUN_MESSAGE,
+]
+
+const UNWRITABLE_AI_RUN_REFUSAL_TAGS = [
+  'AiRunTransition',
+  'UnwritableAiRun',
+]
+
+const LOG_FILE_PATH = rootPath.to('logs/ai-run-transition-')
+
+/*
+ * One logger client per process, rather than one per refusal.
+ *
+ * The client owns a rotating file, and a queue redelivering a stalled job redelivers many at once —
+ * which is exactly when this line is written. `@openreachtech/mentsu-logger` writes only under
+ * `NODE_ENV=production`, so under the test and development environments this client is built and
+ * then never asked to write.
+ */
+const mentsuLogger = MentsuLogger.create({
+  filePath: LOG_FILE_PATH,
+  env,
+})
 
 /*
  * The ids the status master actually carries, read from the constants the seeder seeds from.
@@ -198,13 +257,58 @@ const AI_RUN_STATUS_EVIDENCE_FIELD_NAMES_HASH = {
  * could not be derived is never substituted here either — nothing is defaulted to "now" to fill a
  * column whose instant the caller did not have.
  *
- * **The guard reads the run and then writes it, which is two statements and not one.** A
- * cancellation taking effect at the same instant a worker records success could pass the guard on
- * the stale status it read. Closing that window means a conditional write — the terminal statuses
- * in the `WHERE` — and an affected-row count to interpret, neither of which this feature has a
- * caller for yet: nothing dispatches a run and nothing cancels one until `#run-execution` and
- * `#run-cancel`. Whichever of them introduces the second concurrent writer is where the window has
- * to be closed.
+ * **The guard reads the run and then writes it, which is two statements and not one — so the write
+ * carries the rule as well.** A cancellation taking effect at the same instant a worker records
+ * success could pass the guard on the stale status it read. `#run-record` left that window open and
+ * named the feature that would have to close it: whichever of `#run-execution` and `#run-cancel`
+ * first put two writers on one run. `#run-execution` is that feature — the queue delivers
+ * at-least-once, so a worker whose job stalls has it re-queued and a second worker picks up a run
+ * the first is still finishing. The terminal statuses are therefore in the `WHERE` of the
+ * transition write itself, and the row decides: one affected row means this writer moved the run,
+ * none means the run had settled or gone between the read and the write.
+ * `#saveAiRunTransition()` is where that count is interpreted, and
+ * `#buildUnsettledAiRunCondition()` is where the condition is stated, read from
+ * `AiRunTerminalStatusInspector` so that the `WHERE` and the guard can never come to disagree about
+ * which statuses are terminal.
+ *
+ * **A writer with nothing left to do is answered rather than refused, which is the second spelling
+ * of the same three transitions.** `#run-execution` puts a queue in front of this class, and the
+ * queue delivers at-least-once: a job whose worker stalled is re-delivered, so one delivery can
+ * arrive at a run another delivery finished minutes ago, and two deliveries can be finishing the
+ * same run at once. For that caller a refusal is the wrong shape — every duplicate delivery would
+ * be marked failed and retried for as long as the queue keeps retrying it — so
+ * `#saveRunningAiRunOnce()`, `#saveSucceededAiRunOnce()` and `#saveFailedAiRunOnce()` answer those
+ * three transitions with a boolean instead. The throwing spelling stays for every caller that
+ * wants a refusal naming itself.
+ *
+ * **False means one thing under three causes: there is nothing for this writer to do, and no later
+ * attempt will change that.** The run had already settled when the guard read it; it settled
+ * between the read and the write; or no run carries the id at all. A caller's action is the same
+ * in all three — stop, and write nothing further — so it is told the one thing it acts on rather
+ * than a cause to branch on. What differs is only what should be written down, and that is written
+ * here, where the cause is still known, by `#logUnwritableAiRunRefusal()`.
+ *
+ * **The third cause is a mitigation and not a convenience.** Sequelize 6.37.8 runs a transaction's
+ * `afterCommit` hooks from a `finally`, so a COMMIT that failed still dispatches the job it
+ * registered — and the worker that picks that job up finds no row. Nothing at the hook can tell
+ * that case apart, so what covers it is the worker doing nothing about it, which it can only do if
+ * an absent run is answered rather than refused. See Q86.
+ *
+ * **The two spellings are one guard chain, because the second is written on top of the first.**
+ * Each `~Once` method calls its throwing sibling, so every refusal — an unreadable key, a field no
+ * transition writes, a status naming no master row, a status nothing evidences, an instant that is
+ * not one, an absent failure reason — is raised by the same code, in the same order, and reported
+ * in the same words whichever spelling the caller used. Each of those is a defect in the call, and
+ * a second delivery of the same call would carry it unchanged, which is exactly why it is raised
+ * rather than answered.
+ *
+ * **The read-then-write guard stays in front of it, and neither half makes the other redundant.**
+ * The guard is what lets a refusal name itself and name the status the run had settled in, which an
+ * affected-row count of zero cannot say — a caller answered with a bare zero could not tell a
+ * settled run from a deleted one from a write it had made twice. The condition closes the one
+ * instant between the two statements, which no guard reading a row beforehand can close. Both
+ * answer by throwing, because a caller that asked for a transition to be recorded and was handed
+ * back nothing would carry on believing the record exists.
  */
 export default class AiRunStatusRecorder {
   /**
@@ -255,6 +359,28 @@ export default class AiRunStatusRecorder {
   }
 
   /**
+   * get: the query operators the conditional write is stated with.
+   *
+   * Reached through a getter rather than referred to inside the method that needs it, so that the
+   * one place this class touches Sequelize's own vocabulary is named, and a test can stand
+   * something else in its place without reaching into the module registry.
+   *
+   * @returns {typeof Op} Operators.
+   */
+  static get sequelizeOperators () {
+    return Op
+  }
+
+  /**
+   * get: the one logger client this process writes through.
+   *
+   * @returns {MentsuLogger} Logger client.
+   */
+  static get mentsuLogger () {
+    return mentsuLogger
+  }
+
+  /**
    * Create the inspector answering whether a run has already settled.
    *
    * @returns {AiRunTerminalStatusInspector} Inspector.
@@ -288,6 +414,220 @@ export default class AiRunStatusRecorder {
    */
   get Ctor () {
     return /** @type {typeof AiRunStatusRecorder} */ (this.constructor)
+  }
+
+  /**
+   * Save a run as running, and answer whether this writer was the one that moved it.
+   *
+   * The spelling a queue worker claims a run with. A delivery answered false has nothing left to
+   * do — the run has settled, or there is no run — and the queue's at-least-once delivery makes
+   * that an ordinary event rather than a fault: the delivery stops there, and nothing it does
+   * afterwards can reach the row.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   startedAt: Date
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether this writer moved the run: false when there is nothing for
+   * it to do, and no later attempt will change that.
+   * @throws {Error} When the call is malformed: an id that is no id, or an instant that is no
+   * instant.
+   * @public
+   */
+  async saveRunningAiRunOnce ({
+    aiRunId,
+    startedAt,
+  }) {
+    const saveAiRun = () => this.saveRunningAiRun({
+      aiRunId,
+      startedAt,
+    })
+
+    return this.saveAiRunOnce({
+      saveAiRun,
+    })
+  }
+
+  /**
+   * Save a run as succeeded, and answer whether this writer was the one that settled it.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   resultBody: string | null
+   *   finishedAt: Date
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether this writer settled the run: false when there is nothing
+   * for it to do, and no later attempt will change that.
+   * @throws {Error} When the call is malformed: an id that is no id, or an instant that is no
+   * instant.
+   * @public
+   */
+  async saveSucceededAiRunOnce ({
+    aiRunId,
+    resultBody,
+    finishedAt,
+  }) {
+    const saveAiRun = () => this.saveSucceededAiRun({
+      aiRunId,
+      resultBody,
+      finishedAt,
+    })
+
+    return this.saveAiRunOnce({
+      saveAiRun,
+    })
+  }
+
+  /**
+   * Save a run as failed, and answer whether this writer was the one that settled it.
+   *
+   * A call carrying no reason code is refused here exactly as it is in the throwing spelling. It
+   * is the call that is malformed rather than the row, and a second delivery of it would carry the
+   * same defect — where answering false would say there was nothing to do, which is the one thing
+   * that is not true of it.
+   *
+   * @param {SaveFailedAiRunParams} params - Parameters.
+   * @returns {Promise<boolean>} Whether this writer settled the run: false when there is nothing
+   * for it to do, and no later attempt will change that.
+   * @throws {Error} When the call is malformed: an absent reason code, an id that is no id, or an
+   * instant that is no instant.
+   * @public
+   */
+  async saveFailedAiRunOnce ({
+    aiRunId,
+    failureReasonCode,
+    failureParameters,
+    finishedAt,
+  }) {
+    const saveAiRun = () => this.saveFailedAiRun({
+      aiRunId,
+      failureReasonCode,
+      failureParameters,
+      finishedAt,
+    })
+
+    return this.saveAiRunOnce({
+      saveAiRun,
+    })
+  }
+
+  /**
+   * Record a transition through the spelling that refuses, and answer false where the refusal says
+   * there was nothing to record.
+   *
+   * **The transition arrives as something to call rather than as a status to act on**, which is
+   * what lets the two spellings share one guard chain instead of restating it. What runs here is
+   * the public method the caller asked for, whole: its own argument checks, the guards of
+   * `#saveOngoingAiRun()` in their own order, and the conditional write. Nothing about which
+   * transition it is reaches this method, so a sixth transition needs nothing added to it.
+   *
+   * **Nothing is swallowed.** A refusal naming a defect in the call is rethrown as the transition
+   * raised it, carrying the message that says which rule turned the call away. A refusal saying
+   * the run cannot be written now or later is not discarded either: the caller is told the one
+   * thing it acts on, and the cause — which only this method still knows — is written down before
+   * it is dropped.
+   *
+   * @param {{
+   *   saveAiRun: () => Promise<*>
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether the transition was recorded by this writer.
+   * @throws {Error} Every refusal naming a defect in the call, as the transition itself raised it.
+   * @public
+   */
+  async saveAiRunOnce ({
+    saveAiRun,
+  }) {
+    try {
+      await saveAiRun()
+
+      return true
+    } catch (error) {
+      if (
+        !this.isUnwritableAiRunRefusal({
+          error,
+        })
+      ) {
+        throw error
+      }
+
+      this.logUnwritableAiRunRefusal({
+        error,
+      })
+
+      return false
+    }
+  }
+
+  /**
+   * Check whether a refusal says the run cannot be written by this writer now or by any writer
+   * later.
+   *
+   * Three refusals say it: the run had already settled when the guard read it, it settled between
+   * the read and the write, or no run carries the id. They are one answer to a caller and are
+   * recognized together here, which is why this asks about the group rather than about any one of
+   * them.
+   *
+   * **They are recognized by the sentences they were built from, and those sentences are constants
+   * of this module rather than copies of them.** This class raises plain errors throughout, so
+   * there is no class to ask about; asking for the same constants the messages are built out of is
+   * what keeps the two from drifting into meaning different things, the way the `WHERE` and the
+   * guard are kept together by reading their statuses from one inspector.
+   *
+   * **No other refusal of this class can be made to read as one of these.** Nothing a caller
+   * supplies reaches a message here as free text: a run id is refused outright unless it reads as
+   * an id, and a field name is repeated only when it is shaped like a field name. So each sentence
+   * appears in exactly one message, built in exactly one place, and none of the three is a
+   * substring of any other message this class raises.
+   *
+   * Anything that is not an error carrying a message is none of the three, and is rethrown by the
+   * caller above under the same rule as everything else it does not recognize.
+   *
+   * @param {{
+   *   error: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the refusal leaves nothing for a writer to do.
+   * @public
+   */
+  isUnwritableAiRunRefusal ({
+    error,
+  }) {
+    if (typeof error?.message !== 'string') {
+      return false
+    }
+
+    return UNWRITABLE_AI_RUN_MESSAGES
+      .some(it => error.message.includes(it))
+  }
+
+  /**
+   * Write the line a refusal answered with false leaves behind.
+   *
+   * **The cause is known here and nowhere after here.** The caller is handed a boolean, because
+   * its action is the same whichever of the three it was; the refusal's own message is what says
+   * which, so it is written down at the one point that still holds it rather than thrown away with
+   * the exception.
+   *
+   * **It is written at the level an ordinary event belongs on.** A queue that delivers
+   * at-least-once redelivers a job whose run finished as a matter of course, so a warning per
+   * duplicate would bury the lines an operator is actually watching for.
+   *
+   * The message is the refusal's own, which carries a run id and a status id and nothing else —
+   * both already held to being ids before they reached it, so no text a caller chose is repeated
+   * here.
+   *
+   * @param {{
+   *   error: Error
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logUnwritableAiRunRefusal ({
+    error,
+  }) {
+    this.Ctor.mentsuLogger.log({
+      message: error.message,
+      tags: UNWRITABLE_AI_RUN_REFUSAL_TAGS,
+    })
   }
 
   /**
@@ -484,8 +824,12 @@ export default class AiRunStatusRecorder {
    *   values: Record<string, *>
    * }} params - Parameters.
    * @returns {Promise<*>} The saved run.
+   * **The guard in here is the first of two halves, and the write is the second.** What this
+   * method reads is the run as it stood a statement ago; what `#saveAiRunTransition()` writes is
+   * conditional on the run still standing that way. See the class docblock for why both are kept.
    * @throws {Error} When a field is not a transition's, when the status it moves to is not
-   * evidenced, when no run carries the id, or when the run has already settled.
+   * evidenced, when no run carries the id, when the run has already settled, or when it settled or
+   * went between the read and the write.
    * @public
    */
   async saveOngoingAiRun ({
@@ -575,7 +919,10 @@ export default class AiRunStatusRecorder {
       values,
     })
 
-    return aiRun.update(recordableValues)
+    return this.saveAiRunTransition({
+      aiRunId,
+      values: recordableValues,
+    })
   }
 
   /**
@@ -834,6 +1181,142 @@ export default class AiRunStatusRecorder {
     return evidenceFieldNames
       .find(it => !namedFieldNames.includes(it))
       ?? null
+  }
+
+  /**
+   * Save a transition against a run, on the condition that the row still admits one.
+   *
+   * The guard above read the run and found it unsettled. This writes on the condition that it is
+   * still unsettled at the instant the write lands, so the two statements cannot be pulled apart by
+   * a second writer arriving between them. The row answers with a count rather than with a status:
+   * one row moved means this writer is the one that moved it, and none means the run no longer
+   * matched the condition it was written under — it had settled, or it was no longer there.
+   *
+   * **Zero is refused rather than returned**, for the reason every other refusal in this class is:
+   * the caller asked for a transition to be recorded, and nothing was. A worker answered with the
+   * run as it stands would read the terminal status another worker wrote and take it for its own.
+   * The message says what is true of every call that reaches it — the run had settled or gone —
+   * rather than naming a cause the count cannot distinguish.
+   *
+   * **A call that writes no column is not a lost race, and is not reported as one.** Nothing this
+   * class writes was named, so no row could match a write of no columns however the run stands, and
+   * a count of zero there says nothing about a second writer. Such a call moves the run nowhere and
+   * is answered with the run as it stands, which is what the write it asked for would have left.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {Promise<*>} The run as the row now stands.
+   * @throws {Error} When the run had settled or gone by the time the write reached it.
+   * @public
+   */
+  async saveAiRunTransition ({
+    aiRunId,
+    values,
+  }) {
+    const writtenFieldNames = Object.keys(values)
+
+    if (writtenFieldNames.length === 0) {
+      return this.findAiRun({
+        aiRunId,
+      })
+    }
+
+    const affectedAiRunCount = await this.saveUnsettledAiRunValues({
+      aiRunId,
+      values,
+    })
+
+    if (affectedAiRunCount === 0) {
+      throw new Error(`${this.Ctor.name}#saveAiRunTransition() ${OUTRACED_AI_RUN_MESSAGE}: AiRunId ${aiRunId}`)
+    }
+
+    return this.findAiRun({
+      aiRunId,
+    })
+  }
+
+  /**
+   * Save values against a run while it carries a status it can still leave, and answer how many
+   * rows that matched.
+   *
+   * **Why this is a write with a `where` rather than a write through the loaded instance.** An
+   * instance write addresses the row by its key alone, so the rule about terminal statuses can only
+   * be applied by something that read the row first — which is the gap this exists to close. Naming
+   * the rule in the `WHERE` hands it to the database, where the read and the write are one
+   * statement.
+   *
+   * **The model's own guard stays on, and the condition is what satisfies it.** `AiRun`'s
+   * `beforeBulkUpdate` refuses a `Model.update()` that writes `AiRunStatusId` unless the `where`
+   * the caller stated already excludes every terminal status — an update that cannot match a
+   * settled run cannot move one out of a status a run never leaves, whatever status it writes.
+   * That is exactly the condition `#buildUnsettledAiRunCondition()` builds, so this write goes
+   * through the hook rather than around it with `hooks: false`. What is given up is the row-level
+   * `beforeUpdate` guard, which the instance write this replaced did reach — and which could never
+   * have fired on this path, because the guard in front refuses a settled run before anything is
+   * written. What replaces it is the stricter rule of the two: `beforeUpdate` refuses a status move
+   * out of a terminal status, and this condition refuses **any** write to a run that has reached
+   * one, in the same statement that performs it.
+   *
+   * **The condition is what carries the guarantee, so it is never softened.** Take the status out
+   * of the `WHERE` and this becomes an unconditional bulk write — which `AiRun`'s hook now refuses
+   * outright, so the line that would undo the rule no longer reaches the table at all.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {Promise<number>} Rows the condition matched: one when this writer moved the run, zero
+   * when it no longer stood as it was read.
+   * @public
+   */
+  async saveUnsettledAiRunValues ({
+    aiRunId,
+    values,
+  }) {
+    const unsettledAiRunCondition = this.buildUnsettledAiRunCondition({
+      aiRunId,
+    })
+
+    const [affectedAiRunCount] = /** @type {*} */ (
+      await this.Ctor.AiRunCtor.update(
+        values,
+        {
+          where: unsettledAiRunCondition,
+        }
+      )
+    )
+
+    return affectedAiRunCount
+  }
+
+  /**
+   * Build the condition a transition write is made under.
+   *
+   * The run is located by its id, and the terminal statuses are stated as the ones it must not
+   * already carry. Which statuses those are is read from `AiRunTerminalStatusInspector`, the same
+   * answer the guard above asks for — written here as literals, the `WHERE` and the guard would
+   * agree right up until a sixth status was added to one of them.
+   *
+   * @param {{
+   *   aiRunId: number
+   * }} params - Parameters.
+   * @returns {Record<string, *>} The condition.
+   * @public
+   */
+  buildUnsettledAiRunCondition ({
+    aiRunId,
+  }) {
+    const { terminalAiRunStatusIds } = this.aiRunTerminalStatusInspector
+    const notInOperator = this.Ctor.sequelizeOperators.notIn
+
+    return {
+      id: aiRunId,
+      AiRunStatusId: {
+        [notInOperator]: terminalAiRunStatusIds,
+      },
+    }
   }
 
   /**

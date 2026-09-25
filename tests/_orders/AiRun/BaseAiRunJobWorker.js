@@ -1,0 +1,790 @@
+import BaseAiRunJobWorker from '../../../app/aiRun/jobs/BaseAiRunJobWorker.js'
+
+/*
+ * Why the recorder is handed in rather than run for real.
+ *
+ * The lifecycle this file exercises writes to `ai_runs` through `AiRunStatusRecorder`, which is why
+ * the file sits here and not under `tests/__tests__/` — placement follows what the method does, not
+ * whether a test stubs the write away. What it does not do is re-test the recorder: the conditional
+ * write, its refusals and its evidence rules are `AiRunStatusRecorder`'s own, tested beside it in
+ * this folder. What is this worker's, and what every case below asserts, is which transition it
+ * asks for, with which columns, and what it does with the answer it is given.
+ *
+ * That answer is the whole reason the recorder is a seam here. It is how a delivery learns that
+ * another writer settled the run first, and there is no seeded row that can be made to say so on
+ * demand: it is a race between two writers, and the only way to state one end of it in a test is to
+ * state the answer.
+ */
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#saveRunningAiRun()', () => {
+    describe('should hand the recorder the instant the work began', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300081,
+            startedAt: new Date('2026-09-25T10:00:00.000Z'),
+          },
+          mockHasStarted: true,
+          expected: {
+            aiRunId: 10300081,
+            startedAt: new Date('2026-09-25T10:00:00.000Z'),
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300082,
+            startedAt: new Date('2026-09-25T11:30:00.000Z'),
+          },
+          mockHasStarted: false,
+          expected: {
+            aiRunId: 10300082,
+            startedAt: new Date('2026-09-25T11:30:00.000Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasStarted,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(mockHasStarted)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+          },
+        })
+
+        const actual = await worker.saveRunningAiRun(params)
+
+        expect(saveRunningAiRunOnce)
+          .toHaveBeenCalledWith(expected)
+        expect(actual)
+          .toBe(mockHasStarted)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#saveSucceededAiRun()', () => {
+    describe('should hand the recorder the result the run settled', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300083,
+            resultBody: '{"brand":"alpha"}',
+            finishedAt: new Date('2026-09-25T10:01:00.000Z'),
+          },
+          mockHasSettled: true,
+          expected: {
+            aiRunId: 10300083,
+            resultBody: '{"brand":"alpha"}',
+            finishedAt: new Date('2026-09-25T10:01:00.000Z'),
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300084,
+            resultBody: null,
+            finishedAt: new Date('2026-09-25T10:02:00.000Z'),
+          },
+          mockHasSettled: false,
+          expected: {
+            aiRunId: 10300084,
+            resultBody: null,
+            finishedAt: new Date('2026-09-25T10:02:00.000Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasSettled,
+        expected,
+      }) => {
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(mockHasSettled)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveSucceededAiRunOnce,
+          },
+        })
+
+        const actual = await worker.saveSucceededAiRun(params)
+
+        expect(saveSucceededAiRunOnce)
+          .toHaveBeenCalledWith(expected)
+        expect(actual)
+          .toBe(mockHasSettled)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#saveFailedAiRun()', () => {
+    describe('should hand the recorder the reason the run failed for', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300085,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            finishedAt: new Date('2026-09-25T10:05:00.000Z'),
+          },
+          mockHasSettled: true,
+          expected: {
+            aiRunId: 10300085,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            finishedAt: new Date('2026-09-25T10:05:00.000Z'),
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300086,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: null,
+            finishedAt: new Date('2026-09-25T10:06:00.000Z'),
+          },
+          mockHasSettled: false,
+          expected: {
+            aiRunId: 10300086,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: null,
+            finishedAt: new Date('2026-09-25T10:06:00.000Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasSettled,
+        expected,
+      }) => {
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(mockHasSettled)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveFailedAiRunOnce,
+          },
+        })
+
+        const actual = await worker.saveFailedAiRun(params)
+
+        expect(saveFailedAiRunOnce)
+          .toHaveBeenCalledWith(expected)
+        expect(actual)
+          .toBe(mockHasSettled)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#settleSucceededAiRun()', () => {
+    describe('should record the run succeeded and report the delivery', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300091,
+            outcome: {
+              resultBody: '{"brand":"alpha"}',
+              failureReasonCode: null,
+              failureParameters: null,
+            },
+          },
+          mockHasSettled: true,
+          expected: {
+            aiRunId: 10300091,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300092,
+            outcome: {
+              resultBody: null,
+              failureReasonCode: null,
+              failureParameters: null,
+            },
+          },
+          mockHasSettled: false,
+          expected: {
+            aiRunId: 10300092,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasSettled,
+        expected,
+      }) => {
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(mockHasSettled)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveSucceededAiRunOnce,
+          },
+        })
+
+        const actual = await worker.settleSucceededAiRun(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#settleFailedAiRun()', () => {
+    describe('should record the run failed and report the delivery', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300093,
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+              failureParameters: null,
+            },
+          },
+          mockHasSettled: true,
+          expected: {
+            aiRunId: 10300093,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            hasSettled: true,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300094,
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'PROVIDER_CALL_FAILED',
+              failureParameters: null,
+            },
+          },
+          mockHasSettled: false,
+          expected: {
+            aiRunId: 10300094,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            hasSettled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasSettled,
+        expected,
+      }) => {
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(mockHasSettled)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveFailedAiRunOnce,
+          },
+        })
+
+        const actual = await worker.settleFailedAiRun(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#settleAiRun()', () => {
+    /*
+     * One outcome reaches one terminal write. The case that matters is the second assertion: the
+     * status the outcome did not name is never written, which is the half of the fifth acceptance
+     * criterion this method is responsible for.
+     */
+    describe('should write only the terminal status the outcome names', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300101,
+            body: {
+              aiRunId: 10300101,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockResultBody: '{"brand":"alpha"}',
+          expected: {
+            aiRunId: 10300101,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300102,
+            body: {
+              aiRunId: 10300102,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockResultBody: null,
+          expected: {
+            aiRunId: 10300102,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockResultBody,
+        expected,
+      }) => {
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue(mockResultBody)
+
+        const actual = await worker.settleAiRun(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveFailedAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#settleAiRun()', () => {
+    /*
+     * Section 11's fourth acceptance criterion, at the place the row is written: a run still running
+     * past the time limit ends as failed, carrying the time-limit reason code. The work here never
+     * settles at all, which is the shape the limit exists for.
+     */
+    describe('should record a run past its limit as failed', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10300103,
+            body: {
+              aiRunId: 10300103,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10300103,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            finishedAt: expect.any(Date),
+          },
+        },
+        {
+          params: {
+            aiRunId: 10300104,
+            body: {
+              aiRunId: 10300104,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10300104,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            finishedAt: expect.any(Date),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 1,
+          aiRunStatusRecorder: {
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockReturnValue(new Promise(() => {
+            // A run that holds a worker indefinitely: nothing here ever settles it.
+          }))
+
+        await worker.settleAiRun(params)
+
+        expect(saveFailedAiRunOnce)
+          .toHaveBeenCalledWith(expected)
+        expect(saveSucceededAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The whole of the fifth acceptance criterion in one case: a run's status moves from queued to
+     * running to exactly one terminal state. Running is asked for first, succeeded second, and the
+     * third transition this class knows how to write is asked for not at all.
+     */
+    describe('should move the run to running and then to one terminal state', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10300111,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockResultBody: '{"brand":"alpha"}',
+          expected: {
+            aiRunId: 10300111,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10300112,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockResultBody: null,
+          expected: {
+            aiRunId: 10300112,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        mockResultBody,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue(mockResultBody)
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveRunningAiRunOnce)
+          .toHaveBeenCalledWith({
+            aiRunId: expected.aiRunId,
+            startedAt: expect.any(Date),
+          })
+        expect(saveFailedAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * BullMQ delivers at least once: a worker that stalls has its job re-queued, so the same run can
+     * reach two executions. The second of them is told by the conditional write that the run has
+     * already settled, and this case is what says it stops there — no work, and above all no second
+     * terminal write against a run that is already succeeded, failed or canceled.
+     */
+    describe('should write nothing further when another writer already settled the run', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10300121,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10300121,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10300122,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10300122,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(false)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(executeAiRunWorkSpy)
+          .not
+          .toHaveBeenCalled()
+        expect(saveSucceededAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+        expect(saveFailedAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The run settled between this delivery's claim and its own terminal write — the race the
+     * conditional write exists to decide. The delivery reports that it did not settle the run, and
+     * nothing it computed reaches the row.
+     */
+    describe('should report a terminal write another writer won', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10300131,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10300131,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10300132,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10300132,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(false)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A body that names no run is refused before any status is asked for, so a malformed delivery
+     * cannot move a run it cannot identify.
+     */
+    describe('should refuse a job body naming no run', () => {
+      const cases = [
+        {
+          params: {
+            body: null,
+            context: {},
+            parcel: {},
+          },
+          label: 'a body that failed its schema',
+        },
+        {
+          params: {
+            body: {},
+            context: {},
+            parcel: {},
+          },
+          label: 'a body carrying no field at all',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        params,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: {},
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+          },
+        })
+
+        const actual = () => worker.executeJob(params)
+
+        await expect(actual)
+          .rejects
+          .toThrow('refused a job body naming no run')
+        expect(saveRunningAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})

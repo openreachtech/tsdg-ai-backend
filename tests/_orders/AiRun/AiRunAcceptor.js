@@ -2,6 +2,8 @@ import AiRunAcceptor from '../../../app/aiRun/AiRunAcceptor.js'
 
 import RunKeyGenerator from '../../../app/aiRun/RunKeyGenerator.js'
 
+import AiRun from '../../../sequelize/models/AiRun.js'
+
 describe('AiRunAcceptor', () => {
   describe('#saveAiRun()', () => {
     const cases = [
@@ -220,6 +222,207 @@ describe('AiRunAcceptor', () => {
 
         expect(received)
           .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunAcceptor', () => {
+  describe('#saveAiRun()', () => {
+    /*
+     * The run is written inside the transaction it was handed, and is there once that transaction
+     * commits. This is the half that says the transaction was passed on rather than dropped: a
+     * `#saveAiRun()` that ignored the argument would pass this describe too, which is why the
+     * rolled-back describe below exists and why the two belong together.
+     */
+    describe('when the transaction committed', () => {
+      const cases = [
+        {
+          override: {
+            runKey: 'run-key-committed-0001',
+          },
+          input: {
+            apiClientId: 10000001,
+            aiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+            input: {
+              requestKey: 'request-key-committed-0001',
+              externalRef: 'external-ref-committed-0001',
+              subjectLabel: 'Subject label committed 0001',
+              correlationId: 'correlation-id-committed-0001',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/committed-0001',
+            },
+            rawBody: '{"externalRef":"external-ref-committed-0001"}',
+            requestBodyHash: 'request-body-hash-committed-0001',
+            acceptedAt: new Date('2026-09-26T07:07:07.007Z'),
+          },
+          expected: expect.objectContaining({
+            runKey: 'run-key-committed-0001',
+            requestKey: 'request-key-committed-0001',
+            requestBodyHash: 'request-body-hash-committed-0001',
+            externalRef: 'external-ref-committed-0001',
+            AiRunStatusId: 1, // AI_RUN_STATUS.QUEUED.ID
+          }),
+        },
+        {
+          override: {
+            runKey: 'run-key-committed-0002',
+          },
+          input: {
+            apiClientId: 10000002,
+            aiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+            input: {
+              requestKey: 'request-key-committed-0002',
+              externalRef: 'external-ref-committed-0002',
+              subjectLabel: 'Subject label committed 0002',
+              correlationId: 'correlation-id-committed-0002',
+              callbackUrl: 'https://rotating.client.development.invalid/callbacks/committed-0002',
+            },
+            rawBody: '{"externalRef":"external-ref-committed-0002"}',
+            requestBodyHash: 'request-body-hash-committed-0002',
+            acceptedAt: new Date('2026-09-26T08:08:08.008Z'),
+          },
+          expected: expect.objectContaining({
+            runKey: 'run-key-committed-0002',
+            requestKey: 'request-key-committed-0002',
+            requestBodyHash: 'request-body-hash-committed-0002',
+            externalRef: 'external-ref-committed-0002',
+            AiRunStatusId: 1, // AI_RUN_STATUS.QUEUED.ID
+          }),
+        },
+      ]
+
+      test.each(cases)('externalRef: $input.input.externalRef', async ({
+        override,
+        input,
+        expected,
+      }) => {
+        const runKeyGenerator = RunKeyGenerator.create()
+        jest.spyOn(runKeyGenerator, 'generateRunKey')
+          .mockReturnValue(override.runKey)
+
+        const acceptor = AiRunAcceptor.create({
+          runKeyGenerator,
+        })
+
+        await AiRun.beginTransaction(async transaction => {
+          await acceptor.saveAiRun({
+            apiClientId: input.apiClientId,
+            aiRunCategoryId: input.aiRunCategoryId,
+            input: input.input,
+            rawBody: input.rawBody,
+            requestBodyHash: input.requestBodyHash,
+            acceptedAt: input.acceptedAt,
+            transaction,
+          })
+        })
+
+        const findAiRunArgs = {
+          apiClientId: input.apiClientId,
+          requestKey: input.input.requestKey,
+        }
+
+        const received = await acceptor.findAiRun(findAiRunArgs)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunAcceptor', () => {
+  describe('#saveAiRun()', () => {
+    /*
+     * The run was written and the request then failed, so the row must be gone. Nothing here rolls
+     * anything back by hand: the transaction body throws, which is what a failure after the save
+     * looks like, and Sequelize rolls back and re-throws. The re-throw is asserted rather than
+     * swallowed, so that a body which somehow committed would be named here instead of turning up
+     * as the next assertion failing for a reason it does not describe.
+     *
+     * A `#saveAiRun()` that ignored the transaction it was handed would have committed the row on
+     * its own connection, and this is the describe that would catch it.
+     */
+    describe('when the transaction rolled back', () => {
+      const cases = [
+        {
+          override: {
+            runKey: 'run-key-rolledback-0001',
+          },
+          input: {
+            apiClientId: 10000001,
+            aiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+            input: {
+              requestKey: 'request-key-rolledback-0001',
+              externalRef: 'external-ref-rolledback-0001',
+              subjectLabel: 'Subject label rolled back 0001',
+              correlationId: 'correlation-id-rolledback-0001',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/rolledback-0001',
+            },
+            rawBody: '{"externalRef":"external-ref-rolledback-0001"}',
+            requestBodyHash: 'request-body-hash-rolledback-0001',
+            acceptedAt: new Date('2026-09-26T09:09:09.009Z'),
+          },
+        },
+        {
+          override: {
+            runKey: 'run-key-rolledback-0002',
+          },
+          input: {
+            apiClientId: 10000002,
+            aiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+            input: {
+              requestKey: 'request-key-rolledback-0002',
+              externalRef: 'external-ref-rolledback-0002',
+              subjectLabel: 'Subject label rolled back 0002',
+              correlationId: 'correlation-id-rolledback-0002',
+              callbackUrl: 'https://rotating.client.development.invalid/callbacks/rolledback-0002',
+            },
+            rawBody: '{"externalRef":"external-ref-rolledback-0002"}',
+            requestBodyHash: 'request-body-hash-rolledback-0002',
+            acceptedAt: new Date('2026-09-26T10:10:10.010Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('externalRef: $input.input.externalRef', async ({
+        override,
+        input,
+      }) => {
+        const runKeyGenerator = RunKeyGenerator.create()
+        jest.spyOn(runKeyGenerator, 'generateRunKey')
+          .mockReturnValue(override.runKey)
+
+        const acceptor = AiRunAcceptor.create({
+          runKeyGenerator,
+        })
+
+        const savingAiRun = () => AiRun.beginTransaction(async transaction => {
+          await acceptor.saveAiRun({
+            apiClientId: input.apiClientId,
+            aiRunCategoryId: input.aiRunCategoryId,
+            input: input.input,
+            rawBody: input.rawBody,
+            requestBodyHash: input.requestBodyHash,
+            acceptedAt: input.acceptedAt,
+            transaction,
+          })
+
+          throw new Error('the request failed after the run was saved')
+        })
+
+        await expect(savingAiRun)
+          .rejects
+          .toThrow('the request failed after the run was saved')
+
+        const findAiRunArgs = {
+          apiClientId: input.apiClientId,
+          requestKey: input.input.requestKey,
+        }
+
+        const received = await acceptor.findAiRun(findAiRunArgs)
+
+        expect(received)
+          .toBeNull()
       })
     })
   })

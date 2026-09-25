@@ -1,4 +1,8 @@
 import {
+  Op,
+} from 'sequelize'
+
+import {
   ModelAttributeFactory,
 } from '@openreachtech/renchan-sequelize'
 
@@ -10,7 +14,16 @@ const AI_RUN_STATUS_ATTRIBUTE_NAME = 'AiRunStatusId'
 
 const REFUSED_SETTLED_TRANSITION_MESSAGE = 'AiRun refuses a move out of a status a run never leaves'
 
-const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() is refused when it writes AiRunStatusId. Load the run and move it through AiRunStatusRecorder.'
+/*
+ * The message says the rule as it stands, not as it once stood.
+ *
+ * It read "refused when it writes AiRunStatusId" while that was the whole rule. It is not any
+ * longer — an update whose `where` already excludes every terminal status is accepted, because it
+ * can match no settled run and therefore cannot move one out of a status a run never leaves. A
+ * refusal naming a rule stricter than the one it applies would send a reader looking for a defect
+ * in the wrong place.
+ */
+const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId is refused unless its where excludes every terminal status. Move the run through AiRunStatusRecorder.'
 
 /**
  * AiRun model
@@ -27,13 +40,29 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() is refused when it wr
  *
  * **What the two hooks each close, and why there are two.** `beforeUpdate` sees the row, so it can
  * compare the status being written against the one the row already carries; it is reached by
- * `instance.save()`, by `instance.update()` — the path `AiRunStatusRecorder` itself writes through —
- * and by `Model.update()` when the caller passes `individualHooks`. `Model.update()` on its own
- * reaches `beforeBulkUpdate` only (`sequelize/lib/model.js`, `update()`: `individualHooks` defaults
- * to false and the per-row hooks live inside that branch), and at that point no row has been read,
- * so nothing there can tell a legal move from an illegal one. So a bulk update that writes
- * `AiRunStatusId` at all is refused by name rather than half-judged, and a bulk update that writes
- * anything else still runs — it cannot move a status it does not write.
+ * `instance.save()`, by `instance.update()`, and by `Model.update()` when the caller passes
+ * `individualHooks`. `Model.update()` on its own reaches `beforeBulkUpdate` only
+ * (`sequelize/lib/model.js`, `update()`: `individualHooks` defaults to false and the per-row hooks
+ * live inside that branch), and at that point no row has been read, so nothing there can judge a
+ * status against the one it would replace. A bulk update that writes anything but the status still
+ * runs — it cannot move a status it does not write.
+ *
+ * **A bulk update that writes the status is refused unless its own `where` proves it cannot break
+ * the rule.** What the rule forbids is a run moving **out of** a terminal status. An update whose
+ * `where` states that the rows it matches carry none of the terminal statuses cannot make that
+ * move, whatever status it writes — it is provably safe rather than merely probably so, and the
+ * proof is in the statement itself rather than in a row nobody read. That condition is what
+ * `AiRunStatusRecorder#buildUnsettledAiRunCondition()` builds, which is how the recorder's own
+ * transition write goes through this hook rather than around it with `hooks: false`.
+ *
+ * **The proof is strict, and anything short of it is the refusal.** A `where` that merely mentions
+ * the status column proves nothing; one that excludes only some of the terminal statuses proves
+ * nothing either; a condition stated with any operator but `Op.notIn` is one this class cannot
+ * read, and an unreadable proof is no proof. Each of them is refused by name exactly as every bulk
+ * status write was before. Which statuses are terminal is read from
+ * `AiRunTerminalStatusInspector` — the same answer `AiRunStatusRecorder` builds its `where` out of,
+ * so the proof and the thing being proved can never come to disagree about what a terminal status
+ * is.
  *
  * **What neither hook closes.** `.upsert()` reaches `beforeUpsert` / `afterUpsert` and no per-row
  * hook, with no `individualHooks` option to turn into one; `.bulkCreate()` with `updateOnDuplicate`
@@ -244,6 +273,19 @@ export default class AiRun extends BaseAppRenchanModel {
   }
 
   /**
+   * get: the query operators a `where` states its conditions with.
+   *
+   * Reached through a getter rather than referred to inside the method that reads a `where`, so
+   * that the one place this model touches Sequelize's own vocabulary is named, and a test can
+   * stand something else in its place without reaching into the module registry.
+   *
+   * @returns {typeof Op} Operators.
+   */
+  static get sequelizeOperators () {
+    return Op
+  }
+
+  /**
    * Check whether an update moves a run out of a status it never leaves.
    *
    * The comparison is against the row's own previous value rather than against the values the
@@ -281,21 +323,96 @@ export default class AiRun extends BaseAppRenchanModel {
   }
 
   /**
-   * Check whether a bulk update writes the run status.
+   * Check whether a bulk update writes the run status without proving it may.
    *
    * `beforeBulkUpdate` is handed the options rather than a row, and `options.attributes` holds the
    * values the caller passed, keyed by attribute name. No row has been read at that point, so a
-   * status arriving here cannot be judged against the one it would replace.
+   * status arriving here cannot be judged against the one it would replace — but the `where` the
+   * caller stated can be, and a `where` that excludes every terminal status matches no run that
+   * has settled, so the write it guards cannot move one out of a status a run never leaves.
+   *
+   * An update naming no status is not this rule's to refuse, and is answered first: it moves no
+   * status, so what its `where` says about statuses is beside the point.
    *
    * @param {{
    *   options: *
    * }} params - Parameters.
-   * @returns {boolean} Whether the run status is among the values being written.
+   * @returns {boolean} Whether the run status is being written under a condition that does not
+   * rule the forbidden move out.
    */
   static writesAiRunStatusInBulk ({
     options,
   }) {
-    return Object.keys(options.attributes ?? {})
-      .includes(AI_RUN_STATUS_ATTRIBUTE_NAME)
+    const writtenFieldNames = Object.keys(options.attributes ?? {})
+
+    if (!writtenFieldNames.includes(AI_RUN_STATUS_ATTRIBUTE_NAME)) {
+      return false
+    }
+
+    return !this.excludesEveryTerminalAiRunStatus({
+      where: options.where,
+    })
+  }
+
+  /**
+   * Check whether a condition states that every terminal status is one the rows it matches do not
+   * carry.
+   *
+   * Every one of them, and not merely one or two: a `where` excluding succeeded alone still
+   * matches a failed run, and moving that run is the same forbidden move under another name. Which
+   * statuses those are is asked of `AiRunTerminalStatusInspector`, the same question the row guard
+   * above asks, so a sixth terminal status reaches both at once.
+   *
+   * @param {{
+   *   where: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the condition excludes every terminal status.
+   */
+  static excludesEveryTerminalAiRunStatus ({
+    where,
+  }) {
+    const excludedAiRunStatusIds = this.extractExcludedAiRunStatusIds({
+      where,
+    })
+
+    const aiRunTerminalStatusInspector = this.createAiRunTerminalStatusInspector()
+
+    return aiRunTerminalStatusInspector.terminalAiRunStatusIds
+      .every(it => excludedAiRunStatusIds.includes(it))
+  }
+
+  /**
+   * Extract the statuses a condition states the rows it matches do not carry.
+   *
+   * Only one spelling is read: the status column stated as `Op.notIn` over an array. A condition
+   * written any other way — a bare value, another operator, a nested `Op.and` — may well exclude
+   * the terminal statuses too, and this answers that it excludes nothing at all, because a proof
+   * this class cannot read is not a proof. What follows from an empty answer is the refusal that
+   * stood here before, which is the safe side of the question to be wrong on.
+   *
+   * @param {{
+   *   where: *
+   * }} params - Parameters.
+   * @returns {Array<*>} The statuses stated as excluded, empty when the condition states none this
+   * class can read.
+   */
+  static extractExcludedAiRunStatusIds ({
+    where,
+  }) {
+    const aiRunStatusCondition = where?.[AI_RUN_STATUS_ATTRIBUTE_NAME]
+      ?? null
+
+    if (aiRunStatusCondition === null) {
+      return []
+    }
+
+    const excludedAiRunStatusIds = aiRunStatusCondition[this.sequelizeOperators.notIn]
+      ?? null
+
+    if (!Array.isArray(excludedAiRunStatusIds)) {
+      return []
+    }
+
+    return excludedAiRunStatusIds
   }
 }

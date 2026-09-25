@@ -1,3 +1,11 @@
+import {
+  Op,
+} from 'sequelize'
+
+import {
+  MentsuLogger,
+} from '@openreachtech/mentsu-logger'
+
 import AiRunStatusRecorder from '../../../../app/aiRun/AiRunStatusRecorder.js'
 
 import AiRunInstantInspector from '../../../../app/aiRun/AiRunInstantInspector.js'
@@ -699,6 +707,283 @@ describe('AiRunStatusRecorder', () => {
         expect(received)
           .toBeNull()
       })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('.get:sequelizeOperators', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const received = AiRunStatusRecorder.sequelizeOperators
+
+        expect(received)
+          .toBe(Op) // same reference
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#buildUnsettledAiRunCondition()', () => {
+    /*
+     * The condition the transition write is made under, and where its statuses come from.
+     *
+     * The second case injects an inspector holding statuses no run of this application carries. If
+     * the condition were built out of literals it would answer the same three ids to both cases and
+     * that case would fail — which is the whole point of asking it twice. The third names a single
+     * terminal status, so a class that had hard-coded the count rather than the ids is caught too.
+     */
+    const cases = [
+      {
+        factoryParams: {
+          aiRunTerminalStatusInspector: AiRunTerminalStatusInspector.create(),
+        },
+        input: {
+          aiRunId: 10300091,
+        },
+        expected: {
+          id: 10300091,
+          AiRunStatusId: {
+            [Op.notIn]: [
+              3, // AI_RUN_STATUS.SUCCEEDED.ID
+              4, // AI_RUN_STATUS.FAILED.ID
+              5, // AI_RUN_STATUS.CANCELED.ID
+            ],
+          },
+        },
+      },
+      {
+        factoryParams: {
+          aiRunTerminalStatusInspector: AiRunTerminalStatusInspector.create({
+            terminalAiRunStatusIds: [
+              71,
+              72,
+            ],
+          }),
+        },
+        input: {
+          aiRunId: 10300092,
+        },
+        expected: {
+          id: 10300092,
+          AiRunStatusId: {
+            [Op.notIn]: [
+              71,
+              72,
+            ],
+          },
+        },
+      },
+      {
+        factoryParams: {
+          aiRunTerminalStatusInspector: AiRunTerminalStatusInspector.create({
+            terminalAiRunStatusIds: [
+              83,
+            ],
+          }),
+        },
+        input: {
+          aiRunId: 10300093,
+        },
+        expected: {
+          id: 10300093,
+          AiRunStatusId: {
+            [Op.notIn]: [
+              83,
+            ],
+          },
+        },
+      },
+    ]
+
+    test.each(cases)('aiRunId: $input.aiRunId', ({
+      factoryParams,
+      input,
+      expected,
+    }) => {
+      const recorder = AiRunStatusRecorder.create(factoryParams) // Arrange
+
+      const received = recorder.buildUnsettledAiRunCondition(input) // Act
+
+      expect(received) // Assert
+        .toEqual(expected)
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#isUnwritableAiRunRefusal()', () => {
+    /*
+     * The three refusals the boolean spelling answers with false, and everything it still raises.
+     *
+     * One case per cause, because they are three sentences built in three places and a predicate
+     * that had only ever been extended for two would pass a describe that only asked about two.
+     * The absent run is the one that matters most: it is what covers a job dispatched by a
+     * transaction whose COMMIT failed (Q86), and a predicate that missed it would fail every such
+     * delivery in the queue.
+     *
+     * Each is asked with a second class name as well, so a predicate matching a whole message
+     * rather than the sentence inside it fails here.
+     */
+    describe('should be truthy', () => {
+      const cases = [
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused a run already settled, which a run never leaves: AiRunId 10320041, AiRunStatusId 3'),
+          },
+        },
+        {
+          input: {
+            error: new Error('AlphaAiRunStatusRecorder#saveOngoingAiRun() refused a run that does not exist: AiRunId 10320042'),
+          },
+        },
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveAiRunTransition() refused a run that had settled or gone by the time the write reached it: AiRunId 10320043'),
+          },
+        },
+        {
+          input: {
+            error: new Error('BetaAiRunStatusRecorder#saveAiRunTransition() refused a run that had settled or gone by the time the write reached it: AiRunId 10320044'),
+          },
+        },
+      ]
+
+      test.each(cases)('message: $input.error.message', ({
+        input,
+      }) => {
+        const recorder = AiRunStatusRecorder.create()
+
+        const received = recorder.isUnwritableAiRunRefusal(input)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * Every refusal that names a defect in the call, which a second delivery would carry unchanged.
+     * Answering any of them false would tell a worker there was nothing to do, when what there is
+     * to do is fix the call.
+     */
+    describe('should be falsy', () => {
+      const cases = [
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveFailedAiRun() refused a failed run carrying no reason code: AiRunId 10320051'),
+          },
+        },
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused a key that is not an id: field aiRunId'),
+          },
+        },
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused a status naming no master row: AiRunId 10320052, field AiRunStatusId'),
+          },
+        },
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused an instant field carrying something that is not an instant: AiRunId 10320053, field finishedAt'),
+          },
+        },
+        {
+          input: {
+            error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused a field no transition of this class writes: AiRunId 10320054, field callbackUrl'),
+          },
+        },
+        {
+          input: {
+            error: new Error('SQLITE_BUSY: database is locked'),
+          },
+        },
+        {
+          input: {
+            error: 'a refusal thrown as text rather than as an error',
+          },
+        },
+        {
+          input: {
+            error: null,
+          },
+        },
+      ]
+
+      test.each(cases)('error: $input.error', ({
+        input,
+      }) => {
+        const recorder = AiRunStatusRecorder.create()
+
+        const received = recorder.isUnwritableAiRunRefusal(input)
+
+        expect(received)
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('.get:mentsuLogger', () => {
+    describe('when called as is', () => {
+      test('should be a MentsuLogger', () => {
+        const received = AiRunStatusRecorder.mentsuLogger
+
+        expect(received)
+          .toBeInstanceOf(MentsuLogger)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#logUnwritableAiRunRefusal()', () => {
+    /*
+     * What the line carries is the refusal's own message, which is the only thing that still says
+     * which of the three causes it was — the caller is handed a boolean and cannot tell. The level
+     * is the ordinary one, because a queue redelivering a finished run is an ordinary event and a
+     * warning per duplicate would bury the lines an operator watches for.
+     */
+    const cases = [
+      {
+        input: {
+          error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused a run already settled, which a run never leaves: AiRunId 10320071, AiRunStatusId 3'),
+        },
+        expected: {
+          message: 'AiRunStatusRecorder#saveOngoingAiRun() refused a run already settled, which a run never leaves: AiRunId 10320071, AiRunStatusId 3',
+          tags: [
+            'AiRunTransition',
+            'UnwritableAiRun',
+          ],
+        },
+      },
+      {
+        input: {
+          error: new Error('AiRunStatusRecorder#saveOngoingAiRun() refused a run that does not exist: AiRunId 10320072'),
+        },
+        expected: {
+          message: 'AiRunStatusRecorder#saveOngoingAiRun() refused a run that does not exist: AiRunId 10320072',
+          tags: [
+            'AiRunTransition',
+            'UnwritableAiRun',
+          ],
+        },
+      },
+    ]
+
+    test.each(cases)('message: $input.error.message', ({
+      input,
+      expected,
+    }) => {
+      const recorder = AiRunStatusRecorder.create()
+      const logSpy = jest.spyOn(AiRunStatusRecorder.mentsuLogger, 'log')
+
+      recorder.logUnwritableAiRunRefusal(input)
+
+      expect(logSpy)
+        .toHaveBeenCalledWith(expected)
     })
   })
 })
