@@ -24,6 +24,12 @@ const {
  * `10300001` upward for the conditional write, and `10320001` upward for the second spelling of a
  * transition and for the model guard that write now goes through. `10329001` upward is that last
  * block's never-created range, as `10239001` is `#run-record`'s.
+ *
+ * `10330001` upward belongs to the same feature's audit round: the conditions in
+ * `tests/__tests__/sequelize/models/AiRun.js` that state an exclusion beside a second key on the
+ * same column. Every id in that block names a run nothing creates — the guard under test reads the
+ * condition and never the table — so the block is listed here to keep it spoken for, not because a
+ * row of it exists.
  */
 
 describe('AiRunStatusRecorder', () => {

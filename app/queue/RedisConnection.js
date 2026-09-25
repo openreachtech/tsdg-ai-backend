@@ -27,6 +27,18 @@ const DEFAULT_REDIS_PORT = 6379
  */
 const UNCAPPED_REQUEST_RETRIES = null
 
+/*
+ * What `REDIS_TLS` has to say for the connection to be wrapped in TLS, and the one thing that is
+ * never read from the environment.
+ *
+ * The switch is a declaration and the verification is not: `rejectUnauthorized` stays true here
+ * with no environment variable able to reach it, so a deployment can turn transport security on
+ * and cannot turn certificate checking off. An environment able to say `REDIS_TLS_VERIFY=false`
+ * would be a TLS connection that authenticates nobody, which reads in a log exactly like one that
+ * does.
+ */
+const TLS_DECLARED_VALUE = 'true'
+
 /**
  * The one Redis this service opens, and the options every queue connection is built from.
  *
@@ -42,6 +54,16 @@ const UNCAPPED_REQUEST_RETRIES = null
  * defaults above reachable; a declared one always wins — including one declared empty, which is a
  * declaration and not an absence, and which ends as a connection refused against port 0 rather
  * than as a service quietly talking to the wrong Redis.
+ *
+ * **The transport is declared in the environment too, and separately from the address.** Naming a
+ * remote host says where the connection goes and nothing about how it is carried, and this class
+ * once had no way to say the second thing at all: it emitted host, port, password and the retry
+ * cap, so a deployment pointing at a Redis across a network sent `AUTH <password>` and every
+ * command that followed in the clear, with no environment variable able to change that. `REDIS_TLS`
+ * is that variable. Declared as `'true'` it adds ioredis' `tls` option, which is what makes the
+ * socket a TLS one; undeclared or declared as anything else it adds nothing, which is what
+ * loopback against the compose file's container wants. Certificate verification is not on the same
+ * switch — see the constant above.
  *
  * **Why the port is converted here.** An environment variable is a string and `ioredis` wants a
  * number, and a conversion is the factory method's work rather than the constructor's — so
@@ -62,10 +84,12 @@ export default class RedisConnection {
     host,
     port,
     password,
+    tlsOptions,
   }) {
     this.host = host
     this.port = port
     this.password = password
+    this.tlsOptions = tlsOptions
   }
 
   /**
@@ -81,12 +105,14 @@ export default class RedisConnection {
     host = this.generateHost(),
     port = this.generatePort(),
     password = this.generatePassword(),
+    tlsOptions = this.generateTlsOptions(),
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         host,
         port,
         password,
+        tlsOptions,
       })
     )
   }
@@ -137,17 +163,62 @@ export default class RedisConnection {
   }
 
   /**
+   * Generate the transport-security options the environment declares.
+   *
+   * The answer is the object `ioredis` reads as "make this socket a TLS one", or null for a
+   * connection carried as it always was. `rejectUnauthorized` is written out rather than left to
+   * the default, because it is the half of TLS that does the authenticating and a reader should
+   * not have to know Node's default to see that it is on.
+   *
+   * @returns {Record<string, *> | null} Options, or null when the environment declares no TLS.
+   */
+  static generateTlsOptions () {
+    if (this.env.REDIS_TLS !== TLS_DECLARED_VALUE) {
+      return null
+    }
+
+    return {
+      rejectUnauthorized: true,
+    }
+  }
+
+  /**
    * Generate the connection options a BullMQ queue, worker or scheduler is built with.
    *
    * @returns {import('ioredis').RedisOptions} Connection options.
    * @public
    */
   generateConnectionOptions () {
+    const tlsOptionHash = this.buildTlsOptionHash()
+
     return {
       host: this.host,
       port: this.port,
       password: this.password,
       maxRetriesPerRequest: UNCAPPED_REQUEST_RETRIES,
+      ...tlsOptionHash,
+    }
+  }
+
+  /**
+   * Build the `tls` half of the options, or nothing at all.
+   *
+   * A connection with no TLS answers an empty hash, so the key is spread away entirely rather than
+   * written as `tls: null`. `ioredis` reads the option's truthiness, so null would have carried
+   * the same behavior — but these options are read by people too, in a log or against a
+   * deployment's intent, and `tls: null` reads as TLS considered and declined where an absent key
+   * reads as TLS never in play. The second is what this repository's default is.
+   *
+   * @returns {Record<string, *>} The `tls` option, or an empty hash when no TLS is declared.
+   * @public
+   */
+  buildTlsOptionHash () {
+    if (this.tlsOptions === null) {
+      return {}
+    }
+
+    return {
+      tls: this.tlsOptions,
     }
   }
 }
@@ -157,6 +228,7 @@ export default class RedisConnection {
  *   host: string
  *   port: number
  *   password: string | null
+ *   tlsOptions: Record<string, *> | null
  * }} RedisConnectionParams
  */
 

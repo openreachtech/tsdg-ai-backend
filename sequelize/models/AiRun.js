@@ -50,19 +50,29 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * **A bulk update that writes the status is refused unless its own `where` proves it cannot break
  * the rule.** What the rule forbids is a run moving **out of** a terminal status. An update whose
  * `where` states that the rows it matches carry none of the terminal statuses cannot make that
- * move, whatever status it writes — it is provably safe rather than merely probably so, and the
- * proof is in the statement itself rather than in a row nobody read. That condition is what
+ * move, whatever status it writes. **The proof is the whole of the status condition, and not one
+ * key found inside it.** Sequelize compiles a column's condition object as a unit, and an
+ * `Op.notIn` standing beside a sibling key on the same column need not survive that compilation:
+ * `{ [Op.notIn]: [3, 4, 5], [Op.and]: [{ [Op.gte]: 1 }] }` compiles to
+ * `` (`ai_run_status_id` >= 1) `` alone, in either key order, and `Op.or` in place of `Op.and`
+ * does the same. A guard reading only the `Op.notIn` key therefore read a proof the database was
+ * never shown, and a canceled run was walked back to running under exactly that shape. So what is
+ * accepted is the status condition being `Op.notIn` over an array and nothing else at all — the
+ * one shape whose `NOT IN` is certain to reach the statement. That is what
  * `AiRunStatusRecorder#buildUnsettledAiRunCondition()` builds, which is how the recorder's own
  * transition write goes through this hook rather than around it with `hooks: false`.
  *
  * **The proof is strict, and anything short of it is the refusal.** A `where` that merely mentions
  * the status column proves nothing; one that excludes only some of the terminal statuses proves
- * nothing either; a condition stated with any operator but `Op.notIn` is one this class cannot
- * read, and an unreadable proof is no proof. Each of them is refused by name exactly as every bulk
- * status write was before. Which statuses are terminal is read from
- * `AiRunTerminalStatusInspector` — the same answer `AiRunStatusRecorder` builds its `where` out of,
- * so the proof and the thing being proved can never come to disagree about what a terminal status
- * is.
+ * nothing either; a condition stated with any operator but `Op.notIn`, or with `Op.notIn` and a
+ * second key of any kind beside it, is one this class cannot read, and an unreadable proof is no
+ * proof. A sibling Sequelize does keep — `Op.gte` beside `Op.notIn` emits both halves — is refused
+ * with the rest, because sorting the siblings it keeps from the ones it drops would put this class
+ * in the business of predicting a query compiler, and the prediction would be re-decided by every
+ * Sequelize release. Each of them is refused by name exactly as every bulk status write was
+ * before. Which statuses are terminal is read from `AiRunTerminalStatusInspector` — the same
+ * answer `AiRunStatusRecorder` builds its `where` out of, so the proof and the thing being proved
+ * can never come to disagree about what a terminal status is.
  *
  * **What neither hook closes.** `.upsert()` reaches `beforeUpsert` / `afterUpsert` and no per-row
  * hook, with no `individualHooks` option to turn into one; `.bulkCreate()` with `updateOnDuplicate`
@@ -83,10 +93,15 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * `AiRun.build({ id, AiRunStatusId: 1 }, { isNewRecord: false })`, then a save, moved a settled run.
  *
  * Nothing in this application takes any of those paths against `ai_runs` today, and each is a
- * deliberate act by a caller rather than something reached by accident. **The point of the list is
- * that it is exhaustive and true**, so a reader can tell what the guard is worth: one entry of it
- * was neither, and a reader who trusted that sentence would not have looked twice at an
- * `increment`.
+ * deliberate act by a caller rather than something reached by accident.
+ *
+ * **Read the list as the paths known to go around the hook, and not as a bound on what can move a
+ * settled run.** It has been wrong twice. Once by claiming no status is reached by arithmetic,
+ * which `increment` disproved. Once by omission that no list of this kind could have covered: the
+ * `Op.notIn` a sibling operator hides, above, moved a settled run without going around the hook at
+ * all — it went through it, carrying something the hook read as a proof. What bounds the guard is
+ * therefore the strictness of that proof rather than the length of this list, and what has
+ * established it both times is a probe run against the real table.
  *
  * @class AiRun
  * @extends {BaseAppRenchanModel}
@@ -384,11 +399,12 @@ export default class AiRun extends BaseAppRenchanModel {
   /**
    * Extract the statuses a condition states the rows it matches do not carry.
    *
-   * Only one spelling is read: the status column stated as `Op.notIn` over an array. A condition
-   * written any other way — a bare value, another operator, a nested `Op.and` — may well exclude
-   * the terminal statuses too, and this answers that it excludes nothing at all, because a proof
-   * this class cannot read is not a proof. What follows from an empty answer is the refusal that
-   * stood here before, which is the safe side of the question to be wrong on.
+   * Only one spelling is read: the status column stated as `Op.notIn` over an array, with nothing
+   * else stated about that column in the same breath. A condition written any other way — a bare
+   * value, another operator, an `Op.notIn` with a second key beside it — may well exclude the
+   * terminal statuses too, and this answers that it excludes nothing at all, because a proof this
+   * class cannot read is not a proof. What follows from an empty answer is the refusal that stood
+   * here before, which is the safe side of the question to be wrong on.
    *
    * @param {{
    *   where: *
@@ -406,13 +422,61 @@ export default class AiRun extends BaseAppRenchanModel {
       return []
     }
 
+    if (
+      !this.statesOnlyNotIn({
+        condition: aiRunStatusCondition,
+      })
+    ) {
+      return []
+    }
+
     const excludedAiRunStatusIds = aiRunStatusCondition[this.sequelizeOperators.notIn]
-      ?? null
 
     if (!Array.isArray(excludedAiRunStatusIds)) {
       return []
     }
 
     return excludedAiRunStatusIds
+  }
+
+  /**
+   * Check whether a condition on the status column states `Op.notIn` and nothing else.
+   *
+   * **A sibling key is what makes this question worth asking.** Sequelize compiles a column's
+   * condition object as a unit, so what the caller wrote and what the database is asked are not
+   * the same thing: an `Op.and` or an `Op.or` beside an `Op.notIn` replaces it outright in the
+   * compiled statement, and an `Op.gte` beside it is kept. Reading the `Op.notIn` key on its own
+   * would therefore accept a `where` whose `NOT IN` the database never sees.
+   *
+   * So both halves are asked and either one failing is the refusal: no own string key, and exactly
+   * one own symbol, which must be `Op.notIn`. Between them the two halves also answer everything
+   * that is no operator object to begin with — an array and a string answer their own indices to
+   * `Object.keys()`, and a number, a boolean and an empty object answer no symbol.
+   *
+   * Refusing the siblings Sequelize keeps along with the ones it drops is deliberate: which is
+   * which belongs to a query compiler's version, and a guard that tracked it would be re-deciding
+   * this on every upgrade.
+   *
+   * @param {{
+   *   condition: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the condition states `Op.notIn` alone.
+   */
+  static statesOnlyNotIn ({
+    condition,
+  }) {
+    const ownFieldNames = Object.keys(condition)
+
+    if (ownFieldNames.length > 0) {
+      return false
+    }
+
+    const ownOperators = Object.getOwnPropertySymbols(condition)
+
+    if (ownOperators.length !== 1) {
+      return false
+    }
+
+    return ownOperators.includes(this.sequelizeOperators.notIn)
   }
 }

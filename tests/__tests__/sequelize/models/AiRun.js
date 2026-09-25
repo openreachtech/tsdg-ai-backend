@@ -299,6 +299,177 @@ describe('AiRun', () => {
           .toBeTruthy()
       })
     })
+
+    /*
+     * The exclusion stated beside a second condition on the same column, which is the shape that
+     * walked a canceled run back to running.
+     *
+     * Sequelize compiles a column's condition object as a unit, and the `Op.notIn` does not
+     * survive that compilation intact: an `Op.and` or an `Op.or` beside it replaces it outright —
+     * `{ [Op.notIn]: [3, 4, 5], [Op.and]: [{ [Op.gte]: 1 }] }` emits `(ai_run_status_id >= 1)` and
+     * nothing more, in either key order. So the `NOT IN` a guard reading that one key would rest
+     * on is a condition the database is never shown.
+     *
+     * `Op.gte` is here too, and Sequelize does keep both halves of that one. It is refused all the
+     * same: which siblings a query compiler keeps and which it drops is that compiler's business
+     * and changes with its version, so the proof this class accepts is the one shape that carries
+     * nothing for it to decide about.
+     */
+    describe('when the condition states the exclusion beside something else', () => {
+      const cases = [
+        {
+          input: {
+            options: {
+              attributes: {
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+                startedAt: new Date('2026-10-02T11:11:11.011Z'),
+              },
+              where: {
+                id: 10330001,
+                AiRunStatusId: {
+                  [Op.notIn]: [
+                    3, // AI_RUN_STATUS.SUCCEEDED.ID
+                    4, // AI_RUN_STATUS.FAILED.ID
+                    5, // AI_RUN_STATUS.CANCELED.ID
+                  ],
+                  [Op.and]: [
+                    {
+                      [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — Sequelize emits this one alone
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        {
+          input: {
+            options: {
+              attributes: {
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+                startedAt: new Date('2026-10-02T12:12:12.012Z'),
+              },
+              where: {
+                id: 10330002,
+                AiRunStatusId: {
+                  [Op.and]: [
+                    {
+                      [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — stated before the exclusion
+                    },
+                  ],
+                  [Op.notIn]: [
+                    3, // AI_RUN_STATUS.SUCCEEDED.ID
+                    4, // AI_RUN_STATUS.FAILED.ID
+                    5, // AI_RUN_STATUS.CANCELED.ID
+                  ],
+                },
+              },
+            },
+          },
+        },
+        {
+          input: {
+            options: {
+              attributes: {
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+                startedAt: new Date('2026-10-02T13:13:13.013Z'),
+              },
+              where: {
+                id: 10330003,
+                AiRunStatusId: {
+                  [Op.notIn]: [
+                    3, // AI_RUN_STATUS.SUCCEEDED.ID
+                    4, // AI_RUN_STATUS.FAILED.ID
+                    5, // AI_RUN_STATUS.CANCELED.ID
+                  ],
+                  [Op.or]: [
+                    {
+                      [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        {
+          input: {
+            options: {
+              attributes: {
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+                startedAt: new Date('2026-10-02T14:14:14.014Z'),
+              },
+              where: {
+                id: 10330004,
+                AiRunStatusId: {
+                  [Op.or]: [
+                    {
+                      [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — stated before the exclusion
+                    },
+                  ],
+                  [Op.notIn]: [
+                    3, // AI_RUN_STATUS.SUCCEEDED.ID
+                    4, // AI_RUN_STATUS.FAILED.ID
+                    5, // AI_RUN_STATUS.CANCELED.ID
+                  ],
+                },
+              },
+            },
+          },
+        },
+        {
+          input: {
+            options: {
+              attributes: {
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+                startedAt: new Date('2026-10-02T15:15:15.015Z'),
+              },
+              where: {
+                id: 10330005,
+                AiRunStatusId: {
+                  [Op.notIn]: [
+                    3, // AI_RUN_STATUS.SUCCEEDED.ID
+                    4, // AI_RUN_STATUS.FAILED.ID
+                    5, // AI_RUN_STATUS.CANCELED.ID
+                  ],
+                  [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — a sibling Sequelize does keep
+                },
+              },
+            },
+          },
+        },
+        {
+          input: {
+            options: {
+              attributes: {
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+                startedAt: new Date('2026-10-02T16:16:16.016Z'),
+              },
+              where: {
+                id: 10330006,
+                AiRunStatusId: {
+                  [Op.notIn]: [
+                    3, // AI_RUN_STATUS.SUCCEEDED.ID
+                    4, // AI_RUN_STATUS.FAILED.ID
+                    5, // AI_RUN_STATUS.CANCELED.ID
+                  ],
+                  comparator: 1, // a key that is no operator at all
+                },
+              },
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('where.id: $input.options.where.id', ({
+        input,
+      }) => {
+        const received = AiRun.writesAiRunStatusInBulk(input)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
   })
 })
 
@@ -385,6 +556,95 @@ describe('AiRun', () => {
           input: {
             where: {
               id: 10320025,
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('where.id: $input.where.id', ({
+        input,
+      }) => {
+        const received = AiRun.excludesEveryTerminalAiRunStatus(input)
+
+        expect(received)
+          .toBeFalsy()
+      })
+    })
+
+    /*
+     * All three terminal statuses are named, and the condition still proves nothing, because a
+     * second key on the same column is what decides what Sequelize compiles. An `Op.and` or an
+     * `Op.or` beside the exclusion replaces it; an `Op.gte` is kept beside it; a key that is no
+     * operator at all compiles to a comparison against `[object Object]`. None of the four is a
+     * condition this class reads, so all four answer that nothing is excluded.
+     */
+    describe('when the exclusion is stated beside something else', () => {
+      const cases = [
+        {
+          input: {
+            where: {
+              id: 10330011,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                [Op.and]: [
+                  {
+                    [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID
+                  },
+                ],
+              },
+            },
+          },
+        },
+        {
+          input: {
+            where: {
+              id: 10330012,
+              AiRunStatusId: {
+                [Op.or]: [
+                  {
+                    [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — stated before the exclusion
+                  },
+                ],
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+              },
+            },
+          },
+        },
+        {
+          input: {
+            where: {
+              id: 10330013,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — a sibling Sequelize does keep
+              },
+            },
+          },
+        },
+        {
+          input: {
+            where: {
+              id: 10330014,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                comparator: 1, // a key that is no operator at all
+              },
             },
           },
         },
@@ -511,6 +771,74 @@ describe('AiRun', () => {
             },
           },
         },
+        {
+          input: {
+            where: {
+              id: 10330021,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                [Op.and]: [
+                  {
+                    [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — the sibling that replaces it
+                  },
+                ],
+              },
+            },
+          },
+        },
+        {
+          input: {
+            where: {
+              id: 10330022,
+              AiRunStatusId: {
+                [Op.or]: [
+                  {
+                    [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — stated before the exclusion
+                  },
+                ],
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+              },
+            },
+          },
+        },
+        {
+          input: {
+            where: {
+              id: 10330023,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — a sibling Sequelize does keep
+              },
+            },
+          },
+        },
+        {
+          input: {
+            where: {
+              id: 10330024,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                comparator: 1, // a key that is no operator at all
+              },
+            },
+          },
+        },
       ]
 
       test.each(cases)('where.id: $input.where.id', ({
@@ -520,6 +848,181 @@ describe('AiRun', () => {
 
         expect(received)
           .toHaveLength(0)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.statesOnlyNotIn()', () => {
+    /*
+     * The one condition shape the guard rests on, asked on its own.
+     *
+     * What makes it the only one is that Sequelize compiles a column's condition object as a unit:
+     * a condition carrying `Op.notIn` and nothing else is the only shape whose `NOT IN` is certain
+     * to reach the statement, whatever the compiler does with the rest. A condition object is
+     * keyed by symbols, which no test title can interpolate, so each case carries a label saying
+     * what it is.
+     */
+    describe('should be truthy', () => {
+      const cases = [
+        {
+          label: 'the three terminal statuses excluded',
+          input: {
+            condition: {
+              [Op.notIn]: [
+                3, // AI_RUN_STATUS.SUCCEEDED.ID
+                4, // AI_RUN_STATUS.FAILED.ID
+                5, // AI_RUN_STATUS.CANCELED.ID
+              ],
+            },
+          },
+        },
+        {
+          label: 'one status excluded',
+          input: {
+            condition: {
+              [Op.notIn]: [
+                1, // AI_RUN_STATUS.QUEUED.ID
+              ],
+            },
+          },
+        },
+        {
+          label: 'an exclusion stated without the array',
+          input: {
+            condition: {
+              [Op.notIn]: 3, // AI_RUN_STATUS.SUCCEEDED.ID — the array is the caller above's rule
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const received = AiRun.statesOnlyNotIn(input)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * Everything else, including the three shapes whose sibling key walked the bulk guard through,
+     * and the values that are no operator object at all — a bare number, an array and a string
+     * each answer their own indices to `Object.keys()`, which is why the string-key half of the
+     * question catches them.
+     */
+    describe('should be falsy', () => {
+      const cases = [
+        {
+          label: 'an Op.and beside the exclusion',
+          input: {
+            condition: {
+              [Op.notIn]: [
+                3, // AI_RUN_STATUS.SUCCEEDED.ID
+                4, // AI_RUN_STATUS.FAILED.ID
+                5, // AI_RUN_STATUS.CANCELED.ID
+              ],
+              [Op.and]: [
+                {
+                  [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID
+                },
+              ],
+            },
+          },
+        },
+        {
+          label: 'an Op.or stated before the exclusion',
+          input: {
+            condition: {
+              [Op.or]: [
+                {
+                  [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID
+                },
+              ],
+              [Op.notIn]: [
+                3, // AI_RUN_STATUS.SUCCEEDED.ID
+                4, // AI_RUN_STATUS.FAILED.ID
+                5, // AI_RUN_STATUS.CANCELED.ID
+              ],
+            },
+          },
+        },
+        {
+          label: 'an Op.gte beside the exclusion, which Sequelize keeps',
+          input: {
+            condition: {
+              [Op.notIn]: [
+                3, // AI_RUN_STATUS.SUCCEEDED.ID
+                4, // AI_RUN_STATUS.FAILED.ID
+                5, // AI_RUN_STATUS.CANCELED.ID
+              ],
+              [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID
+            },
+          },
+        },
+        {
+          label: 'a string key beside the exclusion',
+          input: {
+            condition: {
+              [Op.notIn]: [
+                3, // AI_RUN_STATUS.SUCCEEDED.ID
+                4, // AI_RUN_STATUS.FAILED.ID
+                5, // AI_RUN_STATUS.CANCELED.ID
+              ],
+              comparator: 1,
+            },
+          },
+        },
+        {
+          label: 'another operator on its own',
+          input: {
+            condition: {
+              [Op.in]: [
+                1, // AI_RUN_STATUS.QUEUED.ID
+                2, // AI_RUN_STATUS.RUNNING.ID
+              ],
+            },
+          },
+        },
+        {
+          label: 'an operator object carrying nothing',
+          input: {
+            condition: {},
+          },
+        },
+        {
+          label: 'a bare status id',
+          input: {
+            condition: 2, // AI_RUN_STATUS.RUNNING.ID
+          },
+        },
+        {
+          label: 'an array of status ids',
+          input: {
+            condition: [
+              1, // AI_RUN_STATUS.QUEUED.ID
+              2, // AI_RUN_STATUS.RUNNING.ID
+            ],
+          },
+        },
+        {
+          label: 'a string',
+          input: {
+            condition: 'ai-run-status-omega',
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const received = AiRun.statesOnlyNotIn(input)
+
+        expect(received)
+          .toBeFalsy()
       })
     })
   })

@@ -5,9 +5,18 @@ import {
   ConcreteMemberNotFoundJobError,
 } from '@openreachtech/renchan-job-bullmq'
 
+import {
+  MentsuLogger,
+} from '@openreachtech/mentsu-logger'
+
 import AiRunStatusRecorder from '../AiRunStatusRecorder.js'
 
 import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../../constants/aiRunFailureReasonConstants.js'
+
+import {
+  env,
+  rootPath,
+} from '../../globals/_.js'
 
 const {
   AI_RUN_FAILURE_REASON_CODE,
@@ -23,7 +32,48 @@ const {
  */
 const DEFAULT_RUN_TIME_LIMIT_MILLISECONDS = 300000
 
+const REFUSED_JOB_BODY_MESSAGE = 'refused a job body its own schema does not hold'
 const UNREADABLE_AI_RUN_ID_MESSAGE = 'refused a job body naming no run'
+
+const FAILED_AI_RUN_WORK_MESSAGE = 'the work of a run threw'
+const FAILED_DELIVERY_MESSAGE = 'a delivery failed'
+const COMPLETED_DELIVERY_MESSAGE = 'a delivery completed'
+const WORKER_ERROR_MESSAGE = 'the worker errored'
+
+const FAILED_AI_RUN_WORK_TAGS = [
+  'AiRunJob',
+  'FailedAiRunWork',
+]
+
+const FAILED_DELIVERY_TAGS = [
+  'AiRunJob',
+  'FailedDelivery',
+]
+
+const COMPLETED_DELIVERY_TAGS = [
+  'AiRunJob',
+  'CompletedDelivery',
+]
+
+const WORKER_ERROR_TAGS = [
+  'AiRunJob',
+  'WorkerError',
+]
+
+const LOG_FILE_PATH = rootPath.to('logs/ai-run-job-')
+
+/*
+ * One logger client per process, rather than one per line, exactly as `AiRunStatusRecorder` holds
+ * its own.
+ *
+ * The client owns a rotating file, and a daemon runs one of these workers per queue for the life
+ * of the process. `@openreachtech/mentsu-logger` writes only under `NODE_ENV=production`, so under
+ * the test and development environments this client is built and then never asked to write.
+ */
+const mentsuLogger = MentsuLogger.create({
+  filePath: LOG_FILE_PATH,
+  env,
+})
 
 /**
  * The worker every AI run job extends, holding the run's whole lifecycle.
@@ -50,8 +100,34 @@ const UNREADABLE_AI_RUN_ID_MESSAGE = 'refused a job body naming no run'
  * has not already settled, and answers whether this writer was the one that wrote. A delivery that
  * is told no stops without writing anything further, so a second execution can never produce a
  * second terminal state. The second is that the body of work re-reads everything it needs from the
- * database — the job body carries an id and nothing else — so a re-execution starts from the record
- * rather than from a copy of it.
+ * database, starting from the record rather than from a copy of it.
+ *
+ * **The queue is a boundary, and what crosses it is held to the schema here.** The framework hands
+ * `executeJob` whatever `jobModel.normalizeBody()` made of the job's stored data and never asks
+ * the body whether its schema is satisfied, so nothing upstream of this class has checked it: the
+ * dispatcher's check ran in another process, against what that process was about to enqueue, and a
+ * body can also arrive from a hand-written `Queue.add` against the same Redis. So `#executeJob()`
+ * asks `JobBody#isValid()` first and refuses a body that fails, and then hands the concrete job a
+ * body **rebuilt from the schema's declared fields** rather than the one that arrived — a
+ * normalized body keeps every undeclared key it was given, and `#executeAiRunWork()` is written by
+ * a service reading the sentence below. What that sentence promises has to be made true here
+ * rather than assumed.
+ *
+ * **What the concrete job receives is the schema's fields and nothing else**, which for this
+ * manifest is the run's id alone. That is not a description of what callers send; it is what
+ * `#buildDeclaredJobBody()` constructs, so a body carrying a callback URL or a result beside the
+ * id arrives at the work with those keys gone.
+ *
+ * **Every line this class writes goes through `MentsuLogger`, and none of them repeats a message
+ * it did not compose.** The two halves are one decision. `this.timber` is the engine's console
+ * wrapper and it is replaced by no-ops under `NODE_ENV=production`, which is the one environment
+ * where a stalled or failing worker has to leave a trace — and it is the environment
+ * `AiRunStatusRecorder`'s logger writes in, so a worker on `timber` and a recorder on
+ * `MentsuLogger` would record one feature's failures in mutually exclusive environments. The
+ * bound-message rule comes with it: a thrown error's `message` is text this class did not write,
+ * and at a job that fetches media or calls a provider it can carry a URL, a file name or a
+ * fragment of the medium itself. So a failure line names the run, the reason code and the error's
+ * class, each of which this service already holds, and the message is left where it was thrown.
  *
  * **The time limit is a race this class runs, not a setting it asks the queue for.** Nothing in
  * `@openreachtech/renchan-job-bullmq` provides a per-job time limit under any name, and BullMQ's
@@ -160,6 +236,15 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   }
 
   /**
+   * get: the one logger client this process writes through.
+   *
+   * @returns {MentsuLogger} - Logger client.
+   */
+  static get mentsuLogger () {
+    return mentsuLogger
+  }
+
+  /**
    * Create the recorder that moves a run between statuses.
    *
    * @returns {AiRunStatusRecorder} - The recorder.
@@ -181,10 +266,12 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   /**
    * Execute one delivery of an AI run job.
    *
-   * The run is claimed first and settled last, and between the two nothing but the concrete job's
-   * own work runs. A claim that is refused means another writer has already settled the run — a
-   * re-delivery of a job whose run finished — and this delivery stops there rather than doing the
-   * work a second time and writing over a terminal state.
+   * The body is held to its schema first, and what the work is handed afterwards is built from the
+   * schema's fields rather than passed through. The run is claimed next and settled last, and
+   * between the two nothing but the concrete job's own work runs. A claim that is refused means
+   * another writer has already settled the run — a re-delivery of a job whose run finished — and
+   * this delivery stops there rather than doing the work a second time and writing over a terminal
+   * state.
    *
    * The returned value is stored in Redis by the framework, so it carries three small fields and
    * never the run's result: the result belongs in `ai_runs`, where the callback and the read-back
@@ -197,7 +284,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
    * @returns {Promise<AiRunJobResult>} What this delivery did.
-   * @throws {Error} When the job body names no run.
+   * @throws {Error} When the body fails its schema, or when it names no run.
    * @public
    */
   async executeJob ({
@@ -205,8 +292,20 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     context,
     parcel,
   }) {
-    const aiRunId = this.extractAiRunId({
+    if (
+      !this.isValidJobBody({
+        body,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#executeJob() ${REFUSED_JOB_BODY_MESSAGE}`)
+    }
+
+    const declaredBody = this.buildDeclaredJobBody({
       body,
+    })
+
+    const aiRunId = this.extractAiRunId({
+      body: declaredBody,
     })
 
     if (aiRunId === null) {
@@ -230,23 +329,116 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
 
     return this.settleAiRun({
       aiRunId,
-      body,
+      body: declaredBody,
       context,
       parcel,
     })
   }
 
   /**
-   * Extract the run a delivery is about, out of the job body.
+   * Check whether a job body satisfies the schema its manifest declares.
    *
-   * A body that failed its schema arrives as null, and a body that carries no run is the same
-   * defect from this class's side — both answer null, and the caller above refuses by name rather
-   * than letting a property read fault somewhere deeper.
+   * The framework builds the body and never asks this question, so it is asked here, of the
+   * framework's own value object rather than of a rule restated in this file — the schema is the
+   * manifest's, and a second reading of it here would be a second thing to keep in step.
+   *
+   * What it rules out is a body that is not an object at all and a declared field holding a value
+   * of the wrong kind. What it does not rule out is a declared field being absent, or an id being
+   * zero or negative: the schema states the kind of a field and not whether it is required, and
+   * `#executeJob()` refuses an absent id by name for exactly that reason.
    *
    * @param {{
    *   body: Record<string, *> | null
    * }} params - Parameters.
-   * @returns {number | null} The run's id, or null when the body names none.
+   * @returns {boolean} Whether the body satisfies the schema.
+   * @public
+   */
+  isValidJobBody ({
+    body,
+  }) {
+    const jobBody = this.createJobBody({
+      body,
+    })
+
+    return jobBody.isValid()
+  }
+
+  /**
+   * Create the value object a job body is held to its schema by.
+   *
+   * @param {{
+   *   body: Record<string, *> | null
+   * }} params - Parameters.
+   * @returns {InstanceType<JobBodyCtor>} The value object.
+   * @public
+   */
+  createJobBody ({
+    body,
+  }) {
+    const BoundJobBodyCtor = this.Ctor.JobBodyCtor.as(this.manifest.bodySchema)
+
+    return BoundJobBodyCtor.create({
+      normalizedBody: body,
+    })
+  }
+
+  /**
+   * Build the body the concrete job's work is handed, out of the schema's declared fields.
+   *
+   * **A body that satisfied its schema is not a body carrying only what the schema declares.** The
+   * framework's normalization keeps every key it was given, so a body dispatched with a callback
+   * URL or a result beside the run's id arrives here carrying them, and handing that on would make
+   * `#executeAiRunWork()` — written by another service, against this class's own sentence about
+   * what a body carries — an entry point for fields nobody declared. What is built here carries
+   * the declared fields the body actually holds, and nothing else, which is that sentence made
+   * true rather than assumed.
+   *
+   * It is asked after the gate above, so what reaches it is an object.
+   *
+   * @param {{
+   *   body: Record<string, *>
+   * }} params - Parameters.
+   * @returns {Record<string, *>} The body the work is handed.
+   * @public
+   */
+  buildDeclaredJobBody ({
+    body,
+  }) {
+    const declaredFieldNames = Object.keys(this.manifest.bodySchema)
+
+    return declaredFieldNames
+      .filter(it => Object.hasOwn(body, it))
+      .reduce(
+        (declaredBody, fieldName) => ({
+          ...declaredBody,
+          [fieldName]: body[fieldName],
+        }),
+        {}
+      )
+  }
+
+  /**
+   * Extract the run a delivery is about, out of the job body.
+   *
+   * **What it answers null for is a body that does not carry the field**, which the schema does
+   * not rule out: `{ aiRunId: Integer }` states what the field holds when it is there and not that
+   * it has to be, so `{}` and a body carrying some other key both satisfy the schema and both name
+   * no run. The caller above refuses by name rather than letting a property read fault somewhere
+   * deeper.
+   *
+   * **A number that is no id, and an id no row carries, are both answered rather than refused
+   * here**, and they part company one call later. `AiRunStatusRecorder` holds every key it is
+   * given to `AiRunKeyInspector`'s rule — a positive integer of at most nineteen digits — so a
+   * zero or a negative is raised there as a defect in the call, named as the field it arrived in.
+   * A well-formed id that no row carries is not a defect: it is answered false, telling the
+   * delivery there is nothing to do, which is the same answer a re-delivery of a settled run gets
+   * and the answer the at-least-once lifecycle is built on. Neither judgement is restated here,
+   * because a second copy of the id rule is a second thing to keep in step with the first.
+   *
+   * @param {{
+   *   body: Record<string, *> | null
+   * }} params - Parameters.
+   * @returns {number | null} The run's id, or null when the body carries none.
    * @public
    */
   extractAiRunId ({
@@ -313,7 +505,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    *
    * @param {{
    *   aiRunId: number
-   *   body: Record<string, *> | null
+   *   body: Record<string, *>
    *   context: InstanceType<ContextCtor>
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
@@ -354,7 +546,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * already answered is a handled rejection and not a crash of the daemon.
    *
    * @param {{
-   *   body: Record<string, *> | null
+   *   body: Record<string, *>
    *   context: InstanceType<ContextCtor>
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
@@ -382,11 +574,11 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * A work that threw is an outcome rather than an exception, because this class has to record the
    * failure before anything else sees it — a run whose worker threw and wrote nothing would sit at
    * running until its retention sweep, and the client system would wait on a callback that never
-   * comes. The error is logged where it happened, so the reason code in the row can be read back
-   * to a stack trace.
+   * comes. A line naming the run and the reason code is written where the failure happened, so the
+   * reason code in the row can be read back to the delivery it came from.
    *
    * @param {{
-   *   body: Record<string, *> | null
+   *   body: Record<string, *>
    *   context: InstanceType<ContextCtor>
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
@@ -415,9 +607,14 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
         error,
       })
 
-      this.timber.error(`[${this.Ctor.name}] the work of a run threw`, {
+      const aiRunId = this.extractAiRunId({
+        body,
+      })
+
+      this.logFailedAiRunWork({
+        aiRunId,
         failureReasonCode,
-        message: error.message,
+        error,
       })
 
       return {
@@ -438,9 +635,14 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * The answer is written to `ai_runs.result_body` as it arrives. A run that legitimately settled
    * nothing answers null and is a success, which is the rule `AiRunStatusRecorder` already holds.
    *
+   * **The body it is handed carries the manifest's declared fields and nothing else**, which for
+   * `BaseAiRunJobManifest` is the run's id alone. That is guaranteed by `#buildDeclaredJobBody()`
+   * rather than by what callers happen to enqueue, so an implementation may read the declared
+   * fields without checking them and will find nothing else there to read.
+   *
    * @abstract
    * @param {{
-   *   body: Record<string, *> | null
+   *   body: Record<string, *>
    *   context: InstanceType<ContextCtor>
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
@@ -484,6 +686,36 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     error,
   }) {
     return AI_RUN_FAILURE_REASON_CODE.PROVIDER_CALL_FAILED
+  }
+
+  /**
+   * Write the line a work that threw leaves behind.
+   *
+   * **The message the error carries is deliberately not repeated.** It is text this class did not
+   * compose, and at a job fetching media or calling a provider it is built from the very thing the
+   * run was about — a URL, a file name, a fragment of a medium — so repeating it would put the
+   * payload into a file kept for operators. What is written instead is the run's id, the reason
+   * code the row now carries and the error's own class, each of which this service already holds;
+   * the three together are what tie a row to the delivery that failed it, and none of them is text
+   * a caller chose.
+   *
+   * @param {{
+   *   aiRunId: number | null
+   *   failureReasonCode: string
+   *   error: Error
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedAiRunWork ({
+    aiRunId,
+    failureReasonCode,
+    error,
+  }) {
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${FAILED_AI_RUN_WORK_MESSAGE}: AiRunId ${aiRunId}, ${failureReasonCode}, ${error.constructor.name}`,
+      tags: FAILED_AI_RUN_WORK_TAGS,
+    })
   }
 
   /**
@@ -634,9 +866,11 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   /**
    * Handle the queue reporting a delivery completed.
    *
-   * Nothing is recorded here. The run reached its terminal state inside `#executeJob()`, where the
-   * conditional write decided whether this delivery was the one that settled it; a second write
-   * from an event handler could only undo that decision.
+   * Nothing is recorded against the run here. It reached its terminal state inside
+   * `#executeJob()`, where the conditional write decided whether this delivery was the one that
+   * settled it; a second write from an event handler could only undo that decision. The line this
+   * writes is the queue's own event, carrying the status the delivery came from and nothing of
+   * what the delivery answered.
    *
    * @override
    * @param {{
@@ -652,8 +886,9 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     result,
     previousStatus,
   }) {
-    this.timber.log(`[${this.Ctor.name}] a delivery completed`, {
-      previousStatus,
+    this.Ctor.mentsuLogger.log({
+      message: `${this.Ctor.name} ${COMPLETED_DELIVERY_MESSAGE}: ${previousStatus}`,
+      tags: COMPLETED_DELIVERY_TAGS,
     })
 
     return null
@@ -661,6 +896,11 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
 
   /**
    * Handle the queue reporting a delivery failed.
+   *
+   * The error's message is left where it was thrown, for the reason `#logFailedAiRunWork()` gives:
+   * it is text this class did not compose, and a job that fetches media or calls a provider throws
+   * with the payload in it. The status the delivery came from and the error's class are the
+   * queue's own vocabulary and this service's, so they are what the line carries.
    *
    * @override
    * @param {{
@@ -676,9 +916,9 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     error,
     previousStatus,
   }) {
-    this.timber.error(`[${this.Ctor.name}] a delivery failed`, {
-      previousStatus,
-      message: error.message,
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${FAILED_DELIVERY_MESSAGE}: ${previousStatus}, ${error.constructor.name}`,
+      tags: FAILED_DELIVERY_TAGS,
     })
 
     return null
@@ -708,6 +948,10 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   /**
    * Handle the worker itself erroring.
    *
+   * This is the queue connection failing rather than a run failing, so no run is named and there
+   * is nothing to name one with. What is written is the error's class, on the same bound-message
+   * rule the rest of this file keeps.
+   *
    * @override
    * @param {{
    *   error: Error
@@ -718,8 +962,9 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   onWorkerError ({
     error,
   }) {
-    this.timber.error(`[${this.Ctor.name}] the worker errored`, {
-      message: error.message,
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${WORKER_ERROR_MESSAGE}: ${error.constructor.name}`,
+      tags: WORKER_ERROR_TAGS,
     })
 
     return null
@@ -788,6 +1033,10 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
 
 /**
  * @typedef {typeof import('@openreachtech/renchan-job-bullmq').JobModel} JobModelCtor
+ */
+
+/**
+ * @typedef {typeof import('@openreachtech/renchan-job-bullmq').JobBody} JobBodyCtor
  */
 
 /**

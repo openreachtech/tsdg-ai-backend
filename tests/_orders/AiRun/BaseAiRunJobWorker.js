@@ -1,5 +1,7 @@
 import BaseAiRunJobWorker from '../../../app/aiRun/jobs/BaseAiRunJobWorker.js'
 
+import BaseAiRunJobManifest from '../../../app/aiRun/jobs/BaseAiRunJobManifest.js'
+
 /*
  * Why the recorder is handed in rather than run for real.
  *
@@ -54,7 +56,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 300000,
@@ -116,7 +120,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 300000,
@@ -182,7 +188,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 300000,
@@ -250,7 +258,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 300000,
@@ -316,7 +326,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 300000,
@@ -389,7 +401,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 30000,
@@ -467,7 +481,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 1,
@@ -548,7 +564,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 30000,
@@ -631,7 +649,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 30000,
@@ -712,7 +732,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 30000,
@@ -736,19 +758,16 @@ describe('BaseAiRunJobWorker', () => {
 describe('BaseAiRunJobWorker', () => {
   describe('#executeJob()', () => {
     /*
-     * A body that names no run is refused before any status is asked for, so a malformed delivery
-     * cannot move a run it cannot identify.
+     * A body that carries the field but not a run is refused before any status is asked for, so a
+     * malformed delivery cannot move a run it cannot identify.
+     *
+     * Both shapes below satisfy the schema: `{ aiRunId: Integer }` states what the field holds
+     * when it is there and not that it has to be, so a body with no keys and a body carrying some
+     * other key are each valid and each name nothing. The refusal is this class's rather than the
+     * schema's for exactly that reason.
      */
     describe('should refuse a job body naming no run', () => {
       const cases = [
-        {
-          params: {
-            body: null,
-            context: {},
-            parcel: {},
-          },
-          label: 'a body that failed its schema',
-        },
         {
           params: {
             body: {},
@@ -756,6 +775,16 @@ describe('BaseAiRunJobWorker', () => {
             parcel: {},
           },
           label: 'a body carrying no field at all',
+        },
+        {
+          params: {
+            body: {
+              runKey: 'run-key-10330101',
+            },
+            context: {},
+            parcel: {},
+          },
+          label: 'a body carrying the run key instead of the id',
         },
       ]
 
@@ -767,7 +796,9 @@ describe('BaseAiRunJobWorker', () => {
         const worker = new BaseAiRunJobWorker({
           engine: {},
           config: {},
-          manifest: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
           dispatcherHash: {},
           errorHash: {},
           runTimeLimitMilliseconds: 30000,
@@ -784,6 +815,159 @@ describe('BaseAiRunJobWorker', () => {
         expect(saveRunningAiRunOnce)
           .not
           .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The queue is a boundary and nothing upstream of this method checks what crosses it. The
+     * dispatcher's own check ran in the process that enqueued, against what that process was about
+     * to send, and the framework hands a worker whatever `jobModel.normalizeBody()` made of the
+     * job's stored data without asking the body anything. So a body that fails its schema is
+     * refused here, before a status is asked for.
+     */
+    describe('should refuse a job body its schema does not hold', () => {
+      const cases = [
+        {
+          params: {
+            body: null,
+            context: {},
+            parcel: {},
+          },
+          label: 'no body at all',
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 'ai-run-id-omega',
+            },
+            context: {},
+            parcel: {},
+          },
+          label: 'an id that is not an integer',
+        },
+        {
+          params: {
+            body: {
+              aiRunId: null,
+            },
+            context: {},
+            parcel: {},
+          },
+          label: 'an id declared as nothing',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        params,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+          },
+        })
+
+        const actual = () => worker.executeJob(params)
+
+        await expect(actual)
+          .rejects
+          .toThrow('refused a job body its own schema does not hold')
+        expect(saveRunningAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A body satisfying its schema is not a body carrying only what the schema declares — the
+     * framework's normalization keeps every key it was given. What the concrete job's work is
+     * handed is therefore rebuilt from the declared fields, so a delivery carrying a callback URL
+     * or a result beside the run's id reaches the work with those gone.
+     *
+     * This is the sentence `#executeAiRunWork()`'s own documentation makes to the service that
+     * writes it, asserted where it is made true rather than where it is written down.
+     */
+    describe('should hand the work only the fields the schema declares', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10330111,
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10330111',
+              resultBody: '{"fields":[{"fieldPath":"subject.alpha"}]}',
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10330111,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10330112,
+              runKey: 'run-key-10330112',
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10330112,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+          },
+        })
+        const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+
+        await worker.executeJob(params)
+
+        expect(executeAiRunWorkSpy)
+          .toHaveBeenCalledWith({
+            body: expected,
+            context: params.context,
+            parcel: params.parcel,
+          })
       })
     })
   })

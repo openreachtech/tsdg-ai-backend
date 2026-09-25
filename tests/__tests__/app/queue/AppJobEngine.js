@@ -162,6 +162,41 @@ describe('AppJobEngine', () => {
 })
 
 describe('AppJobEngine', () => {
+  describe('.buildRedisConfig()', () => {
+    /*
+     * This is the config BullMQ is actually handed, so it is where a deployment's `REDIS_TLS`
+     * either reaches the connection or does not. Naming a remote host says where the connection
+     * goes and nothing about how it is carried; without the `tls` option below, the password and
+     * every command after it cross the network in the clear.
+     */
+    test('should carry the tls option when the environment declares one', () => {
+      const expected = {
+        host: 'redis.live.example.net',
+        port: 36379,
+        password: 'queue-password-kappa',
+        maxRetriesPerRequest: null,
+        tls: {
+          rejectUnauthorized: true,
+        },
+      }
+
+      jest.spyOn(RedisConnection, 'env', 'get')
+        .mockReturnValue(/** @type {*} */ ({
+          REDIS_HOST: 'redis.live.example.net',
+          REDIS_PORT: '36379',
+          REDIS_PASSWORD: 'queue-password-kappa',
+          REDIS_TLS: 'true',
+        }))
+
+      const actual = AppJobEngine.buildRedisConfig()
+
+      expect(actual)
+        .toEqual(expected)
+    })
+  })
+})
+
+describe('AppJobEngine', () => {
   describe('.createRedisConnection()', () => {
     test('should be an instance of RedisConnection', () => {
       const actual = AppJobEngine.createRedisConnection()

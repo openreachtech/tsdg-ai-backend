@@ -33,6 +33,16 @@ import AppJobEngine from '../app/queue/AppJobEngine.js'
  * registration: a service that adds a job directory under that path is picked up with no file
  * edited here. No service has added one yet — the concrete job of a service belongs to that
  * service — so this daemon starts, listens on nothing, and is ready for the first one.
+ *
+ * **The other half of that sentence: the path is the only thing between a file and being run at
+ * boot.** Every `BaseJobWorker` subclass the scan finds under `workersPath` is instantiated and
+ * bound to a queue, with nothing asking whether it was meant to be — no allow-list, no naming
+ * rule, no per-file opt-in. What makes that safe here is only that the directory is part of this
+ * repository and arrives through review like any other source: a `.js` file landing in it by any
+ * other route — a build step writing there, a dependency installing into it, a deployment
+ * unpacking an archive over it — is a file this process will execute. That is the framework's
+ * design and this note is not a complaint about it; it is what a reader has to know before
+ * treating `app/jobs/` as an ordinary directory.
  */
 
 await activate()

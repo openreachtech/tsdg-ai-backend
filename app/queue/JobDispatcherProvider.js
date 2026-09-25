@@ -2,6 +2,41 @@ import {
   ProcessClerk,
 } from '@openreachtech/renchan-job-bullmq'
 
+import {
+  MentsuLogger,
+} from '@openreachtech/mentsu-logger'
+
+import {
+  env,
+  rootPath,
+} from '../globals/_.js'
+
+const FAILED_TEARDOWN_MESSAGE = 'a queue connection would not close'
+const FAILED_SHUTDOWN_MESSAGE = 'the shutdown of the queue connections threw'
+
+const FAILED_TEARDOWN_TAGS = [
+  'JobDispatcher',
+  'FailedTeardown',
+]
+
+const FAILED_SHUTDOWN_TAGS = [
+  'JobDispatcher',
+  'FailedShutdown',
+]
+
+const LOG_FILE_PATH = rootPath.to('logs/job-dispatcher-')
+
+/*
+ * One logger client per process, as `AiRunStatusRecorder` and `BaseAiRunJobWorker` each hold one.
+ *
+ * `@openreachtech/mentsu-logger` writes only under `NODE_ENV=production`, which is where a
+ * shutdown nobody watched is the only record there will be of it.
+ */
+const mentsuLogger = MentsuLogger.create({
+  filePath: LOG_FILE_PATH,
+  env,
+})
+
 /**
  * The live job dispatchers of one process, and the whole of their lifetime.
  *
@@ -14,8 +49,18 @@ import {
  * `AiRunJobDispatchRegistrar` passes `keepsConnection: true` for exactly that reason, which leaves
  * closing the connection to whoever opened it. This class is that whoever.
  *
- * **What it promises.** One dispatcher per dispatcher class, built once, reused by everything that
- * asks, and closed once when the process is asked to stop.
+ * **What it promises.** One dispatcher per dispatcher class, built once **and successfully**,
+ * reused by everything that asks, and closed once when the process is asked to stop.
+ *
+ * **A build that failed is not kept, and that word is the whole of the difference.** The pool
+ * holds the promise rather than the dispatcher, so a build that rejects leaves a rejected promise
+ * in it — and presence is all `#hasJobDispatcher()` asks about, so every later ask would be handed
+ * that same rejection without a second build ever being attempted. One Redis blip on a process's
+ * first accepted run would then fail every run that process accepted afterwards, until somebody
+ * restarted it, because the renderer waits for this promise before it opens its transaction. So
+ * the rejection removes its own entry, and the next ask builds again. What is still reused on the
+ * failure path is the failure of the **in-flight** build, which is what the pooling is for: two
+ * callers asking at once share one attempt, and both are told it failed.
  *
  * **Why the pool is static, and keyed by the dispatcher class.** A cache is not a value: held on
  * an instance it would join this object's equality and serialization, which the class design
@@ -32,6 +77,12 @@ import {
  * second asker wait for the first build instead of starting a second one: the check and the store
  * happen in the same synchronous step, so no `await` sits between them for a second caller to slip
  * through.
+ *
+ * **The shutdown owes the exit, so it takes it whatever the teardowns do.** Each dispatcher is
+ * closed on its own and a failure to close one is written down rather than thrown, so one stuck
+ * connection does not leave the others open; and the whole teardown sits inside a guard, so the
+ * exit below it is reached on every path. Attaching a `SIGINT` handler removes the one Node
+ * installed, and what that handler replaced was a process that ended.
  */
 export default class JobDispatcherProvider {
   /**
@@ -40,6 +91,18 @@ export default class JobDispatcherProvider {
    * @type {WeakMap<JobDispatcherCtor, Promise<JobDispatcher>>}
    */
   static jobDispatcherPromisePool = new WeakMap()
+
+  /**
+   * Pool of shutdown sinks, keyed by the provider that built each.
+   *
+   * A sink is a hash of handler functions, and a handler is removed from a process by its
+   * identity. Rebuilding the hash per attach would hand `process.on` a second function answering
+   * the same signal and leave `#detachSink()` with nothing it could name, so the one this provider
+   * built is kept — here rather than on the instance, because a pool is not a value.
+   *
+   * @type {WeakMap<JobDispatcherProvider, Record<string, () => Promise<void>>>}
+   */
+  static shutdownSinkPool = new WeakMap()
 
   /**
    * Constructor.
@@ -85,6 +148,15 @@ export default class JobDispatcherProvider {
    */
   static get ProcessClerkCtor () {
     return ProcessClerk
+  }
+
+  /**
+   * get: the one logger client this process writes through.
+   *
+   * @returns {MentsuLogger} Logger client.
+   */
+  static get mentsuLogger () {
+    return mentsuLogger
   }
 
   /**
@@ -136,6 +208,10 @@ export default class JobDispatcherProvider {
   /**
    * Check whether a dispatcher class has already been built for.
    *
+   * Presence in the pool is the whole of the answer, which it can be because a build that failed
+   * takes its own entry back out — so an entry present is an entry worth waiting on, either
+   * because it holds a dispatcher or because it is still trying to build one.
+   *
    * @param {{
    *   JobDispatcherCtor: JobDispatcherCtor
    * }} params - Parameters.
@@ -155,6 +231,13 @@ export default class JobDispatcherProvider {
    * The promise is stored rather than awaited, so nothing between the check above and this store
    * lets a second caller start a second build.
    *
+   * **The rejection handler is attached to the promise before it is stored, and it is attached to
+   * a branch of it rather than in its place.** The pool keeps the original, so a caller awaiting
+   * it still sees the rejection and can answer for it; what the branch does is take the entry back
+   * out, so the ask after this one builds again instead of being handed a failure from minutes
+   * ago. Attaching it here rather than at the ask is also what keeps the rejection handled when
+   * nobody is awaiting.
+   *
    * @param {{
    *   JobDispatcherCtor: JobDispatcherCtor
    * }} params - Parameters.
@@ -168,7 +251,15 @@ export default class JobDispatcherProvider {
       JobDispatcherCtor,
     })
 
-    this.JobDispatcherCtors.push(JobDispatcherCtor)
+    jobDispatcherPromise.catch(() =>
+      this.removeJobDispatcherFromPool({
+        JobDispatcherCtor,
+      })
+    )
+
+    this.recordJobDispatcherCtor({
+      JobDispatcherCtor,
+    })
 
     return this.Ctor.jobDispatcherPromisePool.set(
       JobDispatcherCtor,
@@ -192,6 +283,50 @@ export default class JobDispatcherProvider {
   }
 
   /**
+   * Take the entry of a dispatcher class back out of the pool.
+   *
+   * What reaches this is a build that rejected. The class stays in `#JobDispatcherCtors`, because
+   * a later ask can build it successfully and there would then be a connection to close; a class
+   * with no entry is simply nothing for the shutdown to close.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   * }} params - Parameters.
+   * @returns {boolean} Whether an entry was there to remove.
+   * @public
+   */
+  removeJobDispatcherFromPool ({
+    JobDispatcherCtor,
+  }) {
+    return this.Ctor.jobDispatcherPromisePool.delete(JobDispatcherCtor)
+  }
+
+  /**
+   * Record a dispatcher class as one this provider is responsible for closing.
+   *
+   * It is recorded once however often it is built. A class whose first build failed is built again
+   * by the next ask, and a second entry in this array would be a second teardown of the one
+   * connection the successful build opened.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   * }} params - Parameters.
+   * @returns {Array<JobDispatcherCtor>} The classes this provider is responsible for.
+   * @public
+   */
+  recordJobDispatcherCtor ({
+    JobDispatcherCtor,
+  }) {
+    if (this.JobDispatcherCtors.includes(JobDispatcherCtor)) {
+      return this.JobDispatcherCtors
+    }
+
+    this.JobDispatcherCtors.push(JobDispatcherCtor)
+
+    return this.JobDispatcherCtors
+  }
+
+  /**
    * Extract the pooled promise of a dispatcher class.
    *
    * @param {{
@@ -210,15 +345,63 @@ export default class JobDispatcherProvider {
   /**
    * Attach the handlers that close every open queue connection when the process is asked to stop.
    *
+   * **Attaching twice attaches once.** A handler is removed from a process by its identity, and
+   * `process.on` handed the same function twice registers it twice — so a provider that rebuilt
+   * its sink per attach would answer one `SIGINT` as many times as it had been attached, and
+   * `ProcessClerk#detachSink()` could never name any of them. The sink is therefore built once and
+   * kept, and it is detached immediately before it is attached: detaching a handler that is not
+   * registered does nothing, so the first call attaches and every call after it leaves one
+   * registration standing.
+   *
    * @returns {NodeJS.Process | null} The process the handlers were attached to.
    * @public
    */
   attachShutdownSink () {
-    const sink = this.buildShutdownSink()
+    const sink = this.ensureShutdownSink()
+
+    this.processClerk.detachSink({
+      sink,
+    })
 
     return this.processClerk.attachSink({
       sink,
     })
+  }
+
+  /**
+   * Answer this provider's one shutdown sink, building it the first time it is asked for.
+   *
+   * @returns {Record<string, () => Promise<void>>} The sink.
+   * @public
+   */
+  ensureShutdownSink () {
+    if (!this.hasShutdownSink()) {
+      this.addShutdownSinkToPool()
+    }
+
+    return this.extractShutdownSink()
+  }
+
+  /**
+   * Check whether this provider has built its shutdown sink.
+   *
+   * @returns {boolean} True when the pool already holds one.
+   * @public
+   */
+  hasShutdownSink () {
+    return this.Ctor.shutdownSinkPool.has(this)
+  }
+
+  /**
+   * Put this provider's shutdown sink into the pool.
+   *
+   * @returns {WeakMap<JobDispatcherProvider, Record<string, () => Promise<void>>>} The pool.
+   * @public
+   */
+  addShutdownSinkToPool () {
+    const sink = this.buildShutdownSink()
+
+    return this.Ctor.shutdownSinkPool.set(this, sink)
   }
 
   /**
@@ -235,6 +418,18 @@ export default class JobDispatcherProvider {
   }
 
   /**
+   * Extract this provider's pooled shutdown sink.
+   *
+   * @returns {Record<string, () => Promise<void>> | null} The sink, or null when the pool holds
+   * none.
+   * @public
+   */
+  extractShutdownSink () {
+    return this.Ctor.shutdownSinkPool.get(this)
+      ?? null
+  }
+
+  /**
    * Close every open queue connection, then end the process.
    *
    * **The exit is part of this, and not an overreach.** Attaching a `SIGINT` handler to a Node
@@ -242,11 +437,24 @@ export default class JobDispatcherProvider {
    * the queues and returned would leave `Ctrl-C` doing nothing at all. So whoever answers the
    * signal owes the exit, and that is this method.
    *
+   * **Which is why the teardown cannot decide whether the exit happens.** A teardown that rejected
+   * used to carry the rejection out of here, and the line below it never ran: the process was left
+   * running with its default `SIGINT` handling already removed, so the signal that asked it to
+   * stop had made it unstoppable. The guard is what settles that — the failure is written down and
+   * the exit is taken, because a queue connection that would not close is not a reason to keep a
+   * process the operator asked to end.
+   *
    * @returns {Promise<void>}
    * @public
    */
   async shutdownJobDispatchers () {
-    await this.teardownJobDispatchers()
+    try {
+      await this.teardownJobDispatchers()
+    } catch (error) {
+      this.logFailedShutdown({
+        error,
+      })
+    }
 
     this.processClerk.exit()
   }
@@ -254,32 +462,107 @@ export default class JobDispatcherProvider {
   /**
    * Close the queue connection of every dispatcher this provider built.
    *
-   * @returns {Promise<Array<*>>} What each teardown answered.
+   * Each is closed on its own and answers for itself, so the whole set is settled rather than
+   * abandoned at the first one that would not close — `Promise.all` over promises that reject
+   * stops waiting on the rest, and the rest are the connections nothing else is going to close.
+   *
+   * @returns {Promise<Array<*>>} What each teardown answered, null in the place of one that threw
+   * and of a dispatcher class no build ever succeeded for.
    * @public
    */
   async teardownJobDispatchers () {
-    const jobDispatchers = await this.extractJobDispatchers()
-
-    return Promise.all(
-      jobDispatchers.map(it => it.teardown())
-    )
-  }
-
-  /**
-   * Extract every dispatcher this provider built.
-   *
-   * @returns {Promise<Array<JobDispatcher>>} The dispatchers.
-   * @public
-   */
-  async extractJobDispatchers () {
     return Promise.all(
       this.JobDispatcherCtors
         .map(it =>
-          this.extractJobDispatcherPromise({
+          this.teardownJobDispatcher({
             JobDispatcherCtor: it,
           })
         )
     )
+  }
+
+  /**
+   * Close the queue connection of one dispatcher class.
+   *
+   * A class with no entry in the pool is one whose build failed and was taken back out, so there
+   * is no connection of it to close and nothing to report.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   * }} params - Parameters.
+   * @returns {Promise<*>} What the teardown answered, or null when it threw or there was nothing
+   * to close.
+   * @public
+   */
+  async teardownJobDispatcher ({
+    JobDispatcherCtor,
+  }) {
+    const jobDispatcherPromise = this.extractJobDispatcherPromise({
+      JobDispatcherCtor,
+    })
+
+    if (jobDispatcherPromise === null) {
+      return null
+    }
+
+    try {
+      const jobDispatcher = await jobDispatcherPromise
+
+      return await jobDispatcher.teardown()
+    } catch (error) {
+      this.logFailedJobDispatcherTeardown({
+        JobDispatcherCtor,
+        error,
+      })
+
+      return null
+    }
+  }
+
+  /**
+   * Write the line a queue connection that would not close leaves behind.
+   *
+   * The dispatcher class names which connection it was, which is the one thing an operator reading
+   * this needs and the one thing a settled-rather-than-raced teardown would otherwise lose. The
+   * error's class is named and its message is not, on the rule this feature keeps throughout: a
+   * message is text this service did not compose.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   *   error: Error
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedJobDispatcherTeardown ({
+    JobDispatcherCtor,
+    error,
+  }) {
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${FAILED_TEARDOWN_MESSAGE}: ${JobDispatcherCtor.name}, ${error.constructor.name}`,
+      tags: FAILED_TEARDOWN_TAGS,
+    })
+  }
+
+  /**
+   * Write the line a shutdown that threw outside any one teardown leaves behind.
+   *
+   * Nothing reaches this today — every teardown answers for itself — and it is here because the
+   * exit below it must not depend on that staying true.
+   *
+   * @param {{
+   *   error: Error
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedShutdown ({
+    error,
+  }) {
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${FAILED_SHUTDOWN_MESSAGE}: ${error.constructor.name}`,
+      tags: FAILED_SHUTDOWN_TAGS,
+    })
   }
 }
 
@@ -296,9 +579,12 @@ export default class JobDispatcherProvider {
 
 /**
  * What this class asks of a dispatcher class, and the whole of it. Stated structurally so that
- * which queue a dispatcher opens stays the dispatcher's business rather than this class's.
+ * which queue a dispatcher opens stays the dispatcher's business rather than this class's. The
+ * name is asked for so that a connection that would not close can be named in a log; every class
+ * has one.
  *
  * @typedef {{
+ *   name: string
  *   createAsync: () => Promise<JobDispatcher>
  * }} JobDispatcherCtor
  */
