@@ -2757,3 +2757,203 @@ describe('AiRunStatusRecorder', () => {
     })
   })
 })
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The rule this class states about its messages, finally asked of its own run id.
+     *
+     * Round six raised it for `AiRunStatusId` here and it was fixed here; round seven found that the
+     * principle had been carried to the recorder next door and had stopped at the file boundary.
+     * `aiRunId` was interpolated raw into eight messages of this class, with no shape check
+     * anywhere in it - and one of those messages throws before the database is read at all, so it
+     * needed nothing but a wrong call to reach a log.
+     *
+     * The values below are invented for the probe and name nobody. The assertions anchor the end of
+     * the message, because a substring match would pass just as well if the text came back.
+     */
+    describe('should refuse a run id that is no id, naming the parameter only', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: 'read from the medium: the owner is a sample person, 090-0000-0000',
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('2026-09-26T04:04:01.001Z'),
+            },
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id carrying what was read out of the medium',
+        },
+        {
+          input: {
+            aiRunId: 0,
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('2026-09-26T04:04:02.002Z'),
+            },
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id of zero, which no row carries',
+        },
+        {
+          input: {
+            aiRunId: '8190123456789819012345678981901234567898190123456789',
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('2026-09-26T04:04:03.003Z'),
+            },
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id longer than any key, which no length bound used to stop',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunStatusRecorder.create() // Arrange
+
+        const actual = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunId,
+          values: input.values,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveFailedAiRun()', () => {
+    /*
+     * The one public method that throws before the database is read, so its message needed nothing
+     * but a wrong call to reach a log.
+     */
+    describe('should refuse a run id that is no id before anything else', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: 'read from the medium: 12 Sample Street',
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id carrying what was read out of the medium',
+        },
+        {
+          input: {
+            aiRunId: -1,
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id below one',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunStatusRecorder.create() // Arrange
+
+        const actual = () => recorder.saveFailedAiRun({ // Act
+          aiRunId: input.aiRunId,
+          failureReasonCode: null,
+          failureParameters: null,
+          finishedAt: new Date('2026-09-26T04:04:04.004Z'),
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * A refused field is named when its name is a name, and located when it is not.
+     *
+     * The keys of `values` are the one text in this class the caller chose, so reporting them
+     * unconditionally is the same channel every other message here has just been closed against.
+     * Reporting none of them would cost the operator the thing that makes the refusal actionable,
+     * so a name shaped like a field is repeated and anything else is reported by where it sat.
+     */
+    describe('should locate a refused field whose name is no name', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230103,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230103',
+              requestKey: 'request-key-10230103',
+              requestBodyHash: 'request-body-hash-10230103',
+              externalRef: 'external-ref-10230103',
+              subjectLabel: 'Subject label of run 10230103',
+              correlationId: 'correlation-id-10230103',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230103',
+              acceptedAt: new Date('2026-09-26T04:04:05.005Z'),
+              startedAt: new Date('2026-09-26T04:04:06.006Z'),
+              finishedAt: null,
+            },
+            refusedFieldName: 'read from the medium: the owner is a sample person',
+          },
+          expected: /refused a field no transition of this class writes: AiRunId \d+, field the field at position 1$/u,
+          label: 'a field name carrying what was read out of the medium',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230104,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230104',
+              requestKey: 'request-key-10230104',
+              requestBodyHash: 'request-body-hash-10230104',
+              externalRef: 'external-ref-10230104',
+              subjectLabel: 'Subject label of run 10230104',
+              correlationId: 'correlation-id-10230104',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230104',
+              acceptedAt: new Date('2026-09-26T04:04:07.007Z'),
+              startedAt: new Date('2026-09-26T04:04:08.008Z'),
+              finishedAt: null,
+            },
+            refusedFieldName: 'contentPurgedAt',
+          },
+          expected: /refused a field no transition of this class writes: AiRunId \d+, field contentPurgedAt$/u,
+          label: 'a field name that is a name, which is repeated so the operator can act on it',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const values = {
+          [input.refusedFieldName]: 'probe',
+        }
+
+        const actual = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunRow.id,
+          values,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})

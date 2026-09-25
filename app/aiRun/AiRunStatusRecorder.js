@@ -1,4 +1,5 @@
 import AiRunInstantInspector from './AiRunInstantInspector.js'
+import AiRunKeyInspector from './AiRunKeyInspector.js'
 import AiRunTerminalStatusInspector from './AiRunTerminalStatusInspector.js'
 
 import AI_RUN_STATUS_CONSTANT_HASH from '../constants/aiRunStatusConstants.js'
@@ -16,6 +17,19 @@ const REFUSED_AI_RUN_FIELD_MESSAGE = 'refused a field no transition of this clas
 const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evidence for'
 const INHERITED_AI_RUN_FIELD_MESSAGE = 'refused values carrying fields it did not state as its own'
 const UNREADABLE_AI_RUN_VALUES_MESSAGE = 'refused values that are not a plain object'
+const UNREADABLE_KEY_MESSAGE = 'refused a key that is not an id'
+
+/*
+ * What a field name looks like, so that a refusal can repeat one.
+ *
+ * A refused field name is the one thing this class reports that the caller chose the text of — the
+ * keys of `values` are whatever the caller put there. Reporting it is worth keeping, because it is
+ * how an operator knows which field to remove; reporting it unconditionally would mean a key built
+ * out of something read from a medium reaching a log in full, which is the channel this class's own
+ * rule about messages exists to close. So a name shaped like a field is repeated, and anything else
+ * is reported by where it sat.
+ */
+const AI_RUN_FIELD_NAME_PATTERN = /^(?=.{1,64}$)[A-Za-z_][A-Za-z0-9_]*$/u
 const UNKNOWN_AI_RUN_STATUS_MESSAGE = 'refused a status naming no master row'
 const EMPTY_AI_RUN_EVIDENCE_MESSAGE = 'refused a status whose evidence field carries nothing'
 const UNRECORDABLE_AI_RUN_INSTANT_MESSAGE = 'refused an instant field carrying something that is not an instant'
@@ -201,9 +215,11 @@ export default class AiRunStatusRecorder {
   constructor ({
     aiRunTerminalStatusInspector,
     aiRunInstantInspector,
+    aiRunKeyInspector,
   }) {
     this.aiRunTerminalStatusInspector = aiRunTerminalStatusInspector
     this.aiRunInstantInspector = aiRunInstantInspector
+    this.aiRunKeyInspector = aiRunKeyInspector
   }
 
   /**
@@ -218,11 +234,13 @@ export default class AiRunStatusRecorder {
   static create ({
     aiRunTerminalStatusInspector = this.createAiRunTerminalStatusInspector(),
     aiRunInstantInspector = this.createAiRunInstantInspector(),
+    aiRunKeyInspector = this.createAiRunKeyInspector(),
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         aiRunTerminalStatusInspector,
         aiRunInstantInspector,
+        aiRunKeyInspector,
       })
     )
   }
@@ -252,6 +270,15 @@ export default class AiRunStatusRecorder {
    */
   static createAiRunInstantInspector () {
     return AiRunInstantInspector.create()
+  }
+
+  /**
+   * Create the inspector answering whether a value is a key of this feature.
+   *
+   * @returns {AiRunKeyInspector} Inspector.
+   */
+  static createAiRunKeyInspector () {
+    return AiRunKeyInspector.create()
   }
 
   /**
@@ -342,6 +369,14 @@ export default class AiRunStatusRecorder {
     failureParameters,
     finishedAt,
   }) {
+    if (
+      !this.aiRunKeyInspector.isRecordableKey({
+        key: aiRunId,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#saveFailedAiRun() ${UNREADABLE_KEY_MESSAGE}: field aiRunId`)
+    }
+
     if (
       typeof failureReasonCode !== 'string'
       || failureReasonCode.trim() === ''
@@ -457,6 +492,14 @@ export default class AiRunStatusRecorder {
     aiRunId,
     values,
   }) {
+    if (
+      !this.aiRunKeyInspector.isRecordableKey({
+        key: aiRunId,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${UNREADABLE_KEY_MESSAGE}: field aiRunId`)
+    }
+
     if (
       !this.isReadableAiRunValues({
         values,
@@ -612,9 +655,43 @@ export default class AiRunStatusRecorder {
   extractRefusedAiRunFieldName ({
     values,
   }) {
-    return Object.keys(values)
-      .find(it => !WRITABLE_AI_RUN_FIELD_NAMES.includes(it))
-      ?? null
+    const fieldNames = Object.keys(values)
+
+    const refusedIndex = fieldNames
+      .findIndex(it => !WRITABLE_AI_RUN_FIELD_NAMES.includes(it))
+
+    if (refusedIndex < 0) {
+      return null
+    }
+
+    return this.generateReportableFieldName({
+      fieldName: fieldNames[refusedIndex],
+      index: refusedIndex,
+    })
+  }
+
+  /**
+   * Generate the way a refused field is named in a message.
+   *
+   * A name shaped like a field is repeated, because that is what tells an operator which field to
+   * remove. Anything else is a key the caller built out of something this class cannot vouch for,
+   * so it is reported by where it sat instead — the position is enough to find it, and the text
+   * does not reach a log.
+   *
+   * @param {{
+   *   fieldName: string
+   *   index: number
+   * }} params - Parameters.
+   * @returns {string} The name to report.
+   * @public
+   */
+  generateReportableFieldName ({
+    fieldName,
+    index,
+  }) {
+    return AI_RUN_FIELD_NAME_PATTERN.test(fieldName)
+      ? fieldName
+      : `the field at position ${index + 1}`
   }
 
   /**
@@ -785,6 +862,7 @@ export default class AiRunStatusRecorder {
  * @typedef {{
  *   aiRunTerminalStatusInspector: AiRunTerminalStatusInspector
  *   aiRunInstantInspector: AiRunInstantInspector
+ *   aiRunKeyInspector: AiRunKeyInspector
  * }} AiRunStatusRecorderParams
  */
 

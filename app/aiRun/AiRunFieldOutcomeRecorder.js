@@ -1,4 +1,5 @@
 import AiRunInstantInspector from './AiRunInstantInspector.js'
+import AiRunKeyInspector from './AiRunKeyInspector.js'
 
 import AI_RUN_EVIDENCE_CATEGORY_CONSTANT_HASH from '../constants/aiRunEvidenceCategoryConstants.js'
 import AI_RUN_FIELD_STATUS_CONSTANT_HASH from '../constants/aiRunFieldStatusConstants.js'
@@ -120,20 +121,6 @@ const SUGGESTION_CONFIDENCE_PATTERN = /^(?:0(?:\.\d+)?|1(?:\.0+)?)$/u
  * `'4abc'` name no state rather than naming state four.
  */
 const AI_RUN_FIELD_STATUS_ID_PATTERN = /^[1-9]\d*$/u
-
-/*
- * A row id of `ai_runs` written as text: digits alone, opening on a non-zero digit.
- *
- * It is stated separately from the status-id shape above, and not shared with it, because the two
- * answer different questions of different columns: one says which of five states a field came out
- * as, the other says which run a row belongs to. Reading the same constant for both would tie a
- * `BIGINT` key to a small enumeration's rule, and whichever of the two moved first would move the
- * other with it.
- *
- * What it rejects: a sign, a decimal point, whitespace and every other character, so `'7 '` and
- * `'7abc'` name no run rather than naming run seven.
- */
-const AI_RUN_ID_PATTERN = /^[1-9]\d*$/u
 
 /**
  * Writes one `ai_run_field_outcomes` row for each field a run settled.
@@ -263,9 +250,11 @@ export default class AiRunFieldOutcomeRecorder {
   constructor ({
     missingAiRunFieldStatusId,
     aiRunInstantInspector,
+    aiRunKeyInspector,
   }) {
     this.missingAiRunFieldStatusId = missingAiRunFieldStatusId
     this.aiRunInstantInspector = aiRunInstantInspector
+    this.aiRunKeyInspector = aiRunKeyInspector
   }
 
   /**
@@ -280,11 +269,13 @@ export default class AiRunFieldOutcomeRecorder {
   static create ({
     missingAiRunFieldStatusId = DEFAULT_MISSING_AI_RUN_FIELD_STATUS_ID,
     aiRunInstantInspector = this.createAiRunInstantInspector(),
+    aiRunKeyInspector = this.createAiRunKeyInspector(),
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         missingAiRunFieldStatusId,
         aiRunInstantInspector,
+        aiRunKeyInspector,
       })
     )
   }
@@ -296,6 +287,15 @@ export default class AiRunFieldOutcomeRecorder {
    */
   static createAiRunInstantInspector () {
     return AiRunInstantInspector.create()
+  }
+
+  /**
+   * Create the inspector answering whether a value is a key of this feature.
+   *
+   * @returns {AiRunKeyInspector} Inspector.
+   */
+  static createAiRunKeyInspector () {
+    return AiRunKeyInspector.create()
   }
 
   /**
@@ -605,46 +605,9 @@ export default class AiRunFieldOutcomeRecorder {
   generateComparableKey ({
     key,
   }) {
-    if (typeof key === 'number') {
-      return this.namesRow({
-        key,
-      })
-        ? key
-        : null
-    }
-
-    if (typeof key !== 'string') {
-      return null
-    }
-
-    return AI_RUN_ID_PATTERN.test(key)
-      ? Number(key)
-      : null
-  }
-
-  /**
-   * Check whether a number names a row at all.
-   *
-   * **The two spellings have to agree, and for one commit they did not.** The text form was held to
-   * `AI_RUN_ID_PATTERN`, which is a positive integer with no leading zero, while the number form
-   * took any integer at all — so `'-1'` named no row and `-1` named one, and which answer a caller
-   * got depended on whether its id had crossed a queue or a query string. A test written from the
-   * boundary rather than from the examples is what found it.
-   *
-   * @param {{
-   *   key: number
-   * }} params - Parameters.
-   * @returns {boolean} Whether the number names a row.
-   * @public
-   */
-  namesRow ({
-    key,
-  }) {
-    if (!Number.isInteger(key)) {
-      return false
-    }
-
-    return key >= 1
+    return this.aiRunKeyInspector.generateComparableKey({
+      key,
+    })
   }
 
   /**
@@ -1199,6 +1162,7 @@ export default class AiRunFieldOutcomeRecorder {
  * @typedef {{
  *   missingAiRunFieldStatusId: number
  *   aiRunInstantInspector: AiRunInstantInspector
+ *   aiRunKeyInspector: AiRunKeyInspector
  * }} AiRunFieldOutcomeRecorderParams
  */
 

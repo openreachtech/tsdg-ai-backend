@@ -1,4 +1,5 @@
 import AiRunInstantInspector from '../../../../app/aiRun/AiRunInstantInspector.js'
+import AiRunKeyInspector from '../../../../app/aiRun/AiRunKeyInspector.js'
 import AiRunFieldOutcomeRecorder from '../../../../app/aiRun/AiRunFieldOutcomeRecorder.js'
 
 import AiRunFieldOutcome from '../../../../sequelize/models/AiRunFieldOutcome.js'
@@ -72,6 +73,41 @@ describe('AiRunFieldOutcomeRecorder', () => {
             .toHaveProperty('aiRunInstantInspector', expected)
         })
       })
+
+      describe('#aiRunKeyInspector', () => {
+        const cases = [
+          {
+            input: {
+              aiRunKeyInspector: {
+                keyPattern: /^(?=.{1,19}$)[1-9]\d*$/u,
+              },
+            },
+            expected: {
+              keyPattern: /^(?=.{1,19}$)[1-9]\d*$/u,
+            },
+          },
+          {
+            input: {
+              aiRunKeyInspector: {
+                keyPattern: /^[1-9]$/u,
+              },
+            },
+            expected: {
+              keyPattern: /^[1-9]$/u,
+            },
+          },
+        ]
+
+        test.each(cases)('keyPattern: $input.aiRunKeyInspector.keyPattern', ({
+          input,
+          expected,
+        }) => {
+          const recorder = new AiRunFieldOutcomeRecorder(input)
+
+          expect(recorder)
+            .toHaveProperty('aiRunKeyInspector', expected)
+        })
+      })
     })
   })
 })
@@ -111,6 +147,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
           expected: {
             missingAiRunFieldStatusId: 4,
             aiRunInstantInspector: expect.any(AiRunInstantInspector),
+            aiRunKeyInspector: expect.any(AiRunKeyInspector),
           },
         },
         {
@@ -120,6 +157,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
           expected: {
             missingAiRunFieldStatusId: 2,
             aiRunInstantInspector: expect.any(AiRunInstantInspector),
+            aiRunKeyInspector: expect.any(AiRunKeyInspector),
           },
         },
       ]
@@ -143,6 +181,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
         const expected = {
           missingAiRunFieldStatusId: 4, // AI_RUN_FIELD_STATUS.MISSING.ID
           aiRunInstantInspector: expect.any(AiRunInstantInspector),
+          aiRunKeyInspector: expect.any(AiRunKeyInspector),
         }
 
         SpyClass.create()
@@ -161,6 +200,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
         const expected = {
           missingAiRunFieldStatusId: 3,
           aiRunInstantInspector: expect.any(AiRunInstantInspector),
+          aiRunKeyInspector: expect.any(AiRunKeyInspector),
         }
 
         SpyClass.create(input)

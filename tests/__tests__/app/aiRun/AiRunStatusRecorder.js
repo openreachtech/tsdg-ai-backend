@@ -1,6 +1,7 @@
 import AiRunStatusRecorder from '../../../../app/aiRun/AiRunStatusRecorder.js'
 
 import AiRunInstantInspector from '../../../../app/aiRun/AiRunInstantInspector.js'
+import AiRunKeyInspector from '../../../../app/aiRun/AiRunKeyInspector.js'
 import AiRunTerminalStatusInspector from '../../../../app/aiRun/AiRunTerminalStatusInspector.js'
 import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../../../../app/constants/aiRunFailureReasonConstants.js'
 import AiRun from '../../../../sequelize/models/AiRun.js'
@@ -99,6 +100,41 @@ describe('AiRunStatusRecorder', () => {
             .toHaveProperty('aiRunInstantInspector', expected)
         })
       })
+
+      describe('#aiRunKeyInspector', () => {
+        const cases = [
+          {
+            input: {
+              aiRunKeyInspector: {
+                keyPattern: /^(?=.{1,19}$)[1-9]\d*$/u,
+              },
+            },
+            expected: {
+              keyPattern: /^(?=.{1,19}$)[1-9]\d*$/u,
+            },
+          },
+          {
+            input: {
+              aiRunKeyInspector: {
+                keyPattern: /^[1-9]$/u,
+              },
+            },
+            expected: {
+              keyPattern: /^[1-9]$/u,
+            },
+          },
+        ]
+
+        test.each(cases)('keyPattern: $input.aiRunKeyInspector.keyPattern', ({
+          input,
+          expected,
+        }) => {
+          const recorder = new AiRunStatusRecorder(input)
+
+          expect(recorder)
+            .toHaveProperty('aiRunKeyInspector', expected)
+        })
+      })
     })
   })
 })
@@ -161,6 +197,7 @@ describe('AiRunStatusRecorder', () => {
               ],
             },
             aiRunInstantInspector: expect.any(AiRunInstantInspector),
+            aiRunKeyInspector: expect.any(AiRunKeyInspector),
           },
         },
         {
@@ -180,6 +217,7 @@ describe('AiRunStatusRecorder', () => {
               ],
             },
             aiRunInstantInspector: expect.any(AiRunInstantInspector),
+            aiRunKeyInspector: expect.any(AiRunKeyInspector),
           },
         },
       ]
@@ -203,6 +241,7 @@ describe('AiRunStatusRecorder', () => {
         const expected = {
           aiRunTerminalStatusInspector: expect.any(AiRunTerminalStatusInspector),
           aiRunInstantInspector: expect.any(AiRunInstantInspector),
+          aiRunKeyInspector: expect.any(AiRunKeyInspector),
         }
 
         SpyClass.create()
@@ -233,6 +272,7 @@ describe('AiRunStatusRecorder', () => {
             ],
           },
           aiRunInstantInspector: expect.any(AiRunInstantInspector),
+          aiRunKeyInspector: expect.any(AiRunKeyInspector),
         }
 
         SpyClass.create(input)
