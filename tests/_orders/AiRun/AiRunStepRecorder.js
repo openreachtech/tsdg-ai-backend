@@ -540,3 +540,359 @@ describe('AiRunStepRecorder', () => {
     })
   })
 })
+
+describe('AiRunStepRecorder', () => {
+  describe('#saveAiRunStep()', () => {
+    /*
+     * A step whose caller handed over more than this column may carry is still recorded, and the
+     * row it writes holds only the field path, the reason code and the figures.
+     *
+     * The three payloads below are the ones a security audit put through this method and read back
+     * out of the database: a rejection carrying the value it rejected, a bare string in place of
+     * the array, and entries nested inside arrays of their own - which reached the write as a
+     * forty-thousand-deep array and came back out of it as a `RangeError` raised inside Sequelize,
+     * a failure no worker catching this class could name. They are dropped rather than refused:
+     * the step ran, and what it did is the run's record whatever a worker attached alongside it.
+     *
+     * This row is kept for seven hundred and thirty days and the request and result bodies are
+     * purged at thirty, so a value that landed here would outlive by two years the purge meant to
+     * remove it, and nothing downstream would ever say that it had.
+     */
+    describe('when the caller hands over more than the column may carry', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10210031,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210031',
+              requestKey: 'request-key-10210031',
+              requestBodyHash: 'request-body-hash-10210031',
+              externalRef: 'external-ref-10210031',
+              subjectLabel: 'Subject label of run 10210031',
+              correlationId: 'correlation-id-10210031',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210031',
+              acceptedAt: new Date('2026-09-23T01:00:01.001Z'),
+              startedAt: new Date('2026-09-23T01:00:02.002Z'),
+              finishedAt: null,
+            },
+            step: {
+              aiRunId: 10210031,
+              stepIndex: 1,
+              stepName: 'read-with-value-attached',
+              stepCategoryName: 'ai',
+              outcomeCode: 'partially_settled',
+              // The value the field was rejected for, attached beside its length, and the medium
+              // the reading came out of. Both are content; neither may reach this row.
+              rejections: [
+                {
+                  fieldPath: 'attributes.ownerNote',
+                  reasonCode: 'value-over-max-length',
+                  value: 'Owner: Jane Doe, 090-1234-5678, jane.doe@example.com',
+                  figures: {
+                    valueLength: 51,
+                  },
+                },
+                {
+                  fieldPath: 'attributes.contractNote',
+                  reasonCode: 'reading-unreadable',
+                  figures: {
+                    valueLength: 88,
+                    sample: 'contract 7788, tenant Jane Doe',
+                  },
+                },
+              ],
+              reasonCode: 'low_agreement',
+              startedAt: new Date('2026-09-23T01:01:01.001Z'),
+              finishedAt: new Date('2026-09-23T01:01:02.002Z'),
+            },
+          },
+          expected: expect.objectContaining({
+            AiRunId: 10210031,
+            AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+            stepIndex: 1,
+            stepName: 'read-with-value-attached',
+            outcomeCode: 'partially_settled',
+            rejections: [
+              {
+                fieldPath: 'attributes.ownerNote',
+                reasonCode: 'value-over-max-length',
+                figures: {
+                  valueLength: 51,
+                },
+              },
+              {
+                fieldPath: 'attributes.contractNote',
+                reasonCode: 'reading-unreadable',
+                figures: {
+                  valueLength: 88,
+                },
+              },
+            ],
+            reasonCode: 'low_agreement',
+            startedAt: new Date('2026-09-23T01:01:01.001Z'),
+            finishedAt: new Date('2026-09-23T01:01:02.002Z'),
+          }),
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10210032,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210032',
+              requestKey: 'request-key-10210032',
+              requestBodyHash: 'request-body-hash-10210032',
+              externalRef: 'external-ref-10210032',
+              subjectLabel: 'Subject label of run 10210032',
+              correlationId: 'correlation-id-10210032',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210032',
+              acceptedAt: new Date('2026-09-23T02:00:01.001Z'),
+              startedAt: new Date('2026-09-23T02:00:02.002Z'),
+              finishedAt: null,
+            },
+            step: {
+              aiRunId: 10210032,
+              stepIndex: 1,
+              stepName: 'read-with-bare-text',
+              stepCategoryName: 'ai',
+              outcomeCode: 'partially_settled',
+              // Not an array of rejections at all, and the whole of it read out of a medium.
+              rejections: 'RAW MEDIUM TEXT: contract 7788, tenant Jane Doe',
+              reasonCode: 'low_agreement',
+              startedAt: new Date('2026-09-23T02:01:01.001Z'),
+              finishedAt: new Date('2026-09-23T02:01:02.002Z'),
+            },
+          },
+          expected: expect.objectContaining({
+            AiRunId: 10210032,
+            AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+            stepIndex: 1,
+            stepName: 'read-with-bare-text',
+            outcomeCode: 'partially_settled',
+            rejections: null,
+            reasonCode: 'low_agreement',
+            startedAt: new Date('2026-09-23T02:01:01.001Z'),
+            finishedAt: new Date('2026-09-23T02:01:02.002Z'),
+          }),
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10210033,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210033',
+              requestKey: 'request-key-10210033',
+              requestBodyHash: 'request-body-hash-10210033',
+              externalRef: 'external-ref-10210033',
+              subjectLabel: 'Subject label of run 10210033',
+              correlationId: 'correlation-id-10210033',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210033',
+              acceptedAt: new Date('2026-09-23T03:00:01.001Z'),
+              startedAt: new Date('2026-09-23T03:00:02.002Z'),
+              finishedAt: null,
+            },
+            step: {
+              aiRunId: 10210033,
+              stepIndex: 1,
+              stepName: 'read-with-nested-entries',
+              stepCategoryName: 'ai',
+              outcomeCode: 'partially_settled',
+              // Entries nested inside arrays of their own. Written three levels deep because a
+              // test file may hold no loop to build a deeper one; nothing here descends either.
+              rejections: [
+                [
+                  [
+                    {
+                      fieldPath: 'subject.alpha',
+                      reasonCode: 'below_agreement_threshold',
+                      figures: {
+                        agreedReadingCount: 1,
+                        totalReadingCount: 3,
+                      },
+                    },
+                  ],
+                ],
+              ],
+              reasonCode: 'low_agreement',
+              startedAt: new Date('2026-09-23T03:01:01.001Z'),
+              finishedAt: new Date('2026-09-23T03:01:02.002Z'),
+            },
+          },
+          expected: expect.objectContaining({
+            AiRunId: 10210033,
+            AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+            stepIndex: 1,
+            stepName: 'read-with-nested-entries',
+            outcomeCode: 'partially_settled',
+            rejections: null,
+            reasonCode: 'low_agreement',
+            startedAt: new Date('2026-09-23T03:01:01.001Z'),
+            finishedAt: new Date('2026-09-23T03:01:02.002Z'),
+          }),
+        },
+      ]
+
+      test.each(cases)('stepName: $input.step.stepName', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const recorder = AiRunStepRecorder.create()
+
+        const received = await recorder.saveAiRunStep(input.step)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStepRecorder', () => {
+  describe('#findAiRunSteps()', () => {
+    /*
+     * What the column actually holds once the write has been through the database and back.
+     *
+     * The save above asserts the row this class built; this asserts the row a reader finds two
+     * years later, which is the one the retention promise is made about. The same two payloads a
+     * security audit read back out of this column verbatim are written here and read back through
+     * the class's own finder - one carrying the value it rejected, one a bare string of medium
+     * text - and what comes back holds neither.
+     */
+    describe('when the step was saved with more than the column may carry', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: 10210041,
+            aiRunRow: {
+              id: 10210041,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210041',
+              requestKey: 'request-key-10210041',
+              requestBodyHash: 'request-body-hash-10210041',
+              externalRef: 'external-ref-10210041',
+              subjectLabel: 'Subject label of run 10210041',
+              correlationId: 'correlation-id-10210041',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210041',
+              acceptedAt: new Date('2026-09-24T01:00:01.001Z'),
+              startedAt: new Date('2026-09-24T01:00:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210041,
+              stepIndex: 1,
+              stepName: 'store-with-value-attached',
+              stepCategoryName: 'ai',
+              outcomeCode: 'partially_settled',
+              rejections: [
+                {
+                  fieldPath: 'attributes.ownerNote',
+                  reasonCode: 'value-over-max-length',
+                  value: 'Owner: Jane Doe, 090-1234-5678, jane.doe@example.com',
+                  figures: {
+                    valueLength: 51,
+                  },
+                },
+              ],
+              reasonCode: 'low_agreement',
+              startedAt: new Date('2026-09-24T01:01:01.001Z'),
+              finishedAt: new Date('2026-09-24T01:01:02.002Z'),
+            },
+          },
+          expected: [
+            expect.objectContaining({
+              stepIndex: 1,
+              stepName: 'store-with-value-attached',
+              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+              AiRunStepCategory: expect.objectContaining({
+                name: 'ai',
+              }),
+              rejections: [
+                {
+                  fieldPath: 'attributes.ownerNote',
+                  reasonCode: 'value-over-max-length',
+                  figures: {
+                    valueLength: 51,
+                  },
+                },
+              ],
+              reasonCode: 'low_agreement',
+            }),
+          ],
+        },
+        {
+          input: {
+            aiRunId: 10210042,
+            aiRunRow: {
+              id: 10210042,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210042',
+              requestKey: 'request-key-10210042',
+              requestBodyHash: 'request-body-hash-10210042',
+              externalRef: 'external-ref-10210042',
+              subjectLabel: 'Subject label of run 10210042',
+              correlationId: 'correlation-id-10210042',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210042',
+              acceptedAt: new Date('2026-09-24T02:00:01.001Z'),
+              startedAt: new Date('2026-09-24T02:00:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210042,
+              stepIndex: 1,
+              stepName: 'store-with-bare-text',
+              stepCategoryName: 'ai',
+              outcomeCode: 'partially_settled',
+              rejections: 'RAW MEDIUM TEXT: contract 7788, tenant Jane Doe',
+              reasonCode: 'low_agreement',
+              startedAt: new Date('2026-09-24T02:01:01.001Z'),
+              finishedAt: new Date('2026-09-24T02:01:02.002Z'),
+            },
+          },
+          expected: [
+            expect.objectContaining({
+              stepIndex: 1,
+              stepName: 'store-with-bare-text',
+              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+              AiRunStepCategory: expect.objectContaining({
+                name: 'ai',
+              }),
+              rejections: null,
+              reasonCode: 'low_agreement',
+            }),
+          ],
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunId', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const recorder = AiRunStepRecorder.create()
+        await recorder.saveAiRunStep(input.savedStep)
+
+        const findAiRunStepsArgs = {
+          aiRunId: input.aiRunId,
+        }
+
+        const received = await recorder.findAiRunSteps(findAiRunStepsArgs)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})

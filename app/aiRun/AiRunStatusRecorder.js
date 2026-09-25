@@ -11,6 +11,51 @@ const {
 const UNKNOWN_AI_RUN_MESSAGE = 'refused a run that does not exist'
 const SETTLED_AI_RUN_MESSAGE = 'refused a run already settled, which a run never leaves'
 const ABSENT_FAILURE_REASON_CODE_MESSAGE = 'refused a failed run carrying no reason code'
+const REFUSED_AI_RUN_FIELD_MESSAGE = 'refused a field no transition of this class writes'
+const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evidence for'
+
+/*
+ * The only fields a transition writes. Everything a run was accepted with — the client it belongs
+ * to, its keys, its callback URL, its subject and its request body — is written once by
+ * `AiRunAcceptor` and is not a transition's to reword; `content_purged_at` belongs to the retention
+ * sweep, which is not a transition either.
+ */
+const WRITABLE_AI_RUN_FIELD_NAMES = [
+  'AiRunStatusId',
+  'startedAt',
+  'finishedAt',
+  'resultBody',
+  'failureReasonCode',
+  'failureParameters',
+  'canceledAt',
+  'cancelRequestedAt',
+  'engineLabel',
+]
+
+/*
+ * What each destination status is evidenced by, which is the whole reason there is one method per
+ * status rather than one method taking a status. A sixth status is a sixth entry beside a sixth
+ * method, and nothing already written changes. Queued is absent because a run is created queued and
+ * is never moved there.
+ */
+const AI_RUN_STATUS_EVIDENCE_FIELD_NAMES_HASH = {
+  [AI_RUN_STATUS.RUNNING.ID]: [
+    'startedAt',
+  ],
+  [AI_RUN_STATUS.SUCCEEDED.ID]: [
+    'resultBody',
+    'finishedAt',
+  ],
+  [AI_RUN_STATUS.FAILED.ID]: [
+    'failureReasonCode',
+    'failureParameters',
+    'finishedAt',
+  ],
+  [AI_RUN_STATUS.CANCELED.ID]: [
+    'canceledAt',
+    'finishedAt',
+  ],
+}
 
 /**
  * Moves a run from one status to the next, and records what the move is evidenced by.
@@ -29,6 +74,23 @@ const ABSENT_FAILURE_REASON_CODE_MESSAGE = 'refused a failed run carrying no rea
  * was answered with nothing would carry on believing the failure was recorded. The two refusals —
  * a run that does not exist, and a run that has settled — each name themselves in the message, so
  * the caller's log says which one happened without the caller having to go and look.
+ *
+ * **The same rule is also carried by the row, and the two are not the same guard.** `AiRun`'s own
+ * `setupHooks()` refuses a status move out of a terminal status, so a caller that never came
+ * through this class cannot undo the rule with one line of `Model.update()`. That guard defends the
+ * status and nothing else, because a settled run is still written to for reasons that are not
+ * transitions — the content purge is one. This class is the stricter of the two: it refuses **any**
+ * write against a settled run, because a caller that reached it was asking to record a transition.
+ * Neither makes the other redundant, and the model's own comment names the paths it does not close.
+ *
+ * **What this class will write is bounded by name, not by what the caller passes.**
+ * `#saveOngoingAiRun()` is reachable by anything holding a recorder, and the fields a transition
+ * writes are few and known — so the ones that are not are refused by name rather than trusted.
+ * A run's identity, its callback URL and its request body are written once, when the run is
+ * accepted; the purge marker belongs to the retention sweep. A terminal status handed in without
+ * the columns it is evidenced by is refused for the same reason: it is what the five methods below
+ * are for, and a back door that wrote a bare status would defeat the one-method-per-status design
+ * while leaving the row saying a run succeeded and nothing about when or with what.
  *
  * **One method per destination status, rather than one method taking a status.** What a status is
  * evidenced by differs per status: running is evidenced by the instant it started, succeeded by the
@@ -299,18 +361,51 @@ export default class AiRunStatusRecorder {
    * a run that is not there at all, are both refused by throwing: the caller asked for something to
    * be recorded, and a silent no-op would leave it believing the record exists.
    *
+   * **What it will write, and what it refuses to.** The method is reachable by anything holding a
+   * recorder, and what it was handed went to the row as it arrived — so a single call could reword
+   * a run's callback URL, backdate its purge marker, or write a terminal status with none of the
+   * columns that status is evidenced by. Two checks bound it. The first refuses a field no
+   * transition writes, by name: a run's identity and its callback URL are written once when the run
+   * is accepted, and the purge marker belongs to the retention sweep. The second refuses a status
+   * the call carries no evidence for — a succeeded run that names no finished instant and no result
+   * is the shape `#saveSucceededAiRun()` exists to make impossible, and a caller reaching this
+   * method directly must carry the same columns that method does.
+   *
+   * Both are refused by throwing and before the run is read, for the same reason the absent reason
+   * code is: it is the call that is malformed rather than the row, and a call that quietly wrote
+   * some of what it was handed would leave a false record behind while answering as if it had not.
+   * The evidence check reads whether the field was named, not whether its value is plausible — a
+   * caller stating `resultBody: null` is recording a run that settled nothing, which is a success.
+   *
    * @param {{
    *   aiRunId: number
    *   values: Record<string, *>
    * }} params - Parameters.
    * @returns {Promise<*>} The saved run.
-   * @throws {Error} When no run carries the id, or when the run has already settled.
+   * @throws {Error} When a field is not a transition's, when the status it moves to is not
+   * evidenced, when no run carries the id, or when the run has already settled.
    * @public
    */
   async saveOngoingAiRun ({
     aiRunId,
     values,
   }) {
+    const refusedAiRunFieldName = this.extractRefusedAiRunFieldName({
+      values,
+    })
+
+    if (refusedAiRunFieldName) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${REFUSED_AI_RUN_FIELD_MESSAGE}: AiRunId ${aiRunId}, field ${refusedAiRunFieldName}`)
+    }
+
+    const absentAiRunEvidenceFieldName = this.extractAbsentAiRunEvidenceFieldName({
+      values,
+    })
+
+    if (absentAiRunEvidenceFieldName) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${ABSENT_AI_RUN_EVIDENCE_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${values.AiRunStatusId}, field ${absentAiRunEvidenceFieldName}`)
+    }
+
     const aiRun = await this.findAiRun({
       aiRunId,
     })
@@ -328,6 +423,48 @@ export default class AiRunStatusRecorder {
     }
 
     return aiRun.update(values)
+  }
+
+  /**
+   * Extract the name of the first field the caller handed that no transition writes.
+   *
+   * @param {{
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when every field is a transition's to write.
+   * @public
+   */
+  extractRefusedAiRunFieldName ({
+    values,
+  }) {
+    return Object.keys(values)
+      .find(it => !WRITABLE_AI_RUN_FIELD_NAMES.includes(it))
+      ?? null
+  }
+
+  /**
+   * Extract the name of the first field the status being written is evidenced by and the call omits.
+   *
+   * A status this class knows nothing about is evidenced by nothing, and a call naming no status is
+   * moving the run nowhere — both answer null, and the run's status is left where it stands.
+   *
+   * @param {{
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when the status is evidenced.
+   * @public
+   */
+  extractAbsentAiRunEvidenceFieldName ({
+    values,
+  }) {
+    const evidenceFieldNames = AI_RUN_STATUS_EVIDENCE_FIELD_NAMES_HASH[values.AiRunStatusId]
+      ?? []
+
+    const namedFieldNames = Object.keys(values)
+
+    return evidenceFieldNames
+      .find(it => !namedFieldNames.includes(it))
+      ?? null
   }
 
   /**

@@ -34,11 +34,15 @@ const {
  * recording a guess against it — a step filed under the wrong category would misreport, forever,
  * whether the run thought for itself or called a model.
  *
- * **`rejections` never holds a value read out of a medium.** It holds the field path, the reason
- * code and figures such as a length or an agreement count, and nothing else. This row is part of
- * the decision trace, so it is kept on the long clock and is never purged with content — a value
- * copied into it would outlive the content purge meant to remove it by two years. Nothing here
- * reads a medium, and nothing here may be handed one.
+ * **`rejections` never holds a value read out of a medium, and the shape is built here rather than
+ * asked for.** It holds the field path, the reason code and figures such as a length or an
+ * agreement count, and nothing else. This row is part of the decision trace, so it is kept on the
+ * long clock and is never purged with content — a value copied into it would outlive the content
+ * purge meant to remove it by two years, and no later reader could tell that it had. A caller that
+ * hands this class anything else is not refused: the row is written from the closed shape below,
+ * built key by key out of what arrived, and whatever fell outside it never reaches the column.
+ * Between a worker and a store of personal data kept for two years, a paragraph asking the worker
+ * not to was the only thing standing here before.
  */
 export default class AiRunStepRecorder {
   /**
@@ -118,6 +122,10 @@ export default class AiRunStepRecorder {
   /**
    * Save the record of one step a run executed.
    *
+   * What the caller says the step dropped is not what is stored. It is shaped first, down to the
+   * three keys this column is for, so that nothing a worker attached alongside them can reach a row
+   * that outlives the content purge by two years. See `#buildRecordableRejections()`.
+   *
    * @param {SaveAiRunStepParams} params - Parameters.
    * @returns {Promise<*>} The saved run step.
    * @public
@@ -137,6 +145,10 @@ export default class AiRunStepRecorder {
       stepCategoryName,
     })
 
+    const recordableRejections = this.buildRecordableRejections({
+      rejections,
+    })
+
     return /** @type {*} */ (
       this.Ctor.AiRunStepCtor.create({
         AiRunId: aiRunId,
@@ -144,7 +156,7 @@ export default class AiRunStepRecorder {
         stepIndex,
         stepName,
         outcomeCode,
-        rejections,
+        rejections: recordableRejections,
         reasonCode,
         startedAt,
         finishedAt,
@@ -172,6 +184,139 @@ export default class AiRunStepRecorder {
     }
 
     return this.aiRunStepCategoryIdHash[stepCategoryName]
+  }
+
+  /**
+   * Build the rejections this row may carry, out of whatever the caller handed over.
+   *
+   * The shape is closed: a rejection is a field path, a reason code and figures, and a figure is a
+   * number. That is the whole of what `#run-record` gives this column, and it is built here rather
+   * than trusted, because the column is read two years after the content it describes has been
+   * purged — so a value that reached it would outlive the purge meant to remove it, silently.
+   *
+   * What falls outside the shape is dropped rather than refused. A step that ran is a fact of the
+   * run, and losing its whole trace because a worker attached a debug field beside the reason code
+   * would cost the record more than the field was worth. The step is recorded, minus the field.
+   *
+   * Anything that is not an array of rejections carries no rejection to keep — a bare string is the
+   * case that was actually reached — so it answers null, which is what this nullable column already
+   * says when a step dropped nothing. An array that keeps no entry answers null for the same
+   * reason, rather than leaving two ways of writing "nothing" in one column.
+   *
+   * @param {{
+   *   rejections: *
+   * }} params - Parameters.
+   * @returns {Array<AiRunStepRejection> | null} The rejections to store, or null when none is left.
+   */
+  buildRecordableRejections ({
+    rejections,
+  }) {
+    if (!Array.isArray(rejections)) {
+      return null
+    }
+
+    const recordableRejections = rejections
+      .map(it =>
+        this.buildRecordableRejection({
+          rejection: it,
+        })
+      )
+      .filter(it => it !== null)
+
+    if (recordableRejections.length === 0) {
+      return null
+    }
+
+    return recordableRejections
+  }
+
+  /**
+   * Build one rejection this row may carry, out of one entry the caller handed over.
+   *
+   * The three keys are read off the entry one at a time and written into an object of this method's
+   * own, so a fourth key that came with it — the value that was actually seen, or anything else —
+   * has nowhere to travel. The entry is read one level deep and never followed further, so how
+   * deeply the caller nested what it sent changes nothing about what is built, and nothing here
+   * walks a structure whose depth the caller chose.
+   *
+   * An entry naming no field, or giving no reason, is dropped whole rather than kept as a husk. A
+   * rejection is the pairing of the two, and neither half alone records a decision anybody can read
+   * two years from now.
+   *
+   * @param {{
+   *   rejection: *
+   * }} params - Parameters.
+   * @returns {AiRunStepRejection | null} The rejection to store, or null when the entry is not one.
+   */
+  buildRecordableRejection ({
+    rejection,
+  }) {
+    if (typeof rejection?.fieldPath !== 'string') {
+      return null
+    }
+
+    if (typeof rejection.reasonCode !== 'string') {
+      return null
+    }
+
+    const figures = this.buildRecordableFigures({
+      figures: rejection.figures,
+    })
+
+    return {
+      fieldPath: rejection.fieldPath,
+      reasonCode: rejection.reasonCode,
+      figures,
+    }
+  }
+
+  /**
+   * Build the figures a rejection may carry, out of whatever the caller attached to it.
+   *
+   * A figure is a number — a length, a count — and a number is the one thing that cannot carry a
+   * name, an address or a sentence read out of a medium. So a figure that is not a finite number is
+   * dropped while the rejection around it is kept: the field path and the reason code are the
+   * decision this trace exists to hold, and losing them to remove one stray figure would take away
+   * more than it protects.
+   *
+   * `Infinity` and `NaN` are dropped with the rest, because neither survives JSON as itself — each
+   * would land in the column as a null nobody derived, which is the substitution this class refuses
+   * everywhere else.
+   *
+   * @param {{
+   *   figures: *
+   * }} params - Parameters.
+   * @returns {Record<string, number> | null} The figures to store, or null when none is left.
+   */
+  buildRecordableFigures ({
+    figures,
+  }) {
+    if (figures === null) {
+      return null
+    }
+
+    if (typeof figures !== 'object') {
+      return null
+    }
+
+    if (Array.isArray(figures)) {
+      return null
+    }
+
+    const recordableFigureNames = Object.keys(figures)
+      .filter(it => Number.isFinite(figures[it]))
+
+    if (recordableFigureNames.length === 0) {
+      return null
+    }
+
+    const recordableFigureEntries = recordableFigureNames
+      .map(it => [
+        it,
+        figures[it],
+      ])
+
+    return Object.fromEntries(recordableFigureEntries)
   }
 
   /**

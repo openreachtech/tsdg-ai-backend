@@ -308,3 +308,280 @@ describe('AiRunFieldOutcomeRecorder', () => {
     })
   })
 })
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * A text parameter carrying a value read out of a medium, refused at the row.
+     *
+     * Both payloads below were written whole before the shapes were stated. `field_path` and
+     * `confidence_method_version` are free text on the seven-hundred-and-thirty-day clock, so a
+     * value that reached either of them would outlive by two years the purge meant to remove it —
+     * and `field_path` is the one a model can produce, because a path is not always bounded by a
+     * schema.
+     *
+     * The row is refused rather than repaired. Stripping a sentence down to the characters a path
+     * may hold would leave a row naming a field nobody settled, read for two years as though it
+     * were the real one, and stripping is a guess. Both columns are `NOT NULL`, so the shape check
+     * answering null is what refuses the whole row — the same mechanism an omitted step is refused
+     * by, and the reason the error names the column.
+     */
+    describe('when a text parameter carries a value read out of a medium', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10220015,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220015',
+              requestKey: 'request-key-10220015',
+              requestBodyHash: 'request-body-hash-10220015',
+              externalRef: 'external-ref-10220015',
+              subjectLabel: 'Subject label of run 10220015',
+              correlationId: 'correlation-id-10220015',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220015',
+              acceptedAt: new Date('2026-09-22T01:00:01.001Z'),
+              startedAt: new Date('2026-09-22T01:00:02.002Z'),
+              finishedAt: new Date('2026-09-22T01:00:03.003Z'),
+            },
+            aiRunStepRow: {
+              id: 10220005,
+              AiRunId: 10220015,
+              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+              stepIndex: 1,
+              stepName: 'step-name-10220005',
+              outcomeCode: 'outcome-code-10220005',
+              startedAt: new Date('2026-09-22T01:01:01.001Z'),
+              finishedAt: new Date('2026-09-22T01:01:02.002Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220015,
+              aiRunStepId: 10220005,
+              fieldPath: 'the owner note says sample person, born 1984, phone 090-0000-0000',
+              aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+              aiRunEvidenceCategoryId: 1, // AI_RUN_EVIDENCE_CATEGORY.VISIBLE_TEXT.ID
+              suggestionConfidence: 0.8125,
+              agreedReadingCount: 3,
+              totalReadingCount: 3,
+              confidenceMethodVersion: 'confidence-method-0005',
+              settledAt: new Date('2026-09-22T05:05:05.005Z'),
+            },
+          },
+          expected: 'notNull Violation: AiRunFieldOutcome.fieldPath cannot be null',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10220016,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220016',
+              requestKey: 'request-key-10220016',
+              requestBodyHash: 'request-body-hash-10220016',
+              externalRef: 'external-ref-10220016',
+              subjectLabel: 'Subject label of run 10220016',
+              correlationId: 'correlation-id-10220016',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220016',
+              acceptedAt: new Date('2026-09-22T02:00:01.001Z'),
+              startedAt: new Date('2026-09-22T02:00:02.002Z'),
+              finishedAt: new Date('2026-09-22T02:00:03.003Z'),
+            },
+            aiRunStepRow: {
+              id: 10220006,
+              AiRunId: 10220016,
+              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+              stepIndex: 1,
+              stepName: 'step-name-10220006',
+              outcomeCode: 'outcome-code-10220006',
+              startedAt: new Date('2026-09-22T02:01:01.001Z'),
+              finishedAt: new Date('2026-09-22T02:01:02.002Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220016,
+              aiRunStepId: 10220006,
+              fieldPath: 'subject.epsilon',
+              aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+              aiRunEvidenceCategoryId: 1, // AI_RUN_EVIDENCE_CATEGORY.VISIBLE_TEXT.ID
+              suggestionConfidence: 0.7125,
+              agreedReadingCount: 3,
+              totalReadingCount: 3,
+              confidenceMethodVersion: 'read from the medium: the owner is a sample person',
+              settledAt: new Date('2026-09-22T06:06:06.006Z'),
+            },
+          },
+          expected: 'notNull Violation: AiRunFieldOutcome.confidenceMethodVersion cannot be null',
+        },
+      ]
+
+      test.each(cases)('fieldPath: $input.fieldOutcome.fieldPath', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+        await AiRunStep.create(input.aiRunStepRow)
+
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = () => recorder.saveAiRunFieldOutcome(input.fieldOutcome)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The two payloads that reach the table anyway, and what the row says once they have.
+     *
+     * The first is a value read out of a medium handed to `suggestion_confidence`. That column is
+     * `DECIMAL(5, 4)`, which a strict-mode MySQL would refuse outright — but every Jest run and
+     * every developer's machine is SQLite, which takes a string whole. So the channel is open
+     * exactly where nobody is watching, and the row records no score rather than that text: the
+     * column is nullable and already means "no score", so the rest of the row still stands and the
+     * trace keeps the field.
+     *
+     * The second is the state arriving as text, which is how a status id that passed through a
+     * query string or a JSON body arrives. `'4'` is `missing`, and a state compared as it arrived
+     * would not have matched the `missing` this recorder holds — leaving a row that says the field
+     * settled nothing while carrying the confidence and the evidence category of a reading that
+     * lost. That is the row the second use case of `#run-record` reads when an operator asks why a
+     * run returned no value for a field, so it is the one row that must never contradict itself.
+     * Both leftovers are recorded as null.
+     */
+    describe('when a value read out of a medium reaches a nullable column', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10220017,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220017',
+              requestKey: 'request-key-10220017',
+              requestBodyHash: 'request-body-hash-10220017',
+              externalRef: 'external-ref-10220017',
+              subjectLabel: 'Subject label of run 10220017',
+              correlationId: 'correlation-id-10220017',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220017',
+              acceptedAt: new Date('2026-09-22T03:00:01.001Z'),
+              startedAt: new Date('2026-09-22T03:00:02.002Z'),
+              finishedAt: new Date('2026-09-22T03:00:03.003Z'),
+            },
+            aiRunStepRow: {
+              id: 10220007,
+              AiRunId: 10220017,
+              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+              stepIndex: 1,
+              stepName: 'step-name-10220007',
+              outcomeCode: 'outcome-code-10220007',
+              startedAt: new Date('2026-09-22T03:01:01.001Z'),
+              finishedAt: new Date('2026-09-22T03:01:02.002Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220017,
+              aiRunStepId: 10220007,
+              fieldPath: 'subject.zeta',
+              aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+              aiRunEvidenceCategoryId: 1, // AI_RUN_EVIDENCE_CATEGORY.VISIBLE_TEXT.ID
+              suggestionConfidence: 'read from the medium: 090-0000-0000',
+              agreedReadingCount: 3,
+              totalReadingCount: 3,
+              confidenceMethodVersion: 'confidence-method-0007',
+              settledAt: new Date('2026-09-22T07:07:07.007Z'),
+            },
+          },
+          expected: expect.objectContaining({
+            AiRunId: 10220017,
+            AiRunStepId: 10220007,
+            fieldPath: 'subject.zeta',
+            AiRunFieldStatusId: 1,
+            AiRunEvidenceCategoryId: 1,
+            suggestionConfidence: null,
+            agreedReadingCount: 3,
+            totalReadingCount: 3,
+            confidenceMethodVersion: 'confidence-method-0007',
+            settledAt: new Date('2026-09-22T07:07:07.007Z'),
+          }),
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10220018,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220018',
+              requestKey: 'request-key-10220018',
+              requestBodyHash: 'request-body-hash-10220018',
+              externalRef: 'external-ref-10220018',
+              subjectLabel: 'Subject label of run 10220018',
+              correlationId: 'correlation-id-10220018',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220018',
+              acceptedAt: new Date('2026-09-22T04:00:01.001Z'),
+              startedAt: new Date('2026-09-22T04:00:02.002Z'),
+              finishedAt: new Date('2026-09-22T04:00:03.003Z'),
+            },
+            aiRunStepRow: {
+              id: 10220008,
+              AiRunId: 10220018,
+              AiRunStepCategoryId: 1, // AI_RUN_STEP_CATEGORY.CODE.ID
+              stepIndex: 1,
+              stepName: 'step-name-10220008',
+              outcomeCode: 'outcome-code-10220008',
+              reasonCode: 'reason-code-10220008',
+              startedAt: new Date('2026-09-22T04:01:01.001Z'),
+              finishedAt: new Date('2026-09-22T04:01:02.002Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220018,
+              aiRunStepId: 10220008,
+              fieldPath: 'subject.eta',
+              aiRunFieldStatusId: '4', // AI_RUN_FIELD_STATUS.MISSING.ID, as text
+              aiRunEvidenceCategoryId: 1, // left over from a reading that did not win
+              suggestionConfidence: 0.9999, // left over from a reading that did not win
+              agreedReadingCount: 2, // no majority of the five readings agreed
+              totalReadingCount: 5,
+              confidenceMethodVersion: 'confidence-method-0008',
+              settledAt: new Date('2026-09-22T08:08:08.008Z'),
+            },
+          },
+          expected: expect.objectContaining({
+            AiRunId: 10220018,
+            AiRunStepId: 10220008,
+            fieldPath: 'subject.eta',
+            AiRunFieldStatusId: '4', // written through as it arrived; the column reads it as 4
+            AiRunEvidenceCategoryId: null,
+            suggestionConfidence: null,
+            agreedReadingCount: 2,
+            totalReadingCount: 5,
+            confidenceMethodVersion: 'confidence-method-0008',
+            settledAt: new Date('2026-09-22T08:08:08.008Z'),
+          }),
+        },
+      ]
+
+      test.each(cases)('fieldPath: $input.fieldOutcome.fieldPath', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+        await AiRunStep.create(input.aiRunStepRow)
+
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = await recorder.saveAiRunFieldOutcome(input.fieldOutcome)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
