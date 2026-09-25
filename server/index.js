@@ -34,10 +34,24 @@ GraphqlServerBuilder.createAsync({
       .listen(5800, LOOPBACK_HOST)
   )
 
-RestfulApiServerBuilder.createAsync({
+/*
+ * The RESTful API server is awaited rather than chained, because one thing it builds outlives the
+ * request that first reaches for it and has to be closed by hand.
+ *
+ * A run accepted here is enqueued after its transaction commits, through a job dispatcher holding
+ * an open Redis connection. That dispatcher is built once per process and deliberately not closed
+ * after a dispatch — closing it would leave the next accepted run enqueueing against a shut queue
+ * — so nothing else in the process will ever close it. The sink attached below is what does, on
+ * SIGINT and SIGTERM, before ending the process.
+ */
+const restfulApiServerBuilder = await RestfulApiServerBuilder.createAsync({
   Engine: AppRestfulApiServerEngine,
 })
-  .then(builder =>
-    builder.buildHttpServer()
-      .listen(8001, LOOPBACK_HOST)
-  )
+
+restfulApiServerBuilder.buildHttpServer()
+  .listen(8001, LOOPBACK_HOST)
+
+restfulApiServerBuilder.engine
+  .share
+  .jobDispatcherProvider
+  .attachShutdownSink()
