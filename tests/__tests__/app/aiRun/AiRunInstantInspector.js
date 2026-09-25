@@ -208,6 +208,24 @@ describe('AiRunInstantInspector', () => {
           },
           label: 'a Date built from a value that is not a number',
         },
+        {
+          params: {
+            instant: null,
+          },
+          label: 'null, which the evidence rule answers for and this one still must not fault on',
+        },
+        {
+          params: {
+            instant: Object.create(Date.prototype),
+          },
+          label: 'a value sitting on Date.prototype with no time of its own',
+        },
+        {
+          params: {
+            instant: new Proxy(new Date('2026-09-25T11:22:33.444Z'), {}),
+          },
+          label: 'a real Date behind a proxy, which has no internal slot to read',
+        },
       ]
 
       test.each(cases)('label: $label', ({

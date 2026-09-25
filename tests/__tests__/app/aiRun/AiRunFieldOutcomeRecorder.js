@@ -544,11 +544,17 @@ describe('AiRunFieldOutcomeRecorder', () => {
     })
 
     /*
-     * A value that is no score at all is no score either, and for the same reason: recording it
-     * would put text into a column that means "how sure the run was", on the two-year clock. The
-     * first case is the one the audit put through — under SQLite a `DECIMAL(5, 4)` takes a string
-     * whole, where a strict-mode MySQL would have refused it, so the channel is open exactly where
-     * nobody is watching. The rest drive the closed range and the renderings that are not decimals.
+     * A value that is no score at all is handed back untouched, and the refusal happens above.
+     *
+     * This method used to answer null for such a value, and that was the defect rather than the
+     * guard: section 10 declares the column NULL **when nothing was settled**, so quietly writing
+     * the no-score marker against a field that did settle made a dropped score indistinguishable
+     * from a field that scored nothing — on the two-year clock, feeding the one use case about why
+     * a field returned no value. The caller was told nothing either way.
+     *
+     * The value is now refused by `#saveAiRunFieldOutcome()`, which never writes it, and these
+     * cases are exercised there as refusals. What this method still decides is the one thing it is
+     * for: a field that settled nothing has no score, whatever the caller was holding.
      */
     describe('when the value is not a score', () => {
       const cases = [
@@ -557,36 +563,41 @@ describe('AiRunFieldOutcomeRecorder', () => {
             aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
             suggestionConfidence: 'read from the medium: the owner is a sample person',
           },
+          expected: 'read from the medium: the owner is a sample person',
         },
         {
           input: {
             aiRunFieldStatusId: 2, // AI_RUN_FIELD_STATUS.DERIVED.ID
             suggestionConfidence: '1.5', // above the top of the range
           },
+          expected: '1.5',
         },
         {
           input: {
             aiRunFieldStatusId: 3, // AI_RUN_FIELD_STATUS.SUGGESTED.ID
             suggestionConfidence: -0.5, // below the bottom of the range
           },
+          expected: -0.5,
         },
         {
           input: {
             aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
             suggestionConfidence: '1e-3', // a number, but not as a decimal column spells one
           },
+          expected: '1e-3',
         },
       ]
 
       test.each(cases)('suggestionConfidence: $input.suggestionConfidence', ({
         input,
+        expected,
       }) => {
         const recorder = AiRunFieldOutcomeRecorder.create()
 
         const received = recorder.generateSettledSuggestionConfidence(input)
 
         expect(received)
-          .toBeNull()
+          .toBe(expected)
       })
     })
   })

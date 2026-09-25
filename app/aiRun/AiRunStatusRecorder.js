@@ -15,6 +15,7 @@ const ABSENT_FAILURE_REASON_CODE_MESSAGE = 'refused a failed run carrying no rea
 const REFUSED_AI_RUN_FIELD_MESSAGE = 'refused a field no transition of this class writes'
 const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evidence for'
 const INHERITED_AI_RUN_FIELD_MESSAGE = 'refused values carrying fields it did not state as its own'
+const UNREADABLE_AI_RUN_VALUES_MESSAGE = 'refused values this method cannot read as an object at all'
 const UNKNOWN_AI_RUN_STATUS_MESSAGE = 'refused a status naming no master row'
 const EMPTY_AI_RUN_EVIDENCE_MESSAGE = 'refused a status whose evidence field carries nothing'
 const UNRECORDABLE_AI_RUN_INSTANT_MESSAGE = 'refused an instant field carrying something that is not an instant'
@@ -457,6 +458,14 @@ export default class AiRunStatusRecorder {
     values,
   }) {
     if (
+      !this.isReadableAiRunValues({
+        values,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${UNREADABLE_AI_RUN_VALUES_MESSAGE}: AiRunId ${aiRunId}`)
+    }
+
+    if (
       !this.isRecordableAiRunValues({
         values,
       })
@@ -527,17 +536,41 @@ export default class AiRunStatusRecorder {
   }
 
   /**
-   * Check whether the values handed in are ones this class can answer for at all.
+   * Check whether the values handed in are something this method can read at all.
    *
-   * A plain object, and nothing else. What it turns away is anything carrying state this class
-   * cannot see: a prototype, because Sequelize's own setter walks the chain while the allow-list is
-   * read from own keys, and the two disagreeing about what a field is was how a run's callback URL
-   * once reached the column. `null` and a non-object are refused here rather than being left to
-   * fault inside the allow-list read, so that every refusal this method makes names itself and the
-   * run it was about — which is the whole of what a caller's log has to go on.
+   * `null`, a string, a number, and the argument left unstated. None of them carries a field, so
+   * none of them is the defect the refusal below describes — and for one commit all four reported
+   * it anyway, which is the same misstatement this class was corrected for twice already. They are
+   * also what `Object.getPrototypeOf()` faults on, so asking first is what lets both refusals name
+   * themselves instead of one of them arriving as a bare `TypeError` naming neither the defect nor
+   * the run.
    *
    * @param {{
    *   values: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the values can be read as an object.
+   * @public
+   */
+  isReadableAiRunValues ({
+    values,
+  }) {
+    if (values === null) {
+      return false
+    }
+
+    return typeof values === 'object'
+  }
+
+  /**
+   * Check whether the values handed in state every field they carry as their own.
+   *
+   * A plain object, and nothing else. What it turns away is state this class cannot see: a
+   * prototype, because Sequelize's own setter walks the chain while the allow-list is read from own
+   * keys, and the two disagreeing about what a field is was how a run's callback URL once reached
+   * the column.
+   *
+   * @param {{
+   *   values: object
    * }} params - Parameters.
    * @returns {boolean} Whether the values are recordable.
    * @public
@@ -545,14 +578,6 @@ export default class AiRunStatusRecorder {
   isRecordableAiRunValues ({
     values,
   }) {
-    if (values === null) {
-      return false
-    }
-
-    if (typeof values !== 'object') {
-      return false
-    }
-
     return Object.getPrototypeOf(values) === Object.prototype
   }
 

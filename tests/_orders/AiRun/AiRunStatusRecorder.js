@@ -2499,7 +2499,7 @@ describe('AiRunStatusRecorder', () => {
             },
             values: null,
           },
-          expected: 'refused values carrying fields it did not state as its own',
+          expected: 'refused values this method cannot read as an object at all',
           label: 'values of null',
         },
         {
@@ -2522,7 +2522,7 @@ describe('AiRunStatusRecorder', () => {
             },
             values: 'AiRunStatusId=3',
           },
-          expected: 'refused values carrying fields it did not state as its own',
+          expected: 'refused values this method cannot read as an object at all',
           label: 'values written as a string',
         },
         {
@@ -2545,7 +2545,7 @@ describe('AiRunStatusRecorder', () => {
             },
             values: 42,
           },
-          expected: 'refused values carrying fields it did not state as its own',
+          expected: 'refused values this method cannot read as an object at all',
           label: 'values written as a number',
         },
       ]
@@ -2602,7 +2602,7 @@ describe('AiRunStatusRecorder', () => {
               finishedAt: null,
             },
           },
-          expected: 'refused values carrying fields it did not state as its own',
+          expected: 'refused values this method cannot read as an object at all',
           label: 'the values argument omitted altogether',
         },
       ]

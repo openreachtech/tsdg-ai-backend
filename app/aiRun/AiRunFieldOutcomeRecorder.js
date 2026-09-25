@@ -37,6 +37,8 @@ const AI_RUN_EVIDENCE_CATEGORY_IDS = Object.values(AI_RUN_EVIDENCE_CATEGORY)
  * `0` on its own is a count; `007` and `+3` are not, for the same reason an id is not written with
  * a leading zero — a value shaped that way came from somewhere that was not counting.
  */
+const READING_COUNT_PATTERN = /^(?:0|[1-9]\d*)$/u
+
 /*
  * The largest count the column can hold. `INTEGER` is what the migration declares, so a figure
  * above this is not a figure this row could carry: SQLite stores it and a strict MariaDB rejects or
@@ -49,14 +51,14 @@ const MAXIMUM_READING_COUNT = 2147483647
 
 const UNRECORDABLE_SETTLED_AT_MESSAGE = 'refused a settled instant that is not an instant'
 
-const READING_COUNT_PATTERN = /^(?:0|[1-9]\d*)$/u
-
 const UNKNOWN_AI_RUN_STEP_MESSAGE = 'refused a step that does not exist'
 const FOREIGN_AI_RUN_STEP_MESSAGE = 'refused a step belonging to another run'
 const UNREADABLE_FIELD_STATUS_MESSAGE = 'refused a field state that is not an id'
 const UNKNOWN_FIELD_STATUS_MESSAGE = 'refused a field state naming no master row'
 const UNKNOWN_EVIDENCE_CATEGORY_MESSAGE = 'refused an evidence kind naming no master row'
+const ABSENT_SETTLED_RECORD_MESSAGE = 'refused a settled field carrying none of what settling it records'
 const UNREADABLE_READING_COUNT_MESSAGE = 'refused a reading count that is not a whole number'
+const OUT_OF_RANGE_READING_COUNT_MESSAGE = 'refused a reading count outside the range a count can hold'
 const IMPOSSIBLE_READING_COUNT_MESSAGE = 'refused more readings agreeing than there were readings'
 
 /*
@@ -371,12 +373,22 @@ export default class AiRunFieldOutcomeRecorder {
       readingCount: totalReadingCount,
     })
 
-    if (comparableAgreedReadingCount === null) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, agreedReadingCount ${agreedReadingCount}`)
+    const unreadableReadingCountFieldName = this.extractUnreadableReadingCountFieldName({
+      comparableAgreedReadingCount,
+      comparableTotalReadingCount,
+    })
+
+    if (unreadableReadingCountFieldName) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, field ${unreadableReadingCountFieldName}`)
     }
 
-    if (comparableTotalReadingCount === null) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, totalReadingCount ${totalReadingCount}`)
+    const outOfRangeReadingCountFieldName = this.extractOutOfRangeReadingCountFieldName({
+      comparableAgreedReadingCount,
+      comparableTotalReadingCount,
+    })
+
+    if (outOfRangeReadingCountFieldName) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${OUT_OF_RANGE_READING_COUNT_MESSAGE}: AiRunId ${aiRunId}, field ${outOfRangeReadingCountFieldName}`)
     }
 
     if (comparableAgreedReadingCount > comparableTotalReadingCount) {
@@ -397,6 +409,16 @@ export default class AiRunFieldOutcomeRecorder {
       suggestionConfidence,
     })
 
+    const absentSettledFieldName = this.extractAbsentSettledFieldName({
+      aiRunFieldStatusId,
+      settledEvidenceCategoryId,
+      settledSuggestionConfidence,
+    })
+
+    if (absentSettledFieldName) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${ABSENT_SETTLED_RECORD_MESSAGE}: AiRunId ${aiRunId}, field ${absentSettledFieldName}`)
+    }
+
     if (
       settledEvidenceCategoryId !== null
       && !AI_RUN_EVIDENCE_CATEGORY_IDS.includes(settledEvidenceCategoryId)
@@ -413,7 +435,7 @@ export default class AiRunFieldOutcomeRecorder {
         instant: settledAt,
       })
     ) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNRECORDABLE_SETTLED_AT_MESSAGE}: AiRunId ${aiRunId}, settledAt ${settledAt}`)
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNRECORDABLE_SETTLED_AT_MESSAGE}: AiRunId ${aiRunId}, field settledAt`)
     }
 
     return /** @type {*} */ (
@@ -552,6 +574,80 @@ export default class AiRunFieldOutcomeRecorder {
   }
 
   /**
+   * Extract the name of the first thing a settled field must record and this call does not carry.
+   *
+   * Section 10 declares both columns NULL **when nothing was settled**, so on a field that did
+   * settle a null is the marker for the opposite state. Two ways of writing it reached the row: an
+   * omitted evidence kind, and a score this class could not read, which was quietly turned into the
+   * no-score marker and written. Either reads back — on a row kept 730 days, feeding the very use
+   * case about why a field returned no value — as a field whose majority reading rested on nothing
+   * and was scored by nothing. The column has one meaning and it is spoken for.
+   *
+   * A field that settled nothing reaches none of this: it is the state the markers are for.
+   *
+   * @param {{
+   *   aiRunFieldStatusId: *
+   *   settledEvidenceCategoryId: *
+   *   settledSuggestionConfidence: *
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when a settled field carries both.
+   * @public
+   */
+  extractAbsentSettledFieldName ({
+    aiRunFieldStatusId,
+    settledEvidenceCategoryId,
+    settledSuggestionConfidence,
+  }) {
+    if (
+      !this.settlesField({
+        aiRunFieldStatusId,
+      })
+    ) {
+      return null
+    }
+
+    if (
+      !this.carriesSettledEvidenceKind({
+        settledEvidenceCategoryId,
+      })
+    ) {
+      return 'AiRunEvidenceCategoryId'
+    }
+
+    if (
+      !this.isRecordableScore({
+        suggestionConfidence: settledSuggestionConfidence,
+      })
+    ) {
+      return 'suggestionConfidence'
+    }
+
+    return null
+  }
+
+  /**
+   * Check whether an evidence kind was stated at all.
+   *
+   * Omitted and null are one state with two spellings, and for one commit they behaved differently
+   * — the first threw and the second wrote.
+   *
+   * @param {{
+   *   settledEvidenceCategoryId: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether an evidence kind was stated.
+   * @public
+   */
+  carriesSettledEvidenceKind ({
+    settledEvidenceCategoryId,
+  }) {
+    if (typeof settledEvidenceCategoryId === 'undefined') {
+      return false
+    }
+
+    return settledEvidenceCategoryId !== null
+  }
+
+  /**
    * Generate the evidence category recorded against the field.
    *
    * What the majority reading rested on only exists where there was a majority reading. A field
@@ -573,10 +669,6 @@ export default class AiRunFieldOutcomeRecorder {
         aiRunFieldStatusId,
       })
     ) {
-      return null
-    }
-
-    if (typeof aiRunEvidenceCategoryId === 'undefined') {
       return null
     }
 
@@ -605,14 +697,6 @@ export default class AiRunFieldOutcomeRecorder {
     if (
       !this.settlesField({
         aiRunFieldStatusId,
-      })
-    ) {
-      return null
-    }
-
-    if (
-      !this.isRecordableScore({
-        suggestionConfidence,
       })
     ) {
       return null
@@ -713,8 +797,15 @@ export default class AiRunFieldOutcomeRecorder {
    *
    * A count is a whole number of readings, so it answers the number for an integer or an
    * integer-shaped string and null for anything else — a decimal, a sign, text, or a value of
-   * another kind. Zero is a count; a negative one is not, because there is no way to agree fewer
-   * than no times.
+   * another kind.
+   *
+   * **Whether the number is one a count could be is a different question, and it is asked
+   * separately.** For one commit this method answered null for both, and the save path had one
+   * message for both, so a caller handing `2147483648` was told its value was not a whole number
+   * when it plainly was. Two defects reported as one is how an operator is sent looking in the
+   * wrong place, and it is the same shape as the message this class was corrected for one round
+   * earlier. The range is `#fallsWithinRecordableReadingRange()`, and it covers the floor as well —
+   * `-1` is a whole number too, and is out of range rather than unreadable.
    *
    * It exists because the columns are `INTEGER` and would coerce quietly: a security audit stored a
    * person's name and telephone number in `agreed_reading_count` and the row was written, while the
@@ -730,35 +821,92 @@ export default class AiRunFieldOutcomeRecorder {
     readingCount,
   }) {
     if (Number.isInteger(readingCount)) {
-      return this.fallsWithinRecordableReadingRange({
-        readingCount,
-      })
-        ? readingCount
-        : null
+      return /** @type {number} */ (readingCount)
     }
 
     if (typeof readingCount !== 'string') {
       return null
     }
 
-    if (!READING_COUNT_PATTERN.test(readingCount)) {
-      return null
-    }
-
-    return this.fallsWithinRecordableReadingRange({
-      readingCount: Number(readingCount),
-    })
+    return READING_COUNT_PATTERN.test(readingCount)
       ? Number(readingCount)
       : null
   }
 
   /**
-   * Check whether a count falls within the range the column can hold.
+   * Extract the name of the first reading count that is not a whole number at all.
+   *
+   * @param {{
+   *   comparableAgreedReadingCount: number | null
+   *   comparableTotalReadingCount: number | null
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when both are whole numbers.
+   * @public
+   */
+  extractUnreadableReadingCountFieldName ({
+    comparableAgreedReadingCount,
+    comparableTotalReadingCount,
+  }) {
+    if (comparableAgreedReadingCount === null) {
+      return 'agreedReadingCount'
+    }
+
+    if (comparableTotalReadingCount === null) {
+      return 'totalReadingCount'
+    }
+
+    return null
+  }
+
+  /**
+   * Extract the name of the first reading count that is a whole number no count could be.
+   *
+   * Kept apart from the question of whether the value was a whole number at all, because they are
+   * two defects and one message for both told an operator its `2147483648` was not an integer.
+   *
+   * @param {{
+   *   comparableAgreedReadingCount: number
+   *   comparableTotalReadingCount: number
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when both are in range.
+   * @public
+   */
+  extractOutOfRangeReadingCountFieldName ({
+    comparableAgreedReadingCount,
+    comparableTotalReadingCount,
+  }) {
+    if (
+      !this.fallsWithinRecordableReadingRange({
+        readingCount: comparableAgreedReadingCount,
+      })
+    ) {
+      return 'agreedReadingCount'
+    }
+
+    if (
+      !this.fallsWithinRecordableReadingRange({
+        readingCount: comparableTotalReadingCount,
+      })
+    ) {
+      return 'totalReadingCount'
+    }
+
+    return null
+  }
+
+  /**
+   * Check whether a count falls within the range a count can hold.
+   *
+   * Both ends, and both for the same reason — a figure outside them is not a figure this row could
+   * carry. Below zero there is no way to agree fewer than no times; above `INTEGER`'s own maximum
+   * SQLite stores the value and a strict MariaDB rejects or clamps it, which would put development
+   * and production on different rows for two years.
    *
    * @param {{
    *   readingCount: number
    * }} params - Parameters.
    * @returns {boolean} Whether it falls within the range.
+   * @public
    */
   fallsWithinRecordableReadingRange ({
     readingCount,

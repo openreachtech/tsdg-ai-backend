@@ -29,6 +29,11 @@ const LATEST_RECORDABLE_INSTANT = new Date('9999-12-31T23:59:59.999Z')
  * caller not honoring what it was asked for, and accepting it would leave the same door ajar for
  * the next string that does not parse.
  *
+ * **A value sitting on `Date.prototype` with no time of its own is refused too.** `instanceof` asks
+ * only about the prototype chain, so `Object.create(Date.prototype)` and a genuine `Date` behind a
+ * proxy both pass it and then throw on `getTime()`. They are refused rather than allowed to fault,
+ * because a method that answers a boolean has to answer one.
+ *
  * **An out-of-range instant is refused beside an unparseable one**, because the harm is the same.
  * `new Date(8.64e15)` is a valid `Date` naming a year the column cannot store, so a guard that
  * asked only `is this a Date` would pass it to be truncated or rejected by the driver, differently
@@ -85,13 +90,48 @@ export default class AiRunInstantInspector {
       return false
     }
 
-    if (Number.isNaN(instant.getTime())) {
+    if (
+      !this.carriesReadableTime({
+        instant,
+      })
+    ) {
       return false
     }
 
     return this.fallsWithinRecordableRange({
       instant,
     })
+  }
+
+  /**
+   * Check whether a real time can be read off a value that says it is a `Date`.
+   *
+   * `instanceof` asks about the prototype chain, and a value can sit on `Date.prototype` while
+   * carrying no time at all — `Object.create(Date.prototype)`, or a genuine `Date` behind a proxy,
+   * which has no internal slot of its own. Both answer true to `instanceof` and then throw on
+   * `getTime()`, including through `Date.prototype.getTime.call()`, so there is no way to ask
+   * except by asking.
+   *
+   * **Nothing is logged here, and that is deliberate rather than an omission.** The failure is not
+   * swallowed: the caller refuses the write and names the field it refused, which is strictly more
+   * than a log line from inside a predicate would say. What this method must not do is what it did
+   * for one commit — fault out of a method whose stated contract is that it answers a boolean, so
+   * that the recorder above it reported neither the refusal nor the run.
+   *
+   * @param {{
+   *   instant: Date
+   * }} params - Parameters.
+   * @returns {boolean} Whether a real time can be read.
+   * @public
+   */
+  carriesReadableTime ({
+    instant,
+  }) {
+    try {
+      return !Number.isNaN(instant.getTime())
+    } catch (error) {
+      return false
+    }
   }
 
   /**

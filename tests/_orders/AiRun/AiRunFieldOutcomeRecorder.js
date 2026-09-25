@@ -444,79 +444,25 @@ describe('AiRunFieldOutcomeRecorder', () => {
 describe('AiRunFieldOutcomeRecorder', () => {
   describe('#saveAiRunFieldOutcome()', () => {
     /*
-     * The two payloads that reach the table anyway, and what the row says once they have.
+     * The state arriving as text, which is how a status id that passed through a query string or a
+     * JSON body arrives.
      *
-     * The first is a value read out of a medium handed to `suggestion_confidence`. That column is
-     * `DECIMAL(5, 4)`, which a strict-mode MySQL would refuse outright — but every Jest run and
-     * every developer's machine is SQLite, which takes a string whole. So the channel is open
-     * exactly where nobody is watching, and the row records no score rather than that text: the
-     * column is nullable and already means "no score", so the rest of the row still stands and the
-     * trace keeps the field.
+     * `'4'` is `missing`, and a state compared as it arrived would not have matched the `missing`
+     * this recorder holds — leaving a row that says the field settled nothing while carrying the
+     * confidence and the evidence category of a reading that lost. That is the row the second use
+     * case of `#run-record` reads when an operator asks why a run returned no value for a field, so
+     * it is the one row that must never contradict itself. Both leftovers are recorded as null.
      *
-     * The second is the state arriving as text, which is how a status id that passed through a
-     * query string or a JSON body arrives. `'4'` is `missing`, and a state compared as it arrived
-     * would not have matched the `missing` this recorder holds — leaving a row that says the field
-     * settled nothing while carrying the confidence and the evidence category of a reading that
-     * lost. That is the row the second use case of `#run-record` reads when an operator asks why a
-     * run returned no value for a field, so it is the one row that must never contradict itself.
-     * Both leftovers are recorded as null.
+     * **A case that stood beside this one has moved to a refusal.** It handed a value read out of a
+     * medium to `suggestion_confidence` on a field that settled, and asserted that the row was
+     * written with the score nulled — on the reasoning that the column is nullable and already
+     * means "no score". Section 10 says it means NULL **when nothing was settled**, so writing that
+     * marker against a settled field made a dropped score indistinguishable from a field that
+     * scored nothing, in the very row this comment calls the one that must never contradict itself.
+     * It is refused now, and lives in the settled-field describe below.
      */
     describe('when a value read out of a medium reaches a nullable column', () => {
       const cases = [
-        {
-          input: {
-            aiRunRow: {
-              id: 10220017,
-              ApiClientId: 10000001,
-              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
-              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
-              runKey: 'run-key-10220017',
-              requestKey: 'request-key-10220017',
-              requestBodyHash: 'request-body-hash-10220017',
-              externalRef: 'external-ref-10220017',
-              subjectLabel: 'Subject label of run 10220017',
-              correlationId: 'correlation-id-10220017',
-              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220017',
-              acceptedAt: new Date('2026-09-22T03:00:01.001Z'),
-              startedAt: new Date('2026-09-22T03:00:02.002Z'),
-              finishedAt: new Date('2026-09-22T03:00:03.003Z'),
-            },
-            aiRunStepRow: {
-              id: 10220007,
-              AiRunId: 10220017,
-              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
-              stepIndex: 1,
-              stepName: 'step-name-10220007',
-              outcomeCode: 'outcome-code-10220007',
-              startedAt: new Date('2026-09-22T03:01:01.001Z'),
-              finishedAt: new Date('2026-09-22T03:01:02.002Z'),
-            },
-            fieldOutcome: {
-              aiRunId: 10220017,
-              aiRunStepId: 10220007,
-              fieldPath: 'subject.zeta',
-              aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
-              aiRunEvidenceCategoryId: 1, // AI_RUN_EVIDENCE_CATEGORY.VISIBLE_TEXT.ID
-              suggestionConfidence: 'read from the medium: 090-0000-0000',
-              agreedReadingCount: 3,
-              totalReadingCount: 3,
-              confidenceMethodVersion: 'confidence-method-0007',
-              settledAt: new Date('2026-09-22T07:07:07.007Z'),
-            },
-          },
-          expected: expect.objectContaining({
-            AiRunId: 10220017,
-            AiRunStepId: 10220007,
-            fieldPath: 'subject.zeta',
-            AiRunFieldStatusId: 1,
-            AiRunEvidenceCategoryId: 1,
-            suggestionConfidence: null,
-            agreedReadingCount: 3,
-            totalReadingCount: 3,
-            confidenceMethodVersion: 'confidence-method-0007',
-            settledAt: new Date('2026-09-22T07:07:07.007Z'),
-          }),
-        },
         {
           input: {
             aiRunRow: {
@@ -921,7 +867,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
           input: {
             agreedReadingCount: -5,
           },
-          expected: 'refused a reading count that is not a whole number',
+          expected: 'refused a reading count outside the range a count can hold',
           label: 'a count below zero, which no reading can agree',
         },
         {
@@ -1010,7 +956,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
             agreedReadingCount: 4294967296,
             totalReadingCount: 4294967296,
           },
-          expected: 'refused a reading count that is not a whole number',
+          expected: 'refused a reading count outside the range a count can hold',
           label: 'a count above what the column holds',
         },
         {
@@ -1018,7 +964,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
             agreedReadingCount: '99999999999999999999',
             totalReadingCount: '99999999999999999999',
           },
-          expected: 'refused a reading count that is not a whole number',
+          expected: 'refused a reading count outside the range a count can hold',
           label: 'a count written as a string of twenty digits',
         },
       ]
@@ -1054,30 +1000,87 @@ describe('AiRunFieldOutcomeRecorder', () => {
 describe('AiRunFieldOutcomeRecorder', () => {
   describe('#saveAiRunFieldOutcome()', () => {
     /*
-     * An evidence kind that was never stated means the same as one stated as null.
+     * What a settled field has to carry, which is section 10 read literally.
      *
-     * The column is nullable, so "no evidence kind" is a state this row legitimately records — and
-     * for one commit there were two spellings of it with two behaviours. An explicit null wrote,
-     * while omitting the key refused the whole decision row and told the caller the value named no
-     * master row, when the value named nothing at all. That is the same shape as the defect the
-     * commit before it was written to close: a guard and a write reading one word two ways.
+     * Both columns are declared NULL **when nothing was settled**. So on a field that did settle, a
+     * null is the marker for the opposite state, and two ways of writing it were reaching the row:
+     * an evidence kind the caller simply omitted, and a score this class could not read, which was
+     * quietly turned into the no-score marker and written. Either reads back — 730 days later, by
+     * an operator asking why a field returned no value — as a field whose majority reading rested
+     * on nothing and was scored by nothing, indistinguishable from one that settled nothing at all.
+     *
+     * The first four scores are the ones the audit put through. Under SQLite a `DECIMAL(5, 4)`
+     * takes a string whole where a strict-mode MySQL refuses it, so that channel was open exactly
+     * where nobody was watching; they now stop here instead of being nulled and written.
      */
-    describe('should record a settled field whose evidence kind was not stated', () => {
+    describe('should refuse a settled field carrying none of what settling it records', () => {
       const cases = [
         {
           input: {
-            fieldPath: 'probe.evidence.omitted',
+            fieldPath: 'probe.settled.evidence-omitted',
+            suggestionConfidence: 0.95,
           },
-          expected: null,
-          label: 'the evidence kind omitted altogether',
+          expected: 'field AiRunEvidenceCategoryId',
+          label: 'an evidence kind omitted altogether',
         },
         {
           input: {
-            fieldPath: 'probe.evidence.null',
+            fieldPath: 'probe.settled.evidence-null',
             aiRunEvidenceCategoryId: null,
+            suggestionConfidence: 0.95,
           },
-          expected: null,
-          label: 'the evidence kind stated as null',
+          expected: 'field AiRunEvidenceCategoryId',
+          label: 'an evidence kind stated as null',
+        },
+        {
+          input: {
+            fieldPath: 'probe.settled.score-text',
+            aiRunEvidenceCategoryId: 1,
+            // expected names the field below, so a guard that fired for the other reason is caught
+            suggestionConfidence: 'read from the medium: the owner is a sample person',
+          },
+          expected: 'field suggestionConfidence',
+          label: 'a score carrying what was read out of the medium',
+        },
+        {
+          input: {
+            fieldPath: 'probe.settled.score-above',
+            aiRunEvidenceCategoryId: 1,
+            // expected names the field below, so a guard that fired for the other reason is caught
+            suggestionConfidence: '1.5',
+          },
+          expected: 'field suggestionConfidence',
+          label: 'a score above the top of the range',
+        },
+        {
+          input: {
+            fieldPath: 'probe.settled.score-below',
+            aiRunEvidenceCategoryId: 1,
+            // expected names the field below, so a guard that fired for the other reason is caught
+            suggestionConfidence: -0.5,
+          },
+          expected: 'field suggestionConfidence',
+          label: 'a score below the bottom of the range',
+        },
+        {
+          input: {
+            fieldPath: 'probe.settled.score-exponent',
+            aiRunEvidenceCategoryId: 1,
+            // expected names the field below, so a guard that fired for the other reason is caught
+            suggestionConfidence: '1e-3',
+          },
+          expected: 'field suggestionConfidence',
+          label: 'a score written in a form no decimal column spells',
+        },
+        {
+          input: {
+            fieldPath: 'probe.settled.score-null',
+            aiRunEvidenceCategoryId: 1,
+            // expected names the field below, so a guard that fired for the other reason is caught
+            suggestionConfidence: null,
+          },
+          expected: 'field suggestionConfidence',
+          label: 'a score stated as null on a field that settled',
         },
       ]
 
@@ -1087,22 +1090,83 @@ describe('AiRunFieldOutcomeRecorder', () => {
       }) => {
         const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
 
-        const received = await recorder.saveAiRunFieldOutcome({ // Act
+        const actual = () => recorder.saveAiRunFieldOutcome({ // Act
           aiRunId: 10010004,
           aiRunStepId: 10240004,
-          // AI_RUN_FIELD_STATUS.EXTRACTED.ID — a state that settles, so the evidence kind is read
-          // rather than being nulled ahead of it
-          aiRunFieldStatusId: 1,
-          suggestionConfidence: 0.91,
+          aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID — a state that settles
           agreedReadingCount: 3,
           totalReadingCount: 3,
           confidenceMethodVersion: 'confidence-v1.0.0',
-          settledAt: new Date('2026-09-22T09:09:11.011Z'),
+          settledAt: new Date('2026-09-22T09:09:12.012Z'),
+          // the evidence kind and the score are stated per case, so a case that omits one omits it
           ...input,
         })
 
-        expect(received.AiRunEvidenceCategoryId) // Assert
-          .toBe(expected)
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The other side of the rule above, and the state the two markers exist for.
+     *
+     * A field that settled nothing records no evidence kind and no score, and reaches none of the
+     * refusals — which is what makes a null in either column mean one thing rather than two.
+     */
+    describe('should record a field that settled nothing with neither', () => {
+      const cases = [
+        {
+          input: {
+            fieldPath: 'probe.unsettled.omitted',
+          },
+          label: 'neither stated',
+        },
+        {
+          input: {
+            fieldPath: 'probe.unsettled.null',
+            aiRunEvidenceCategoryId: null,
+            suggestionConfidence: null,
+          },
+          label: 'both stated as null',
+        },
+        {
+          input: {
+            fieldPath: 'probe.unsettled.held',
+            aiRunEvidenceCategoryId: 1,
+            suggestionConfidence: 0.95,
+          },
+          label: 'both stated, from a reading that did not win',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const expected = {
+          AiRunEvidenceCategoryId: null,
+          suggestionConfidence: null,
+        }
+
+        const received = await recorder.saveAiRunFieldOutcome({ // Act
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          aiRunFieldStatusId: 4, // AI_RUN_FIELD_STATUS.MISSING.ID — the state that settles nothing
+          agreedReadingCount: 0,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:13.013Z'),
+          ...input,
+        })
+
+        expect(received) // Assert
+          .toEqual(expect.objectContaining(expected))
       })
     })
   })
