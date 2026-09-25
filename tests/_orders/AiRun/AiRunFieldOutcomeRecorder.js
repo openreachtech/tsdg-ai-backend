@@ -1374,3 +1374,172 @@ describe('AiRunFieldOutcomeRecorder', () => {
     })
   })
 })
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * Cases taken from the boundary of the predicate, not from the examples beside it.
+     *
+     * The round before this split one message into three and proved the split with the values its
+     * own docblock listed. None of them sat near the line the code actually draws, so a
+     * discriminator that asked `Number.isNaN(Number(x))` while claiming to ask "does the text name
+     * a number at all" survived every mutant: `Number('')` is 0, and `'-1'` is a number the text
+     * names perfectly well. The four values below are the ones that tell the two predicates apart.
+     *
+     * `'-1'` matters most. The number form of the same value is told it is out of range, by a
+     * docblock that says so in as many words - so one value was getting two answers depending on
+     * which side of a queue or a query string it arrived from.
+     */
+    describe('should sort text by the number it names, not by how it is spelled', () => {
+      const cases = [
+        {
+          input: {
+            fieldPath: 'probe.boundary.negative-text',
+            agreedReadingCount: '-1',
+          },
+          expected: 'refused a reading count outside the range a count can hold',
+          label: 'a negative count arriving as text, which the number form calls out of range',
+        },
+        {
+          input: {
+            fieldPath: 'probe.boundary.empty',
+            agreedReadingCount: '',
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'empty text, which names no number although Number() answers zero for it',
+        },
+        {
+          input: {
+            fieldPath: 'probe.boundary.blank',
+            agreedReadingCount: '   ',
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'blank text, which names no number although Number() answers zero for it',
+        },
+        {
+          input: {
+            fieldPath: 'probe.boundary.infinity',
+            agreedReadingCount: 'Infinity',
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'text naming a number that is no whole number',
+        },
+        {
+          input: {
+            fieldPath: 'probe.boundary.hexadecimal',
+            agreedReadingCount: '0x10',
+          },
+          expected: 'refused a reading count written in a shape no count is written in',
+          label: 'a sound in-range count written in a base a count is not written in',
+        },
+        {
+          input: {
+            fieldPath: 'probe.boundary.padded-both',
+            agreedReadingCount: '  3  ',
+          },
+          expected: 'refused a reading count written in a shape no count is written in',
+          label: 'a sound in-range count written with space around it',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const actual = () => recorder.saveAiRunFieldOutcome({ // Act
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+          aiRunEvidenceCategoryId: 1,
+          suggestionConfidence: 0.95,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:16.016Z'),
+          ...input,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The two keys, held to a shape before either is written into a message.
+     *
+     * The carve-out this class states - a refusal names the field, never the value, except where
+     * the value is an identity that locates the row - was being applied to both of these on the
+     * branches where neither was an identity. A step that does not exist is reported with the step
+     * id that found nothing, and `aiRunStepId` had no shape check anywhere in the class, so any
+     * text at all reached that message in full. The run id was worse: its branch is reached after
+     * this class has already judged the value and found it names no run.
+     *
+     * The values below are invented for the probe and name nobody. The assertions anchor the end of
+     * the message, because a substring match would pass just as well if the text came back.
+     */
+    describe('should refuse a key that is no id, naming the parameter only', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: 'read from the medium: the owner is a sample person, 090-0000-0000',
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id carrying what was read out of the medium',
+        },
+        {
+          input: {
+            aiRunStepId: 'read from the medium: 12 Sample Street',
+          },
+          expected: /refused a key that is not an id: field aiRunStepId$/u,
+          label: 'a step id carrying what was read out of the medium',
+        },
+        {
+          input: {
+            aiRunId: -1,
+          },
+          expected: /refused a key that is not an id: field aiRunId$/u,
+          label: 'a run id below one, which names no row',
+        },
+        {
+          input: {
+            aiRunStepId: '007',
+          },
+          expected: /refused a key that is not an id: field aiRunStepId$/u,
+          label: 'a step id written with a leading zero',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const actual = () => recorder.saveAiRunFieldOutcome({ // Act
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          fieldPath: 'probe.key.shape',
+          aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+          aiRunEvidenceCategoryId: 1,
+          suggestionConfidence: 0.95,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:17.017Z'),
+          ...input,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})

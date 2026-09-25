@@ -477,7 +477,7 @@ export default class AiRunStatusRecorder {
       Object.hasOwn(values, 'AiRunStatusId')
       && !AI_RUN_STATUS_IDS.includes(values.AiRunStatusId)
     ) {
-      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${UNKNOWN_AI_RUN_STATUS_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${values.AiRunStatusId}`)
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${UNKNOWN_AI_RUN_STATUS_MESSAGE}: AiRunId ${aiRunId}, field AiRunStatusId`)
     }
 
     const refusedAiRunFieldName = this.extractRefusedAiRunFieldName({
@@ -538,10 +538,15 @@ export default class AiRunStatusRecorder {
   /**
    * Check whether the values handed in are a plain object at all.
    *
-   * `null`, the argument left unstated, a string, a number, a boolean, a function. None of them
-   * carries a field, so none of them is the defect the refusal below describes — and for one commit
-   * all of them reported it anyway, which is the same misstatement this class was corrected for
-   * twice already.
+   * `null`, the argument left unstated, a string, a number, a boolean, a function. None of them is
+   * an object whose fields can be read as a record, so none of them is the defect the refusal below
+   * describes — and for one commit all of them reported it anyway, which is the same misstatement
+   * this class was corrected for twice already.
+   *
+   * An earlier wording here said none of them carries a field. That is false of a function, which
+   * carries `name` and `length` and whatever was assigned to it, and of a string, which carries
+   * `length` — and a docblock stating something untrue is the family this whole sequence of rounds
+   * has been about.
    *
    * **Only `null` and the unstated argument would have faulted**, which an earlier wording here
    * overstated: `Object.getPrototypeOf()` has coerced primitives since ES2015, so a string answers

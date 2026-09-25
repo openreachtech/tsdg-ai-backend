@@ -2695,3 +2695,65 @@ describe('AiRunStatusRecorder', () => {
     })
   })
 })
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The one refusal in this class that still reproduced what the caller handed it.
+     *
+     * `AiRunStatusId` is not an identity that locates a row - it is the value being judged, and on
+     * this branch it has just been judged to name no status at all. The two sibling messages
+     * interpolate the same field safely, because by the time they run it is one of five known ids.
+     *
+     * The value below is invented for the probe and names nobody. The assertion anchors the end of
+     * the message: a substring match would pass just as well if the text came back.
+     */
+    describe('should name the field when the status names no master row', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230102,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230102',
+              requestKey: 'request-key-10230102',
+              requestBodyHash: 'request-body-hash-10230102',
+              externalRef: 'external-ref-10230102',
+              subjectLabel: 'Subject label of run 10230102',
+              correlationId: 'correlation-id-10230102',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230102',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            values: {
+              AiRunStatusId: 'read from the medium: the owner is a sample person, 090-0000-0000',
+            },
+          },
+          expected: /refused a status naming no master row: AiRunId \d+, field AiRunStatusId$/u,
+          label: 'a status carrying what was read out of the medium',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const actual = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunRow.id,
+          values: input.values,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})

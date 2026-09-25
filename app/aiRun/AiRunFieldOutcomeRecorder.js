@@ -51,6 +51,7 @@ const MAXIMUM_READING_COUNT = 2147483647
 
 const UNRECORDABLE_SETTLED_AT_MESSAGE = 'refused a settled instant that is not an instant'
 
+const UNREADABLE_KEY_MESSAGE = 'refused a key that is not an id'
 const UNKNOWN_AI_RUN_STEP_MESSAGE = 'refused a step that does not exist'
 const FOREIGN_AI_RUN_STEP_MESSAGE = 'refused a step belonging to another run'
 const UNREADABLE_FIELD_STATUS_MESSAGE = 'refused a field state that is not an id'
@@ -348,6 +349,15 @@ export default class AiRunFieldOutcomeRecorder {
     confidenceMethodVersion,
     settledAt,
   }) {
+    const unreadableKeyFieldName = this.extractUnreadableKeyFieldName({
+      aiRunId,
+      aiRunStepId,
+    })
+
+    if (unreadableKeyFieldName) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_KEY_MESSAGE}: field ${unreadableKeyFieldName}`)
+    }
+
     const aiRunStep = await this.findAiRunStep({
       aiRunStepId,
     })
@@ -369,12 +379,12 @@ export default class AiRunFieldOutcomeRecorder {
       aiRunFieldStatusId,
     })
 
-    if (comparableAiRunFieldStatusId === null) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNREADABLE_FIELD_STATUS_MESSAGE}: AiRunId ${aiRunId}, field AiRunFieldStatusId`)
-    }
+    const refusedFieldStatusMessage = this.extractRefusedFieldStatusMessage({
+      comparableAiRunFieldStatusId,
+    })
 
-    if (!AI_RUN_FIELD_STATUS_IDS.includes(comparableAiRunFieldStatusId)) {
-      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNKNOWN_FIELD_STATUS_MESSAGE}: AiRunId ${aiRunId}, AiRunFieldStatusId ${comparableAiRunFieldStatusId}`)
+    if (refusedFieldStatusMessage) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${refusedFieldStatusMessage}: AiRunId ${aiRunId}, field AiRunFieldStatusId`)
     }
 
     const comparableAgreedReadingCount = this.generateComparableReadingCount({
@@ -538,6 +548,106 @@ export default class AiRunFieldOutcomeRecorder {
   }
 
   /**
+   * Extract the name of the first key handed in that is no id.
+   *
+   * **This is what lets the two messages below write a key out in full.** The class states that a
+   * refusal names the field and never the value, except where the value is an identity that locates
+   * the row — and for one commit that carve-out was applied to `aiRunId` and `aiRunStepId` on
+   * branches where neither was an identity yet. A step that does not exist is reported with the
+   * step id that found nothing; a step belonging to another run is reported after this class has
+   * already judged the run id and found it names no run. Either way the text reproduced was a value
+   * under judgement, unbounded in length, and `aiRunStepId` had no shape check anywhere in the
+   * class at all.
+   *
+   * Asked here, both are digits by the time either is written into a message, so the carve-out says
+   * what it always meant: an identity is echoed, and a value being judged is named.
+   *
+   * @param {{
+   *   aiRunId: *
+   *   aiRunStepId: *
+   * }} params - Parameters.
+   * @returns {string | null} The parameter name, or null when both are ids.
+   * @public
+   */
+  extractUnreadableKeyFieldName ({
+    aiRunId,
+    aiRunStepId,
+  }) {
+    if (
+      this.generateComparableKey({
+        key: aiRunId,
+      }) === null
+    ) {
+      return 'aiRunId'
+    }
+
+    return this.generateComparableKey({
+      key: aiRunStepId,
+    }) === null
+      ? 'aiRunStepId'
+      : null
+  }
+
+  /**
+   * Generate the number a key names, so that two of them can be compared.
+   *
+   * Every `BIGINT` key of this feature has the same shape and the same hazard: it may reach here as
+   * text, from MariaDB or from a request, and a key compared in the form it arrived in would refuse
+   * pairs that match. One rule, asked of whichever key is in hand — and one rule for both
+   * spellings, which `#namesRow()` below is what enforces.
+   *
+   * @param {{
+   *   key: *
+   * }} params - Parameters.
+   * @returns {number | null} The key as a number, or null when the value names no key.
+   * @public
+   */
+  generateComparableKey ({
+    key,
+  }) {
+    if (typeof key === 'number') {
+      return this.namesRow({
+        key,
+      })
+        ? key
+        : null
+    }
+
+    if (typeof key !== 'string') {
+      return null
+    }
+
+    return AI_RUN_ID_PATTERN.test(key)
+      ? Number(key)
+      : null
+  }
+
+  /**
+   * Check whether a number names a row at all.
+   *
+   * **The two spellings have to agree, and for one commit they did not.** The text form was held to
+   * `AI_RUN_ID_PATTERN`, which is a positive integer with no leading zero, while the number form
+   * took any integer at all — so `'-1'` named no row and `-1` named one, and which answer a caller
+   * got depended on whether its id had crossed a queue or a query string. A test written from the
+   * boundary rather than from the examples is what found it.
+   *
+   * @param {{
+   *   key: number
+   * }} params - Parameters.
+   * @returns {boolean} Whether the number names a row.
+   * @public
+   */
+  namesRow ({
+    key,
+  }) {
+    if (!Number.isInteger(key)) {
+      return false
+    }
+
+    return key >= 1
+  }
+
+  /**
    * Generate the number a run id names, so that two of them can be compared.
    *
    * The run the caller states and the run the step carries go through this same method, which is
@@ -552,19 +662,9 @@ export default class AiRunFieldOutcomeRecorder {
   generateComparableAiRunId ({
     aiRunId,
   }) {
-    if (Number.isInteger(aiRunId)) {
-      return /** @type {number} */ (aiRunId)
-    }
-
-    if (typeof aiRunId !== 'string') {
-      return null
-    }
-
-    if (!AI_RUN_ID_PATTERN.test(aiRunId)) {
-      return null
-    }
-
-    return Number(aiRunId)
+    return this.generateComparableKey({
+      key: aiRunId,
+    })
   }
 
   /**
@@ -916,17 +1016,44 @@ export default class AiRunFieldOutcomeRecorder {
   }
 
   /**
+   * Extract the message naming why a field state cannot be recorded.
+   *
+   * Two defects, two messages, and the field is named rather than the value in both — a state that
+   * is not an id may carry anything at all, and a state that is an id naming no master row is a
+   * number the reader can find from the field name alone.
+   *
+   * @param {{
+   *   comparableAiRunFieldStatusId: number | null
+   * }} params - Parameters.
+   * @returns {string | null} The message, or null when the state is recordable.
+   * @public
+   */
+  extractRefusedFieldStatusMessage ({
+    comparableAiRunFieldStatusId,
+  }) {
+    if (comparableAiRunFieldStatusId === null) {
+      return UNREADABLE_FIELD_STATUS_MESSAGE
+    }
+
+    return AI_RUN_FIELD_STATUS_IDS.includes(comparableAiRunFieldStatusId)
+      ? null
+      : UNKNOWN_FIELD_STATUS_MESSAGE
+  }
+
+  /**
    * Extract the message naming why a reading count cannot be recorded, out of what arrived.
    *
    * Three defects, three messages, because for four rounds this class reported them as one and an
-   * operator was sent to the wrong place each time. `'Jane Doe'` is no number at all; `'007'`,
-   * `'+3'`, `'3.0'` and `' 3'` are whole numbers written in shapes a count is not written in — the
-   * constant above says exactly why, that a value shaped that way came from somewhere that was not
-   * counting — and `2147483648` is a properly written whole number the column cannot hold. Telling
-   * all three that they are not whole numbers is false of the last two.
+   * operator was sent to the wrong place each time. `'Jane Doe'`, `''` and `'   '` name no number
+   * at all; `'007'`, `'+3'`, `'3.0'` and `' 3'` are whole numbers written in shapes a count is not
+   * written in — the constant above says exactly why, that a value shaped that way came from
+   * somewhere that was not counting — and `2147483648` and `'-1'` are properly named whole numbers
+   * the column cannot hold. Telling all three that they are not whole numbers is false of the last
+   * two.
    *
-   * The two string defects are told apart by whether the text names a number at all, not by the
-   * pattern, which rejects both alike.
+   * Text is sorted by `#extractRefusedReadingTextMessage()`, which judges the number the text names
+   * before it judges how the text was written. A pattern alone cannot: it rejects `'007'` and
+   * `'-1'` alike, and they are not the same defect.
    *
    * @param {{
    *   readingCount: *
@@ -937,25 +1064,56 @@ export default class AiRunFieldOutcomeRecorder {
   extractRefusedReadingCountMessage ({
     readingCount,
   }) {
-    if (typeof readingCount === 'number') {
+    if (typeof readingCount !== 'string') {
       return this.extractRefusedReadingNumberMessage({
         readingCount,
       })
     }
 
-    if (typeof readingCount !== 'string') {
+    return this.extractRefusedReadingTextMessage({
+      readingCount,
+    })
+  }
+
+  /**
+   * Extract the message naming why text is no reading count.
+   *
+   * **The number the text names is judged before its spelling is**, which is the fix for a
+   * discriminator that asked `Number.isNaN(Number(x))` and called that "whether the text names a
+   * number at all". It is not the same predicate: `Number('')` and `Number('   ')` are both `0`, so
+   * text naming nothing was sorted as a number badly written. Worse, `'-1'` was told its spelling
+   * was wrong while the number form of the same value was correctly told it was out of range — one
+   * value, two answers, and the docblock beside them says outright that a negative count is out of
+   * range rather than unreadable.
+   *
+   * So the order is: text that names nothing is unreadable; then whatever number it does name faces
+   * the same two questions a number faces; and only a text naming a sound, in-range count is left
+   * to be judged on how it was written.
+   *
+   * @param {{
+   *   readingCount: string
+   * }} params - Parameters.
+   * @returns {string | null} The message, or null when the text is a recordable count.
+   * @public
+   */
+  extractRefusedReadingTextMessage ({
+    readingCount,
+  }) {
+    if (readingCount.trim() === '') {
       return UNREADABLE_READING_COUNT_MESSAGE
     }
 
-    if (!READING_COUNT_PATTERN.test(readingCount)) {
-      return Number.isNaN(Number(readingCount))
-        ? UNREADABLE_READING_COUNT_MESSAGE
-        : MISSPELLED_READING_COUNT_MESSAGE
-    }
-
-    return this.extractRefusedReadingNumberMessage({
+    const refusedNumberMessage = this.extractRefusedReadingNumberMessage({
       readingCount: Number(readingCount),
     })
+
+    if (refusedNumberMessage) {
+      return refusedNumberMessage
+    }
+
+    return READING_COUNT_PATTERN.test(readingCount)
+      ? null
+      : MISSPELLED_READING_COUNT_MESSAGE
   }
 
   /**
