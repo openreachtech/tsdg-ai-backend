@@ -5,12 +5,12 @@ import {
 import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
 
 /**
- * AiRun model
+ * AiRunStep model
  *
- * @class AiRun
+ * @class AiRunStep
  * @extends {BaseAppRenchanModel}
  */
-export default class AiRun extends BaseAppRenchanModel {
+export default class AiRunStep extends BaseAppRenchanModel {
   /**
    * Define model attributes
    *
@@ -24,90 +24,46 @@ export default class AiRun extends BaseAppRenchanModel {
       ...factory.ID_BIGINT,
 
       // ForeignKey must start with upper case.
-      ApiClientId: {
+      AiRunId: {
         type: DataTypes.BIGINT,
         allowNull: false,
       },
       // ForeignKey must start with upper case.
-      AiRunCategoryId: {
+      AiRunStepCategoryId: {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
-      // ForeignKey must start with upper case.
-      AiRunStatusId: {
+      // The order the step ran in, counted within its own run.
+      stepIndex: {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
-      runKey: {
-        type: DataTypes.STRING(64),
-        allowNull: false,
-        unique: true,
-      },
-      requestKey: {
-        type: DataTypes.STRING(191),
-        allowNull: false,
-      },
-      requestBodyHash: {
+      stepName: {
         type: DataTypes.STRING(64),
         allowNull: false,
       },
-      externalRef: {
-        type: DataTypes.STRING(191),
-        allowNull: false,
-      },
-      subjectLabel: {
-        type: DataTypes.TEXT,
-        allowNull: false,
-      },
-      correlationId: {
-        type: DataTypes.STRING(191),
-        allowNull: false,
-      },
-      callbackUrl: {
-        type: DataTypes.TEXT,
-        allowNull: false,
-      },
-      requestBody: {
-        type: DataTypes.TEXT('medium'),
-        allowNull: true,
-      },
-      resultBody: {
-        type: DataTypes.TEXT('medium'),
-        allowNull: true,
-      },
-      failureReasonCode: {
+      outcomeCode: {
         type: DataTypes.STRING(64),
-        allowNull: true,
+        allowNull: false,
       },
-      failureParameters: {
+      // What this step dropped, and why: the field path, the reason code, and figures
+      // such as a length or an agreement count. Never the value itself - this row
+      // outlives the content by two years, and a value kept here would survive the
+      // purge meant to remove it.
+      rejections: {
         type: DataTypes.JSON,
         allowNull: true,
       },
-      engineLabel: {
-        type: DataTypes.STRING(191),
+      reasonCode: {
+        type: DataTypes.STRING(64),
         allowNull: true,
-      },
-      acceptedAt: {
-        type: DataTypes.DATE(3),
-        allowNull: false,
       },
       startedAt: {
         type: DataTypes.DATE(3),
-        allowNull: true,
+        allowNull: false,
       },
+      // Null while the step is still running.
       finishedAt: {
-        type: DataTypes.DATE(3),
-        allowNull: true,
-      },
-      cancelRequestedAt: {
-        type: DataTypes.DATE(3),
-        allowNull: true,
-      },
-      canceledAt: {
-        type: DataTypes.DATE(3),
-        allowNull: true,
-      },
-      contentPurgedAt: {
         type: DataTypes.DATE(3),
         allowNull: true,
       },
@@ -132,11 +88,9 @@ export default class AiRun extends BaseAppRenchanModel {
   static associate () {
     super.associate?.()
 
-    this.belongsTo(this._.ApiClient)
-    this.belongsTo(this._.AiRunCategory)
-    this.belongsTo(this._.AiRunStatus)
+    this.belongsTo(this._.AiRun)
+    this.belongsTo(this._.AiRunStepCategory)
 
-    this.hasMany(this._.AiRunStep)
     this.hasMany(this._.AiRunFieldOutcome)
   }
 
