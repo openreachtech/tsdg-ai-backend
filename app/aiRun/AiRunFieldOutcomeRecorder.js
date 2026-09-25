@@ -1,3 +1,5 @@
+import AiRunInstantInspector from './AiRunInstantInspector.js'
+
 import AI_RUN_EVIDENCE_CATEGORY_CONSTANT_HASH from '../constants/aiRunEvidenceCategoryConstants.js'
 import AI_RUN_FIELD_STATUS_CONSTANT_HASH from '../constants/aiRunFieldStatusConstants.js'
 
@@ -35,6 +37,18 @@ const AI_RUN_EVIDENCE_CATEGORY_IDS = Object.values(AI_RUN_EVIDENCE_CATEGORY)
  * `0` on its own is a count; `007` and `+3` are not, for the same reason an id is not written with
  * a leading zero — a value shaped that way came from somewhere that was not counting.
  */
+/*
+ * The largest count the column can hold. `INTEGER` is what the migration declares, so a figure
+ * above this is not a figure this row could carry: SQLite stores it and a strict MariaDB rejects or
+ * clamps it, which is a development-and-production divergence on a row kept for two years. The
+ * floor was already stated — zero readings can agree, fewer than none cannot — and this is its
+ * other end, bounded by the column exactly as the field path and the method version are bounded by
+ * theirs.
+ */
+const MAXIMUM_READING_COUNT = 2147483647
+
+const UNRECORDABLE_SETTLED_AT_MESSAGE = 'refused a settled instant that is not an instant'
+
 const READING_COUNT_PATTERN = /^(?:0|[1-9]\d*)$/u
 
 const UNKNOWN_AI_RUN_STEP_MESSAGE = 'refused a step that does not exist'
@@ -233,8 +247,10 @@ export default class AiRunFieldOutcomeRecorder {
    */
   constructor ({
     missingAiRunFieldStatusId,
+    aiRunInstantInspector,
   }) {
     this.missingAiRunFieldStatusId = missingAiRunFieldStatusId
+    this.aiRunInstantInspector = aiRunInstantInspector
   }
 
   /**
@@ -248,12 +264,23 @@ export default class AiRunFieldOutcomeRecorder {
    */
   static create ({
     missingAiRunFieldStatusId = DEFAULT_MISSING_AI_RUN_FIELD_STATUS_ID,
+    aiRunInstantInspector = this.createAiRunInstantInspector(),
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         missingAiRunFieldStatusId,
+        aiRunInstantInspector,
       })
     )
+  }
+
+  /**
+   * Create the inspector answering whether a value is an instant this service may record.
+   *
+   * @returns {AiRunInstantInspector} Inspector.
+   */
+  static createAiRunInstantInspector () {
+    return AiRunInstantInspector.create()
   }
 
   /**
@@ -380,6 +407,14 @@ export default class AiRunFieldOutcomeRecorder {
     const settledConfidenceMethodVersion = this.generateSettledConfidenceMethodVersion({
       confidenceMethodVersion,
     })
+
+    if (
+      !this.aiRunInstantInspector.isRecordableInstant({
+        instant: settledAt,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNRECORDABLE_SETTLED_AT_MESSAGE}: AiRunId ${aiRunId}, settledAt ${settledAt}`)
+    }
 
     return /** @type {*} */ (
       this.Ctor.AiRunFieldOutcomeCtor.create({
@@ -541,6 +576,10 @@ export default class AiRunFieldOutcomeRecorder {
       return null
     }
 
+    if (typeof aiRunEvidenceCategoryId === 'undefined') {
+      return null
+    }
+
     return aiRunEvidenceCategoryId
   }
 
@@ -670,19 +709,6 @@ export default class AiRunFieldOutcomeRecorder {
   }
 
   /**
-   * Generate the number a status id names, so that two of them can be compared.
-   *
-   * The status the caller hands in and the status this recorder holds as `missing` go through the
-   * same conversion, which is why the value arrives as an argument rather than being read off
-   * `this`: one rule applied to both sides is what keeps the two from drifting into a comparison
-   * that only looks like one.
-   *
-   * @param {{
-   *   aiRunFieldStatusId: *
-   * }} params - Parameters.
-   * @returns {number | null} The id as a number, or null when the value names no state.
-   */
-  /**
    * Generate a reading count that can be compared and recorded, out of what the caller handed in.
    *
    * A count is a whole number of readings, so it answers the number for an integer or an
@@ -704,7 +730,9 @@ export default class AiRunFieldOutcomeRecorder {
     readingCount,
   }) {
     if (Number.isInteger(readingCount)) {
-      return readingCount >= 0
+      return this.fallsWithinRecordableReadingRange({
+        readingCount,
+      })
         ? readingCount
         : null
     }
@@ -713,18 +741,47 @@ export default class AiRunFieldOutcomeRecorder {
       return null
     }
 
-    return READING_COUNT_PATTERN.test(readingCount)
+    if (!READING_COUNT_PATTERN.test(readingCount)) {
+      return null
+    }
+
+    return this.fallsWithinRecordableReadingRange({
+      readingCount: Number(readingCount),
+    })
       ? Number(readingCount)
       : null
   }
 
   /**
-   * Generate a field-state id that can be compared, out of what the caller handed in.
+   * Check whether a count falls within the range the column can hold.
+   *
+   * @param {{
+   *   readingCount: number
+   * }} params - Parameters.
+   * @returns {boolean} Whether it falls within the range.
+   */
+  fallsWithinRecordableReadingRange ({
+    readingCount,
+  }) {
+    if (readingCount < 0) {
+      return false
+    }
+
+    return readingCount <= MAXIMUM_READING_COUNT
+  }
+
+  /**
+   * Generate the number a status id names, so that two of them can be compared.
+   *
+   * The status the caller hands in and the status this recorder holds as `missing` go through the
+   * same conversion, which is why the value arrives as an argument rather than being read off
+   * `this`: one rule applied to both sides is what keeps the two from drifting into a comparison
+   * that only looks like one.
    *
    * @param {{
    *   aiRunFieldStatusId: *
    * }} params - Parameters.
-   * @returns {number | null} The id, or null when the value names no state.
+   * @returns {number | null} The id as a number, or null when the value names no state.
    */
   generateComparableAiRunFieldStatusId ({
     aiRunFieldStatusId,
@@ -748,6 +805,7 @@ export default class AiRunFieldOutcomeRecorder {
 /**
  * @typedef {{
  *   missingAiRunFieldStatusId: number
+ *   aiRunInstantInspector: AiRunInstantInspector
  * }} AiRunFieldOutcomeRecorderParams
  */
 

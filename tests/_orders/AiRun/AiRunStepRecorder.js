@@ -896,3 +896,266 @@ describe('AiRunStepRecorder', () => {
     })
   })
 })
+
+describe('AiRunStepRecorder', () => {
+  describe('#saveAiRunStep()', () => {
+    /*
+     * The two instants the first use case reads to say how long a step took.
+     *
+     * This class drops what it cannot answer for everywhere else — a rejection whose path is not a
+     * path goes, and the sound decision beside it stays. These two are not droppable: `started_at`
+     * is NOT NULL, so there is nothing to drop to, and a `finished_at` that is present and is not a
+     * time coerces to the literal text `Invalid date`, which makes the duration unreadable while
+     * reading as though it had been recorded. Every case below wrote such a row before this guard.
+     */
+    describe('should refuse an instant field carrying something that is not an instant', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10210051,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210051',
+              requestKey: 'request-key-10210051',
+              requestBodyHash: 'request-body-hash-10210051',
+              externalRef: 'external-ref-10210051',
+              subjectLabel: 'Subject label of run 10210051',
+              correlationId: 'correlation-id-10210051',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210051',
+              acceptedAt: new Date('2026-09-24T04:01:01.001Z'),
+              startedAt: new Date('2026-09-24T04:01:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210051,
+              stepIndex: 1,
+              stepName: 'probe-instant',
+              stepCategoryName: 'code',
+              outcomeCode: 'PROBE_OK',
+              rejections: null,
+              reasonCode: null,
+              startedAt: 'whenever',
+              finishedAt: new Date('2026-09-24T04:01:09.009Z'),
+            },
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a step started at a word that is not a time',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10210052,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210052',
+              requestKey: 'request-key-10210052',
+              requestBodyHash: 'request-body-hash-10210052',
+              externalRef: 'external-ref-10210052',
+              subjectLabel: 'Subject label of run 10210052',
+              correlationId: 'correlation-id-10210052',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210052',
+              acceptedAt: new Date('2026-09-24T04:01:01.001Z'),
+              startedAt: new Date('2026-09-24T04:01:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210052,
+              stepIndex: 1,
+              stepName: 'probe-instant',
+              stepCategoryName: 'code',
+              outcomeCode: 'PROBE_OK',
+              rejections: null,
+              reasonCode: null,
+              startedAt: new Date('2026-09-24T04:01:10.010Z'),
+              finishedAt: 'whenever',
+            },
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a step finished at a word that is not a time',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10210053,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210053',
+              requestKey: 'request-key-10210053',
+              requestBodyHash: 'request-body-hash-10210053',
+              externalRef: 'external-ref-10210053',
+              subjectLabel: 'Subject label of run 10210053',
+              correlationId: 'correlation-id-10210053',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210053',
+              acceptedAt: new Date('2026-09-24T04:01:01.001Z'),
+              startedAt: new Date('2026-09-24T04:01:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210053,
+              stepIndex: 1,
+              stepName: 'probe-instant',
+              stepCategoryName: 'code',
+              outcomeCode: 'PROBE_OK',
+              rejections: null,
+              reasonCode: null,
+              startedAt: new Date('2026-09-24T04:01:11.011Z'),
+              finishedAt: {},
+            },
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a step finished at an empty object',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10210054,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210054',
+              requestKey: 'request-key-10210054',
+              requestBodyHash: 'request-body-hash-10210054',
+              externalRef: 'external-ref-10210054',
+              subjectLabel: 'Subject label of run 10210054',
+              correlationId: 'correlation-id-10210054',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210054',
+              acceptedAt: new Date('2026-09-24T04:01:01.001Z'),
+              startedAt: new Date('2026-09-24T04:01:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210054,
+              stepIndex: 1,
+              stepName: 'probe-instant',
+              stepCategoryName: 'code',
+              outcomeCode: 'PROBE_OK',
+              rejections: null,
+              reasonCode: null,
+              startedAt: new Date('2026-09-24T04:01:12.012Z'),
+              finishedAt: new Date('whenever'),
+            },
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a step finished at a Date that names no time',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10210055,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210055',
+              requestKey: 'request-key-10210055',
+              requestBodyHash: 'request-body-hash-10210055',
+              externalRef: 'external-ref-10210055',
+              subjectLabel: 'Subject label of run 10210055',
+              correlationId: 'correlation-id-10210055',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210055',
+              acceptedAt: new Date('2026-09-24T04:01:01.001Z'),
+              startedAt: new Date('2026-09-24T04:01:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210055,
+              stepIndex: 1,
+              stepName: 'probe-instant',
+              stepCategoryName: 'code',
+              outcomeCode: 'PROBE_OK',
+              rejections: null,
+              reasonCode: null,
+              startedAt: 0,
+              finishedAt: new Date('2026-09-24T04:01:13.013Z'),
+            },
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a step started at the epoch written as a number',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStepRecorder.create()
+
+        const actual = () => recorder.saveAiRunStep(input.savedStep) // Act
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStepRecorder', () => {
+  describe('#saveAiRunStep()', () => {
+    /*
+     * The other half of the rule above. A step still running has no instant it finished at, and the
+     * column is NULL for exactly that reason — so the guard reads only what is present, and a null
+     * passes through it untouched.
+     */
+    describe('should record a step that has not finished', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10210056,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10210056',
+              requestKey: 'request-key-10210056',
+              requestBodyHash: 'request-body-hash-10210056',
+              externalRef: 'external-ref-10210056',
+              subjectLabel: 'Subject label of run 10210056',
+              correlationId: 'correlation-id-10210056',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10210056',
+              acceptedAt: new Date('2026-09-24T04:01:01.001Z'),
+              startedAt: new Date('2026-09-24T04:01:02.002Z'),
+              finishedAt: null,
+            },
+            savedStep: {
+              aiRunId: 10210056,
+              stepIndex: 1,
+              stepName: 'probe-still-running',
+              stepCategoryName: 'code',
+              outcomeCode: 'PROBE_RUNNING',
+              rejections: null,
+              reasonCode: null,
+              startedAt: new Date('2026-09-24T04:01:20.020Z'),
+              finishedAt: null,
+            },
+          },
+          expected: expect.objectContaining({
+            stepName: 'probe-still-running',
+            startedAt: new Date('2026-09-24T04:01:20.020Z'),
+            finishedAt: null,
+          }),
+          label: 'a step that has not finished, whose finished instant is an absence and not a wrong time',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStepRecorder.create()
+
+        const received = await recorder.saveAiRunStep(input.savedStep) // Act
+
+        expect(received) // Assert
+          .toEqual(expected)
+      })
+    })
+  })
+})

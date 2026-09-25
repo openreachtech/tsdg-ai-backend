@@ -1,5 +1,6 @@
 import AiRunStatusRecorder from '../../../../app/aiRun/AiRunStatusRecorder.js'
 
+import AiRunInstantInspector from '../../../../app/aiRun/AiRunInstantInspector.js'
 import AiRunTerminalStatusInspector from '../../../../app/aiRun/AiRunTerminalStatusInspector.js'
 import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../../../../app/constants/aiRunFailureReasonConstants.js'
 import AiRun from '../../../../sequelize/models/AiRun.js'
@@ -57,6 +58,45 @@ describe('AiRunStatusRecorder', () => {
 
           expect(recorder)
             .toHaveProperty('aiRunTerminalStatusInspector', expected)
+        })
+      })
+
+      describe('#aiRunInstantInspector', () => {
+        const cases = [
+          {
+            input: {
+              aiRunInstantInspector: {
+                earliestRecordableInstant: new Date('1000-01-01T00:00:00.000Z'),
+                latestRecordableInstant: new Date('9999-12-31T23:59:59.999Z'),
+              },
+            },
+            expected: {
+              earliestRecordableInstant: new Date('1000-01-01T00:00:00.000Z'),
+              latestRecordableInstant: new Date('9999-12-31T23:59:59.999Z'),
+            },
+          },
+          {
+            input: {
+              aiRunInstantInspector: {
+                earliestRecordableInstant: new Date('2020-01-01T00:00:00.000Z'),
+                latestRecordableInstant: new Date('2030-12-31T23:59:59.999Z'),
+              },
+            },
+            expected: {
+              earliestRecordableInstant: new Date('2020-01-01T00:00:00.000Z'),
+              latestRecordableInstant: new Date('2030-12-31T23:59:59.999Z'),
+            },
+          },
+        ]
+
+        test.each(cases)('earliestRecordableInstant: $input.aiRunInstantInspector.earliestRecordableInstant', ({
+          input,
+          expected,
+        }) => {
+          const recorder = new AiRunStatusRecorder(input)
+
+          expect(recorder)
+            .toHaveProperty('aiRunInstantInspector', expected)
         })
       })
     })
@@ -120,6 +160,7 @@ describe('AiRunStatusRecorder', () => {
                 5,
               ],
             },
+            aiRunInstantInspector: expect.any(AiRunInstantInspector),
           },
         },
         {
@@ -138,6 +179,7 @@ describe('AiRunStatusRecorder', () => {
                 2,
               ],
             },
+            aiRunInstantInspector: expect.any(AiRunInstantInspector),
           },
         },
       ]
@@ -160,9 +202,40 @@ describe('AiRunStatusRecorder', () => {
         const SpyClass = constructorSpy.spyOn(AiRunStatusRecorder)
         const expected = {
           aiRunTerminalStatusInspector: expect.any(AiRunTerminalStatusInspector),
+          aiRunInstantInspector: expect.any(AiRunInstantInspector),
         }
 
         SpyClass.create()
+
+        expect(SpyClass.__spy__)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+
+    describe('should fill default aiRunInstantInspector', () => {
+      test('with the other collaborator stated', () => {
+        const SpyClass = constructorSpy.spyOn(AiRunStatusRecorder)
+        const input = {
+          aiRunTerminalStatusInspector: {
+            terminalAiRunStatusIds: [
+              3, // AI_RUN_STATUS.SUCCEEDED.ID
+              4, // AI_RUN_STATUS.FAILED.ID
+              5, // AI_RUN_STATUS.CANCELED.ID
+            ],
+          },
+        }
+        const expected = {
+          aiRunTerminalStatusInspector: {
+            terminalAiRunStatusIds: [
+              3,
+              4,
+              5,
+            ],
+          },
+          aiRunInstantInspector: expect.any(AiRunInstantInspector),
+        }
+
+        SpyClass.create(input)
 
         expect(SpyClass.__spy__)
           .toHaveBeenCalledWith(expected)

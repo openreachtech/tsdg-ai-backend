@@ -2221,3 +2221,409 @@ describe('AiRunStatusRecorder', () => {
     })
   })
 })
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The door the third audit round found still open after the second had closed the one beside it.
+     *
+     * The evidence rule refuses a missing instant, and that is what the round before this one put
+     * in. What it could not see is a value that is present and is not a time: Sequelize coerces
+     * whatever it is handed into `datetime(3)`, so every case below settled a run permanently with
+     * the literal text `Invalid date` in `finished_at` or `canceled_at`. That is worse than the
+     * null it replaced in the one way that decides it — a sweep for the absence finds nothing, no
+     * parser resolves the text, and the status reached is terminal, so `#saveOngoingAiRun()` itself
+     * refuses every later write that might have corrected it. `canceled_at` is half of the very
+     * pair the fifth criterion measures a gap across.
+     */
+    describe('should refuse an instant field carrying something that is not an instant', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230091,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230091',
+              requestKey: 'request-key-10230091',
+              requestBodyHash: 'request-body-hash-10230091',
+              externalRef: 'external-ref-10230091',
+              subjectLabel: 'Subject label of run 10230091',
+              correlationId: 'correlation-id-10230091',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230091',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              resultBody: null,
+              finishedAt: 'whenever',
+            }),
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a succeeded run finished at a word that is not a time',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230092,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230092',
+              requestKey: 'request-key-10230092',
+              requestBodyHash: 'request-body-hash-10230092',
+              externalRef: 'external-ref-10230092',
+              subjectLabel: 'Subject label of run 10230092',
+              correlationId: 'correlation-id-10230092',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230092',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+              canceledAt: 'whenever',
+              finishedAt: new Date('2026-09-26T03:03:09.009Z'),
+            }),
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a canceled run canceled at a word that is not a time',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230093,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230093',
+              requestKey: 'request-key-10230093',
+              requestBodyHash: 'request-body-hash-10230093',
+              externalRef: 'external-ref-10230093',
+              subjectLabel: 'Subject label of run 10230093',
+              correlationId: 'correlation-id-10230093',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230093',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              resultBody: null,
+              finishedAt: 0,
+            }),
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a succeeded run finished at the epoch written as a number',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230094,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230094',
+              requestKey: 'request-key-10230094',
+              requestBodyHash: 'request-body-hash-10230094',
+              externalRef: 'external-ref-10230094',
+              subjectLabel: 'Subject label of run 10230094',
+              correlationId: 'correlation-id-10230094',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230094',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              resultBody: null,
+              finishedAt: {},
+            }),
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a succeeded run finished at an empty object',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230095,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230095',
+              requestKey: 'request-key-10230095',
+              requestBodyHash: 'request-body-hash-10230095',
+              externalRef: 'external-ref-10230095',
+              subjectLabel: 'Subject label of run 10230095',
+              correlationId: 'correlation-id-10230095',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230095',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            buildValues: () => ({
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('whenever'),
+            }),
+          },
+          expected: 'refused an instant field carrying something that is not an instant',
+          label: 'a running run started at a Date that names no time',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const actual = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunRow.id,
+          values: input.buildValues(),
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The other half of the rule above, and the reason it reads only what is present.
+     *
+     * A null instant is an absence, and absence is the evidence rule's question — it answers it per
+     * status, refusing a missing `finished_at` on a run that just succeeded and allowing one on a
+     * run that is only starting. `cancel_requested_at` is evidence of no status at all, so a
+     * cancellation that was never asked for states it as null and must still record.
+     *
+     * If this case ever goes red beside the refusals above, the new rule has swallowed the old one.
+     */
+    describe('should record an instant stated as null', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230096,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230096',
+              requestKey: 'request-key-10230096',
+              requestBodyHash: 'request-body-hash-10230096',
+              externalRef: 'external-ref-10230096',
+              subjectLabel: 'Subject label of run 10230096',
+              correlationId: 'correlation-id-10230096',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230096',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            values: {
+              AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+              canceledAt: new Date('2026-09-26T03:03:11.011Z'),
+              finishedAt: new Date('2026-09-26T03:03:12.012Z'),
+              cancelRequestedAt: null,
+            },
+          },
+          expected: 5, // AI_RUN_STATUS.CANCELED.ID
+          label: 'a cancellation whose request instant is stated as null, which is an absence and not a wrong time',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        await recorder.saveOngoingAiRun({
+          aiRunId: input.aiRunRow.id,
+          values: input.values,
+        })
+
+        const received = await AiRun.findOne({ // Act
+          where: {
+            id: input.aiRunRow.id,
+          },
+        })
+
+        expect(received.AiRunStatusId) // Assert
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * A refusal has to name itself, which is this class's own doctrine and the only thing a caller's
+     * log has to go on.
+     *
+     * Before this, a `values` of null nor a `values` that was not an object at all reached the
+     * prototype read and faulted there with a bare `TypeError` naming neither the refusal nor the
+     * run. Nothing was written either way, so the harm was never a wrong row — it was a caller that
+     * could not tell which of this method's six refusals had happened, in the one case where the
+     * answer is that the call was malformed before any of them was reached.
+     */
+    describe('should refuse values it cannot answer for, by name', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230097,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230097',
+              requestKey: 'request-key-10230097',
+              requestBodyHash: 'request-body-hash-10230097',
+              externalRef: 'external-ref-10230097',
+              subjectLabel: 'Subject label of run 10230097',
+              correlationId: 'correlation-id-10230097',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230097',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            values: null,
+          },
+          expected: 'refused values carrying fields it did not state as its own',
+          label: 'values of null',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230098,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230098',
+              requestKey: 'request-key-10230098',
+              requestBodyHash: 'request-body-hash-10230098',
+              externalRef: 'external-ref-10230098',
+              subjectLabel: 'Subject label of run 10230098',
+              correlationId: 'correlation-id-10230098',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230098',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            values: 'AiRunStatusId=3',
+          },
+          expected: 'refused values carrying fields it did not state as its own',
+          label: 'values written as a string',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10230099,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230099',
+              requestKey: 'request-key-10230099',
+              requestBodyHash: 'request-body-hash-10230099',
+              externalRef: 'external-ref-10230099',
+              subjectLabel: 'Subject label of run 10230099',
+              correlationId: 'correlation-id-10230099',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230099',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            values: 42,
+          },
+          expected: 'refused values carrying fields it did not state as its own',
+          label: 'values written as a number',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const actual = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunRow.id,
+          values: input.values,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveOngoingAiRun()', () => {
+    /*
+     * The case the prototype read cannot be reached with, which is why the kind is asked first.
+     *
+     * A string and a number are turned away by the prototype read on their own — `String.prototype`
+     * is not `Object.prototype`. Values that were never stated are not: `Object.getPrototypeOf()`
+     * faults on them, so without the two kind checks in front, a call that simply forgot its second
+     * argument would report a `TypeError` naming neither the refusal nor the run.
+     */
+    describe('should refuse a call that states no values at all', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10230100,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10230100',
+              requestKey: 'request-key-10230100',
+              requestBodyHash: 'request-body-hash-10230100',
+              externalRef: 'external-ref-10230100',
+              subjectLabel: 'Subject label of run 10230100',
+              correlationId: 'correlation-id-10230100',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10230100',
+              acceptedAt: new Date('2026-09-26T03:03:01.001Z'),
+              startedAt: new Date('2026-09-26T03:03:02.002Z'),
+              finishedAt: null,
+            },
+          },
+          expected: 'refused values carrying fields it did not state as its own',
+          label: 'the values argument omitted altogether',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+
+        const actual = () => recorder.saveOngoingAiRun({ // Act
+          aiRunId: input.aiRunRow.id,
+          // values: not stated, which is the whole of this case
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})

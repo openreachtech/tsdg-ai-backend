@@ -1,3 +1,5 @@
+import AiRunInstantInspector from './AiRunInstantInspector.js'
+
 import AI_RUN_STEP_CATEGORY_CONSTANT_HASH from '../constants/aiRunStepCategoryConstants.js'
 
 import AiRunStep from '../../sequelize/models/AiRunStep.js'
@@ -6,6 +8,42 @@ import AiRunStepCategory from '../../sequelize/models/AiRunStepCategory.js'
 const {
   AI_RUN_STEP_CATEGORY,
 } = AI_RUN_STEP_CATEGORY_CONSTANT_HASH
+
+const UNRECORDABLE_AI_RUN_STEP_INSTANT_MESSAGE = 'refused an instant field carrying something that is not an instant'
+
+/*
+ * The two instants a step is bounded by, which are what the first use case reads to say how long
+ * the step took.
+ *
+ * This class drops what it cannot answer for everywhere else — a rejection whose path is not a path
+ * goes, and the sound decision beside it stays — because a rejection is secondary evidence and the
+ * step survives without it. These two are not secondary: `started_at` is NOT NULL, so there is
+ * nothing to drop to, and a `finished_at` that is present and is not a time coerces to the literal
+ * text `Invalid date`, which makes the duration unreadable and reads as though it were recorded.
+ * So these are refused rather than dropped, which is also what the other two recorders of this
+ * feature do with a value they cannot answer for.
+ */
+const AI_RUN_STEP_INSTANT_FIELD_NAMES = [
+  'startedAt',
+  'finishedAt',
+]
+
+/*
+ * What the three patterns below are, and what they are not.
+ *
+ * Each of them is a check on the SHAPE of a text, and none of them is a check on its content. They
+ * hold a rejection's three texts to looking like the identifiers they are declared to be, which is
+ * what turns away the payload the audit put through them — a name and an address written as prose,
+ * a sentence as a reason code, a medical status as the name of a figure.
+ *
+ * **What stays open is that a sentence joined by the characters they allow passes all three.**
+ * `Jane-Doe-12-Elm-Street` is a path, `jane_doe_hiv_positive` is a figure name, and no character
+ * class can tell either from `first_name_of_patient`. That is a limit of shape checking, not a gap
+ * to be closed by a longer pattern, and the guarantee that this column holds no value read out of a
+ * medium rests on the callers that build these texts — not here. It is written down because the
+ * clauses below say what each pattern rejects, and a reader who took "a sentence can never be a
+ * code" for the whole truth would not look twice at the caller that is where the truth is kept.
+ */
 
 /*
  * A dotted path into the schema, and nothing that is not one.
@@ -16,7 +54,7 @@ const {
  * of its own accord, `rejections` being JSON and JSON having no width, and which is borrowed from
  * the column that does for the reason below.
  *
- * What it rejects: whitespace of any kind, so a sentence can never be a path; a newline; every
+ * What it rejects: whitespace of any kind, so a sentence written as prose can never be a path; a newline; every
  * punctuation mark but the separating dot, the underscore and the hyphen — the colon, the comma and
  * the slash among them; the empty path; a leading, trailing or doubled dot; and anything at all past
  * 191 characters.
@@ -45,7 +83,7 @@ const REJECTION_FIELD_PATH_PATTERN = /^(?=.{1,191}$)[A-Za-z_][A-Za-z0-9_-]*(?:\.
  * width of `ai_run_steps.reason_code`, which is this same kind of value on this same row, one key
  * holding the step's own reason where this one holds a dropped field's.
  *
- * What it rejects: whitespace, so a sentence can never be a code; a newline; the colon, the comma,
+ * What it rejects: whitespace, so a sentence written as prose can never be a code; a newline; the colon, the comma,
  * the slash, the quote and every other punctuation mark; the empty code; and anything at all past 64
  * characters. All three casings this service already writes pass — `below_agreement_threshold`,
  * `value-over-max-length` and `MEDIA_UNREADABLE` — because which of them a caller reaches for is a
@@ -67,7 +105,7 @@ const REJECTION_REASON_CODE_PATTERN = /^(?=.{1,64}$)[A-Za-z][A-Za-z0-9._-]*$/u
  * construction, so a dotted name would be a path flattened into a key: a shape this column does not
  * hold, and one more way for something structured to arrive wearing a label's clothes.
  *
- * What it rejects: whitespace, so a sentence can never be a figure name; a newline; the colon, the
+ * What it rejects: whitespace, so a sentence written as prose can never be a figure name; a newline; the colon, the
  * comma, the slash and every other punctuation mark; the empty name; and anything at all past 64
  * characters.
  */
@@ -118,8 +156,10 @@ export default class AiRunStepRecorder {
    */
   constructor ({
     aiRunStepCategoryIdHash,
+    aiRunInstantInspector,
   }) {
     this.aiRunStepCategoryIdHash = aiRunStepCategoryIdHash
+    this.aiRunInstantInspector = aiRunInstantInspector
   }
 
   /**
@@ -133,12 +173,23 @@ export default class AiRunStepRecorder {
    */
   static create ({
     aiRunStepCategoryIdHash = this.buildAiRunStepCategoryIdHash(),
+    aiRunInstantInspector = this.createAiRunInstantInspector(),
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         aiRunStepCategoryIdHash,
+        aiRunInstantInspector,
       })
     )
+  }
+
+  /**
+   * Create the inspector answering whether a value is an instant this service may record.
+   *
+   * @returns {AiRunInstantInspector} Inspector.
+   */
+  static createAiRunInstantInspector () {
+    return AiRunInstantInspector.create()
   }
 
   /**
@@ -207,6 +258,17 @@ export default class AiRunStepRecorder {
     startedAt,
     finishedAt,
   }) {
+    const unrecordableInstantFieldName = this.extractUnrecordableInstantFieldName({
+      instants: {
+        startedAt,
+        finishedAt,
+      },
+    })
+
+    if (unrecordableInstantFieldName) {
+      throw new Error(`${this.Ctor.name}#saveAiRunStep() ${UNRECORDABLE_AI_RUN_STEP_INSTANT_MESSAGE}: AiRunId ${aiRunId}, stepIndex ${stepIndex}, field ${unrecordableInstantFieldName}`)
+    }
+
     const aiRunStepCategoryId = this.generateAiRunStepCategoryId({
       stepCategoryName,
     })
@@ -228,6 +290,31 @@ export default class AiRunStepRecorder {
         finishedAt,
       })
     )
+  }
+
+  /**
+   * Extract the name of the first instant field stated with something that is not an instant.
+   *
+   * `finished_at` is null while the step is still running, so a null is passed over here; the
+   * column's own NOT NULL is what answers for a `started_at` that is missing altogether. What this
+   * reads is whatever is present.
+   *
+   * @param {{
+   *   instants: Record<string, *>
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when every stated instant is one.
+   * @public
+   */
+  extractUnrecordableInstantFieldName ({
+    instants,
+  }) {
+    return AI_RUN_STEP_INSTANT_FIELD_NAMES
+      .filter(it => instants[it] !== null)
+      .filter(it => typeof instants[it] !== 'undefined')
+      .find(it => !this.aiRunInstantInspector.isRecordableInstant({
+        instant: instants[it],
+      }))
+      ?? null
   }
 
   /**
@@ -438,6 +525,7 @@ export default class AiRunStepRecorder {
 /**
  * @typedef {{
  *   aiRunStepCategoryIdHash: Record<string, number>
+ *   aiRunInstantInspector: AiRunInstantInspector
  * }} AiRunStepRecorderParams
  */
 

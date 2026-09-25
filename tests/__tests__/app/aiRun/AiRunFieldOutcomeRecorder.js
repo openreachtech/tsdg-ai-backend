@@ -1,3 +1,4 @@
+import AiRunInstantInspector from '../../../../app/aiRun/AiRunInstantInspector.js'
 import AiRunFieldOutcomeRecorder from '../../../../app/aiRun/AiRunFieldOutcomeRecorder.js'
 
 import AiRunFieldOutcome from '../../../../sequelize/models/AiRunFieldOutcome.js'
@@ -30,6 +31,45 @@ describe('AiRunFieldOutcomeRecorder', () => {
 
           expect(recorder)
             .toHaveProperty('missingAiRunFieldStatusId', expected)
+        })
+      })
+
+      describe('#aiRunInstantInspector', () => {
+        const cases = [
+          {
+            input: {
+              aiRunInstantInspector: {
+                earliestRecordableInstant: new Date('1000-01-01T00:00:00.000Z'),
+                latestRecordableInstant: new Date('9999-12-31T23:59:59.999Z'),
+              },
+            },
+            expected: {
+              earliestRecordableInstant: new Date('1000-01-01T00:00:00.000Z'),
+              latestRecordableInstant: new Date('9999-12-31T23:59:59.999Z'),
+            },
+          },
+          {
+            input: {
+              aiRunInstantInspector: {
+                earliestRecordableInstant: new Date('2020-01-01T00:00:00.000Z'),
+                latestRecordableInstant: new Date('2030-12-31T23:59:59.999Z'),
+              },
+            },
+            expected: {
+              earliestRecordableInstant: new Date('2020-01-01T00:00:00.000Z'),
+              latestRecordableInstant: new Date('2030-12-31T23:59:59.999Z'),
+            },
+          },
+        ]
+
+        test.each(cases)('earliestRecordableInstant: $input.aiRunInstantInspector.earliestRecordableInstant', ({
+          input,
+          expected,
+        }) => {
+          const recorder = new AiRunFieldOutcomeRecorder(input)
+
+          expect(recorder)
+            .toHaveProperty('aiRunInstantInspector', expected)
         })
       })
     })
@@ -70,6 +110,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
           },
           expected: {
             missingAiRunFieldStatusId: 4,
+            aiRunInstantInspector: expect.any(AiRunInstantInspector),
           },
         },
         {
@@ -78,6 +119,7 @@ describe('AiRunFieldOutcomeRecorder', () => {
           },
           expected: {
             missingAiRunFieldStatusId: 2,
+            aiRunInstantInspector: expect.any(AiRunInstantInspector),
           },
         },
       ]
@@ -100,9 +142,28 @@ describe('AiRunFieldOutcomeRecorder', () => {
         const SpyClass = constructorSpy.spyOn(AiRunFieldOutcomeRecorder)
         const expected = {
           missingAiRunFieldStatusId: 4, // AI_RUN_FIELD_STATUS.MISSING.ID
+          aiRunInstantInspector: expect.any(AiRunInstantInspector),
         }
 
         SpyClass.create()
+
+        expect(SpyClass.__spy__)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+
+    describe('should fill default aiRunInstantInspector', () => {
+      test('with the missing state stated', () => {
+        const SpyClass = constructorSpy.spyOn(AiRunFieldOutcomeRecorder)
+        const input = {
+          missingAiRunFieldStatusId: 3, // AI_RUN_FIELD_STATUS.SUGGESTED.ID
+        }
+        const expected = {
+          missingAiRunFieldStatusId: 3,
+          aiRunInstantInspector: expect.any(AiRunInstantInspector),
+        }
+
+        SpyClass.create(input)
 
         expect(SpyClass.__spy__)
           .toHaveBeenCalledWith(expected)

@@ -1,3 +1,4 @@
+import AiRunInstantInspector from './AiRunInstantInspector.js'
 import AiRunTerminalStatusInspector from './AiRunTerminalStatusInspector.js'
 
 import AI_RUN_STATUS_CONSTANT_HASH from '../constants/aiRunStatusConstants.js'
@@ -16,6 +17,7 @@ const ABSENT_AI_RUN_EVIDENCE_MESSAGE = 'refused a status the call carries no evi
 const INHERITED_AI_RUN_FIELD_MESSAGE = 'refused values carrying fields it did not state as its own'
 const UNKNOWN_AI_RUN_STATUS_MESSAGE = 'refused a status naming no master row'
 const EMPTY_AI_RUN_EVIDENCE_MESSAGE = 'refused a status whose evidence field carries nothing'
+const UNRECORDABLE_AI_RUN_INSTANT_MESSAGE = 'refused an instant field carrying something that is not an instant'
 
 /*
  * The ids the status master actually carries, read from the constants the seeder seeds from.
@@ -63,6 +65,24 @@ const WRITABLE_AI_RUN_FIELD_NAMES = [
   'canceledAt',
   'cancelRequestedAt',
   'engineLabel',
+]
+
+/*
+ * Which of the writable fields are instants, and therefore have a kind to be held to.
+ *
+ * The evidence rule below already refuses a missing instant wherever one is the evidence of a
+ * status. What it cannot see is a value that is present and is not a time: Sequelize coerces
+ * whatever it is handed into `datetime(3)`, so `'whenever'`, `{}` and `false` all settle as the
+ * literal text `Invalid date` — and on a run that has just reached a terminal status, nothing may
+ * ever write over it. `cancel_requested_at` is listed beside the other three although no status is
+ * evidenced by it, because the fifth criterion measures the gap between it and `canceled_at`, and
+ * a gap needs both of its ends.
+ */
+const AI_RUN_INSTANT_FIELD_NAMES = [
+  'startedAt',
+  'finishedAt',
+  'canceledAt',
+  'cancelRequestedAt',
 ]
 
 /*
@@ -179,8 +199,10 @@ export default class AiRunStatusRecorder {
    */
   constructor ({
     aiRunTerminalStatusInspector,
+    aiRunInstantInspector,
   }) {
     this.aiRunTerminalStatusInspector = aiRunTerminalStatusInspector
+    this.aiRunInstantInspector = aiRunInstantInspector
   }
 
   /**
@@ -194,10 +216,12 @@ export default class AiRunStatusRecorder {
    */
   static create ({
     aiRunTerminalStatusInspector = this.createAiRunTerminalStatusInspector(),
+    aiRunInstantInspector = this.createAiRunInstantInspector(),
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         aiRunTerminalStatusInspector,
+        aiRunInstantInspector,
       })
     )
   }
@@ -218,6 +242,15 @@ export default class AiRunStatusRecorder {
    */
   static createAiRunTerminalStatusInspector () {
     return AiRunTerminalStatusInspector.create()
+  }
+
+  /**
+   * Create the inspector answering whether a value is an instant this service may record.
+   *
+   * @returns {AiRunInstantInspector} Inspector.
+   */
+  static createAiRunInstantInspector () {
+    return AiRunInstantInspector.create()
   }
 
   /**
@@ -423,7 +456,11 @@ export default class AiRunStatusRecorder {
     aiRunId,
     values,
   }) {
-    if (Object.getPrototypeOf(values) !== Object.prototype) {
+    if (
+      !this.isRecordableAiRunValues({
+        values,
+      })
+    ) {
       throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${INHERITED_AI_RUN_FIELD_MESSAGE}: AiRunId ${aiRunId}`)
     }
 
@@ -458,6 +495,14 @@ export default class AiRunStatusRecorder {
       throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${EMPTY_AI_RUN_EVIDENCE_MESSAGE}: AiRunId ${aiRunId}, AiRunStatusId ${values.AiRunStatusId}, field ${emptyAiRunEvidenceFieldName}`)
     }
 
+    const unrecordableAiRunInstantFieldName = this.extractUnrecordableAiRunInstantFieldName({
+      values,
+    })
+
+    if (unrecordableAiRunInstantFieldName) {
+      throw new Error(`${this.Ctor.name}#saveOngoingAiRun() ${UNRECORDABLE_AI_RUN_INSTANT_MESSAGE}: AiRunId ${aiRunId}, field ${unrecordableAiRunInstantFieldName}`)
+    }
+
     const aiRun = await this.findAiRun({
       aiRunId,
     })
@@ -482,6 +527,36 @@ export default class AiRunStatusRecorder {
   }
 
   /**
+   * Check whether the values handed in are ones this class can answer for at all.
+   *
+   * A plain object, and nothing else. What it turns away is anything carrying state this class
+   * cannot see: a prototype, because Sequelize's own setter walks the chain while the allow-list is
+   * read from own keys, and the two disagreeing about what a field is was how a run's callback URL
+   * once reached the column. `null` and a non-object are refused here rather than being left to
+   * fault inside the allow-list read, so that every refusal this method makes names itself and the
+   * run it was about — which is the whole of what a caller's log has to go on.
+   *
+   * @param {{
+   *   values: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the values are recordable.
+   * @public
+   */
+  isRecordableAiRunValues ({
+    values,
+  }) {
+    if (values === null) {
+      return false
+    }
+
+    if (typeof values !== 'object') {
+      return false
+    }
+
+    return Object.getPrototypeOf(values) === Object.prototype
+  }
+
+  /**
    * Extract the name of the first field the caller handed that no transition writes.
    *
    * @param {{
@@ -499,18 +574,6 @@ export default class AiRunStatusRecorder {
   }
 
   /**
-   * Extract the name of the first field the status being written is evidenced by and the call omits.
-   *
-   * A status this class knows nothing about is evidenced by nothing, and a call naming no status is
-   * moving the run nowhere — both answer null, and the run's status is left where it stands.
-   *
-   * @param {{
-   *   values: Record<string, *>
-   * }} params - Parameters.
-   * @returns {string | null} The field name, or null when the status is evidenced.
-   * @public
-   */
-  /**
    * Build the values this class will write, out of the fields it states it writes.
    *
    * The allow-list above says what may be written; this says what *is* written, and the two are not
@@ -524,12 +587,16 @@ export default class AiRunStatusRecorder {
    * silently; this exists so that a guard and a write can never disagree about what a field is
    * again, whatever a later caller hands over.
    *
-   * **This is insurance, and no test can reach it while the refusal stands in front.** Replacing
-   * this with the caller's own object survives every test in the suite, and that is not a gap in
-   * the tests — it is what "behind a refusal" means. It is kept because the defect it answers was
-   * not that a particular object got through, but that the guard and the write read the same word
-   * two different ways; a later hand that softens the refusal would reopen the write with it, and
-   * this is the half that would still hold.
+   * **No test can reach it while the refusal stands in front, and the two halves are not the equals
+   * an earlier wording here made them out to be.** Replacing this with the caller's own object
+   * survives every test in the suite, which is what "behind a refusal" means and not a gap in the
+   * tests. What that earlier wording had backwards is which half carries the guarantee: this one
+   * does. With the build in place every key that reaches `aiRun.update()` comes off the allow-list
+   * by construction, so no prototype, no non-enumerable property and no symbol can put a field
+   * through it — whereas the refusal in front only turns away the one shape that was found. The
+   * refusal is the redundant half, kept because a caller reaching past what it stated is worth
+   * saying out loud rather than silently dropping; this is the half that would still hold if a
+   * later hand softened it.
    *
    * @param {{
    *   values: Record<string, *>
@@ -597,12 +664,43 @@ export default class AiRunStatusRecorder {
   }
 
   /**
-   * Extract the name of the first evidence field the call does not state.
+   * Extract the name of the first instant field the call states with something that is not an instant.
+   *
+   * A field stated as `null` is not read here. Absence is the evidence rule's question, and it
+   * answers it per status — refusing a missing `finished_at` on a run that just succeeded, allowing
+   * one on a run that is only starting. This asks the other question, of whatever is present: a
+   * value that is not a time coerces to the text `Invalid date` on the way into the column, where it
+   * is both wrong and invisible to a search for the absence it should have been.
    *
    * @param {{
    *   values: Record<string, *>
    * }} params - Parameters.
-   * @returns {string | null} The field name, or null when each is stated.
+   * @returns {string | null} The field name, or null when every stated instant is one.
+   * @public
+   */
+  extractUnrecordableAiRunInstantFieldName ({
+    values,
+  }) {
+    return AI_RUN_INSTANT_FIELD_NAMES
+      .filter(it => Object.hasOwn(values, it))
+      .filter(it => values[it] !== null)
+      .find(it => !this.aiRunInstantInspector.isRecordableInstant({
+        instant: values[it],
+      }))
+      ?? null
+  }
+
+  /**
+   * Extract the name of the first field the status being written is evidenced by and the call omits.
+   *
+   * A status this class knows nothing about is evidenced by nothing, and a call naming no status is
+   * moving the run nowhere — both answer null, and the run's status is left where it stands.
+   *
+   * @param {{
+   *   values: Record<string, *>
+   * }} params - Parameters.
+   * @returns {string | null} The field name, or null when the status is evidenced.
+   * @public
    */
   extractAbsentAiRunEvidenceFieldName ({
     values,
@@ -642,6 +740,7 @@ export default class AiRunStatusRecorder {
 /**
  * @typedef {{
  *   aiRunTerminalStatusInspector: AiRunTerminalStatusInspector
+ *   aiRunInstantInspector: AiRunInstantInspector
  * }} AiRunStatusRecorderParams
  */
 

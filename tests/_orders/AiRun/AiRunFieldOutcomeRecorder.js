@@ -961,3 +961,149 @@ describe('AiRunFieldOutcomeRecorder', () => {
     })
   })
 })
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The three doors the third audit round found, after the second had closed the ones beside them.
+     *
+     * `settled_at` is the same defect as the two on `ai_run_steps`: a value that is present and is
+     * not a time coerces to the literal text `Invalid date`, on a row kept for two years, and the
+     * class checked the kind of every other value it writes while asking nothing of this one.
+     *
+     * The counts had a floor and no ceiling. `INTEGER` is what the migration declares, so a figure
+     * above what the column holds is stored by SQLite, rejected or clamped by a strict MariaDB, and
+     * is not a figure either way.
+     */
+    describe('should refuse a value the record cannot answer for', () => {
+      const cases = [
+        {
+          input: {
+            settledAt: 'whenever',
+          },
+          expected: 'refused a settled instant that is not an instant',
+          label: 'a settled instant written as a word that is not a time',
+        },
+        {
+          input: {
+            settledAt: new Date('whenever'),
+          },
+          expected: 'refused a settled instant that is not an instant',
+          label: 'a settled instant built from a word that is not a time',
+        },
+        {
+          input: {
+            settledAt: null,
+          },
+          expected: 'refused a settled instant that is not an instant',
+          label: 'a settled instant of null, which the column does not hold',
+        },
+        {
+          input: {
+            settledAt: 1758534549000,
+          },
+          expected: 'refused a settled instant that is not an instant',
+          label: 'a settled instant written as the number of milliseconds',
+        },
+        {
+          input: {
+            agreedReadingCount: 4294967296,
+            totalReadingCount: 4294967296,
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'a count above what the column holds',
+        },
+        {
+          input: {
+            agreedReadingCount: '99999999999999999999',
+            totalReadingCount: '99999999999999999999',
+          },
+          expected: 'refused a reading count that is not a whole number',
+          label: 'a count written as a string of twenty digits',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const actual = () => recorder.saveAiRunFieldOutcome({
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          fieldPath: 'probe.instant',
+          aiRunFieldStatusId: 1,
+          aiRunEvidenceCategoryId: 1,
+          suggestionConfidence: 0.95,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:09.009Z'),
+          ...input,
+        })
+
+        await expect(actual) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * An evidence kind that was never stated means the same as one stated as null.
+     *
+     * The column is nullable, so "no evidence kind" is a state this row legitimately records — and
+     * for one commit there were two spellings of it with two behaviours. An explicit null wrote,
+     * while omitting the key refused the whole decision row and told the caller the value named no
+     * master row, when the value named nothing at all. That is the same shape as the defect the
+     * commit before it was written to close: a guard and a write reading one word two ways.
+     */
+    describe('should record a settled field whose evidence kind was not stated', () => {
+      const cases = [
+        {
+          input: {
+            fieldPath: 'probe.evidence.omitted',
+          },
+          expected: null,
+          label: 'the evidence kind omitted altogether',
+        },
+        {
+          input: {
+            fieldPath: 'probe.evidence.null',
+            aiRunEvidenceCategoryId: null,
+          },
+          expected: null,
+          label: 'the evidence kind stated as null',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create() // Arrange
+
+        const received = await recorder.saveAiRunFieldOutcome({ // Act
+          aiRunId: 10010004,
+          aiRunStepId: 10240004,
+          // AI_RUN_FIELD_STATUS.EXTRACTED.ID — a state that settles, so the evidence kind is read
+          // rather than being nulled ahead of it
+          aiRunFieldStatusId: 1,
+          suggestionConfidence: 0.91,
+          agreedReadingCount: 3,
+          totalReadingCount: 3,
+          confidenceMethodVersion: 'confidence-v1.0.0',
+          settledAt: new Date('2026-09-22T09:09:11.011Z'),
+          ...input,
+        })
+
+        expect(received.AiRunEvidenceCategoryId) // Assert
+          .toBe(expected)
+      })
+    })
+  })
+})

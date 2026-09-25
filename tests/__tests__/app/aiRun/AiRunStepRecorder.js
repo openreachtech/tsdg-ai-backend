@@ -1,3 +1,4 @@
+import AiRunInstantInspector from '../../../../app/aiRun/AiRunInstantInspector.js'
 import AiRunStepRecorder from '../../../../app/aiRun/AiRunStepRecorder.js'
 
 import AiRunStep from '../../../../sequelize/models/AiRunStep.js'
@@ -46,6 +47,45 @@ describe('AiRunStepRecorder', () => {
 
           expect(recorder)
             .toHaveProperty('aiRunStepCategoryIdHash', expected)
+        })
+      })
+
+      describe('#aiRunInstantInspector', () => {
+        const cases = [
+          {
+            input: {
+              aiRunInstantInspector: {
+                earliestRecordableInstant: new Date('1000-01-01T00:00:00.000Z'),
+                latestRecordableInstant: new Date('9999-12-31T23:59:59.999Z'),
+              },
+            },
+            expected: {
+              earliestRecordableInstant: new Date('1000-01-01T00:00:00.000Z'),
+              latestRecordableInstant: new Date('9999-12-31T23:59:59.999Z'),
+            },
+          },
+          {
+            input: {
+              aiRunInstantInspector: {
+                earliestRecordableInstant: new Date('2020-01-01T00:00:00.000Z'),
+                latestRecordableInstant: new Date('2030-12-31T23:59:59.999Z'),
+              },
+            },
+            expected: {
+              earliestRecordableInstant: new Date('2020-01-01T00:00:00.000Z'),
+              latestRecordableInstant: new Date('2030-12-31T23:59:59.999Z'),
+            },
+          },
+        ]
+
+        test.each(cases)('earliestRecordableInstant: $input.aiRunInstantInspector.earliestRecordableInstant', ({
+          input,
+          expected,
+        }) => {
+          const recorder = new AiRunStepRecorder(input)
+
+          expect(recorder)
+            .toHaveProperty('aiRunInstantInspector', expected)
         })
       })
     })
@@ -102,6 +142,7 @@ describe('AiRunStepRecorder', () => {
               ai: 100002,
               human: 100003,
             },
+            aiRunInstantInspector: expect.any(AiRunInstantInspector),
           },
         },
         {
@@ -118,6 +159,7 @@ describe('AiRunStepRecorder', () => {
               ai: 100005,
               human: 100006,
             },
+            aiRunInstantInspector: expect.any(AiRunInstantInspector),
           },
         },
       ]
@@ -144,9 +186,36 @@ describe('AiRunStepRecorder', () => {
             ai: 2, // AI_RUN_STEP_CATEGORY.AI.ID
             human: 3, // AI_RUN_STEP_CATEGORY.HUMAN.ID
           },
+          aiRunInstantInspector: expect.any(AiRunInstantInspector),
         }
 
         SpyClass.create()
+
+        expect(SpyClass.__spy__)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+
+    describe('should fill default aiRunInstantInspector', () => {
+      test('with the category hash stated', () => {
+        const SpyClass = constructorSpy.spyOn(AiRunStepRecorder)
+        const input = {
+          aiRunStepCategoryIdHash: {
+            code: 100007,
+            ai: 100008,
+            human: 100009,
+          },
+        }
+        const expected = {
+          aiRunStepCategoryIdHash: {
+            code: 100007,
+            ai: 100008,
+            human: 100009,
+          },
+          aiRunInstantInspector: expect.any(AiRunInstantInspector),
+        }
+
+        SpyClass.create(input)
 
         expect(SpyClass.__spy__)
           .toHaveBeenCalledWith(expected)
