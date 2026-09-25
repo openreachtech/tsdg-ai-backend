@@ -16,6 +16,12 @@ import AiRunStep from '../../../sequelize/models/AiRunStep.js'
  * Each case creates a run and a step of its own, so the step claims index 1 of a run nothing else
  * writes to and no case depends on another having run before it. `(ai_run_id, field_path)` is
  * UNIQUE too, and a run per case settles that for the field outcomes as well.
+ *
+ * The two refusal describes at the end need rows the earlier ones do not. A step belonging to
+ * another run needs two runs, so those cases create a second one and hang the step off it; a step
+ * that is not there needs an id nothing ever creates, and `10229001` upward is reserved inside
+ * this feature's block for exactly that, kept apart from the `10220001` steps so an id that must
+ * stay absent is never mistaken for one that was meant to be written.
  */
 
 describe('AiRunFieldOutcomeRecorder', () => {
@@ -581,6 +587,273 @@ describe('AiRunFieldOutcomeRecorder', () => {
 
         expect(received)
           .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The step named belongs to another run, and the row is refused.
+     *
+     * Each case creates two runs and hangs the step off the second, then asks for a field outcome
+     * on the first. Nothing in the table would have stopped it: `ai_run_step_id` is `NOT NULL` and
+     * carries no database foreign key, because referential integrity in this service is enforced
+     * in application code — so before this guard both ids were written as they arrived and the row
+     * was taken.
+     *
+     * What that row would have said is the reason the guard exists. `AiRunStepId` is on this table
+     * for one purpose: the reason code for how a field was settled lives on the step, and this is
+     * what makes it reachable from the field. A row pointing at another run's step answers the
+     * second use case of `#run-record` with somebody else's reason code, silently, with nothing on
+     * the row to show for it.
+     *
+     * The refusal throws rather than answering null the way a malformed path does, and the whole
+     * message is asserted rather than a fragment of it: both ids and the run the step actually
+     * belongs to are the three facts that tell the caller which pair it crossed, and a refusal
+     * that dropped them would leave the caller with no more than it started with.
+     */
+    describe('when the step belongs to another run', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10220019,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220019',
+              requestKey: 'request-key-10220019',
+              requestBodyHash: 'request-body-hash-10220019',
+              externalRef: 'external-ref-10220019',
+              subjectLabel: 'Subject label of run 10220019',
+              correlationId: 'correlation-id-10220019',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220019',
+              acceptedAt: new Date('2026-09-23T01:00:01.001Z'),
+              startedAt: new Date('2026-09-23T01:00:02.002Z'),
+              finishedAt: new Date('2026-09-23T01:00:03.003Z'),
+            },
+            otherAiRunRow: {
+              id: 10220020,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220020',
+              requestKey: 'request-key-10220020',
+              requestBodyHash: 'request-body-hash-10220020',
+              externalRef: 'external-ref-10220020',
+              subjectLabel: 'Subject label of run 10220020',
+              correlationId: 'correlation-id-10220020',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220020',
+              acceptedAt: new Date('2026-09-23T02:00:01.001Z'),
+              startedAt: new Date('2026-09-23T02:00:02.002Z'),
+              finishedAt: new Date('2026-09-23T02:00:03.003Z'),
+            },
+            aiRunStepRow: {
+              id: 10220009,
+              AiRunId: 10220020, // the step is a step of the other run
+              AiRunStepCategoryId: 1, // AI_RUN_STEP_CATEGORY.CODE.ID
+              stepIndex: 1,
+              stepName: 'step-name-10220009',
+              outcomeCode: 'outcome-code-10220009',
+              reasonCode: 'reason-code-10220009',
+              startedAt: new Date('2026-09-23T02:01:01.001Z'),
+              finishedAt: new Date('2026-09-23T02:01:02.002Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220019,
+              aiRunStepId: 10220009,
+              fieldPath: 'subject.theta',
+              aiRunFieldStatusId: 4, // AI_RUN_FIELD_STATUS.MISSING.ID
+              aiRunEvidenceCategoryId: null,
+              suggestionConfidence: null,
+              agreedReadingCount: 1,
+              totalReadingCount: 3,
+              confidenceMethodVersion: 'confidence-method-0009',
+              settledAt: new Date('2026-09-23T05:05:05.005Z'),
+            },
+          },
+          expected: 'AiRunFieldOutcomeRecorder#saveAiRunFieldOutcome() refused a step belonging to another run: AiRunId 10220019, AiRunStepId 10220009, AiRunId of the step 10220020',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10220021,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220021',
+              requestKey: 'request-key-10220021',
+              requestBodyHash: 'request-body-hash-10220021',
+              externalRef: 'external-ref-10220021',
+              subjectLabel: 'Subject label of run 10220021',
+              correlationId: 'correlation-id-10220021',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220021',
+              acceptedAt: new Date('2026-09-23T03:00:01.001Z'),
+              startedAt: new Date('2026-09-23T03:00:02.002Z'),
+              finishedAt: new Date('2026-09-23T03:00:03.003Z'),
+            },
+            otherAiRunRow: {
+              id: 10220022,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220022',
+              requestKey: 'request-key-10220022',
+              requestBodyHash: 'request-body-hash-10220022',
+              externalRef: 'external-ref-10220022',
+              subjectLabel: 'Subject label of run 10220022',
+              correlationId: 'correlation-id-10220022',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220022',
+              acceptedAt: new Date('2026-09-23T04:00:01.001Z'),
+              startedAt: new Date('2026-09-23T04:00:02.002Z'),
+              finishedAt: new Date('2026-09-23T04:00:03.003Z'),
+            },
+            aiRunStepRow: {
+              id: 10220010,
+              AiRunId: 10220022, // the step is a step of the other run
+              AiRunStepCategoryId: 2, // AI_RUN_STEP_CATEGORY.AI.ID
+              stepIndex: 1,
+              stepName: 'step-name-10220010',
+              outcomeCode: 'outcome-code-10220010',
+              startedAt: new Date('2026-09-23T04:01:01.001Z'),
+              finishedAt: new Date('2026-09-23T04:01:02.002Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220021,
+              aiRunStepId: 10220010,
+              fieldPath: 'subject.iota',
+              aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+              aiRunEvidenceCategoryId: 1, // AI_RUN_EVIDENCE_CATEGORY.VISIBLE_TEXT.ID
+              suggestionConfidence: 0.6125,
+              agreedReadingCount: 3,
+              totalReadingCount: 3,
+              confidenceMethodVersion: 'confidence-method-0010',
+              settledAt: new Date('2026-09-23T06:06:06.006Z'),
+            },
+          },
+          expected: 'AiRunFieldOutcomeRecorder#saveAiRunFieldOutcome() refused a step belonging to another run: AiRunId 10220021, AiRunStepId 10220010, AiRunId of the step 10220022',
+        },
+      ]
+
+      test.each(cases)('fieldPath: $input.fieldOutcome.fieldPath', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+        await AiRun.create(input.otherAiRunRow)
+        await AiRunStep.create(input.aiRunStepRow)
+
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = () => recorder.saveAiRunFieldOutcome(input.fieldOutcome)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#saveAiRunFieldOutcome()', () => {
+    /*
+     * The step named is not there at all, and the row is refused separately.
+     *
+     * It is the same read and the same branch as the crossed pair above, and it is a different
+     * defect in the caller: an id that was never a step, or whose step never saved, rather than
+     * two live runs crossed. Each refusal names itself, so the caller's log says which one
+     * happened without the reader having to go and look — the same reason `AiRunStatusRecorder`
+     * keeps a run that does not exist apart from a run that has settled.
+     *
+     * The run each case creates is real, so what is refused is the step alone. The step ids are
+     * reserved inside this feature's own block and are never created by anything.
+     */
+    describe('when no step carries the id', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10220023,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220023',
+              requestKey: 'request-key-10220023',
+              requestBodyHash: 'request-body-hash-10220023',
+              externalRef: 'external-ref-10220023',
+              subjectLabel: 'Subject label of run 10220023',
+              correlationId: 'correlation-id-10220023',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220023',
+              acceptedAt: new Date('2026-09-23T07:00:01.001Z'),
+              startedAt: new Date('2026-09-23T07:00:02.002Z'),
+              finishedAt: new Date('2026-09-23T07:00:03.003Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220023,
+              aiRunStepId: 10229001, // reserved as a step that is never created
+              fieldPath: 'subject.kappa',
+              aiRunFieldStatusId: 4, // AI_RUN_FIELD_STATUS.MISSING.ID
+              aiRunEvidenceCategoryId: null,
+              suggestionConfidence: null,
+              agreedReadingCount: 2,
+              totalReadingCount: 5,
+              confidenceMethodVersion: 'confidence-method-0011',
+              settledAt: new Date('2026-09-23T07:07:07.007Z'),
+            },
+          },
+          expected: 'AiRunFieldOutcomeRecorder#saveAiRunFieldOutcome() refused a step that does not exist: AiRunId 10220023, AiRunStepId 10229001',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10220024,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10220024',
+              requestKey: 'request-key-10220024',
+              requestBodyHash: 'request-body-hash-10220024',
+              externalRef: 'external-ref-10220024',
+              subjectLabel: 'Subject label of run 10220024',
+              correlationId: 'correlation-id-10220024',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10220024',
+              acceptedAt: new Date('2026-09-23T08:00:01.001Z'),
+              startedAt: new Date('2026-09-23T08:00:02.002Z'),
+              finishedAt: new Date('2026-09-23T08:00:03.003Z'),
+            },
+            fieldOutcome: {
+              aiRunId: 10220024,
+              aiRunStepId: 10229002, // reserved as a step that is never created
+              fieldPath: 'subject.lambda',
+              aiRunFieldStatusId: 1, // AI_RUN_FIELD_STATUS.EXTRACTED.ID
+              aiRunEvidenceCategoryId: 2, // AI_RUN_EVIDENCE_CATEGORY.VISUAL_ESTIMATE.ID
+              suggestionConfidence: 0.5125,
+              agreedReadingCount: 3,
+              totalReadingCount: 3,
+              confidenceMethodVersion: 'confidence-method-0012',
+              settledAt: new Date('2026-09-23T08:08:08.008Z'),
+            },
+          },
+          expected: 'AiRunFieldOutcomeRecorder#saveAiRunFieldOutcome() refused a step that does not exist: AiRunId 10220024, AiRunStepId 10229002',
+        },
+      ]
+
+      test.each(cases)('fieldPath: $input.fieldOutcome.fieldPath', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = () => recorder.saveAiRunFieldOutcome(input.fieldOutcome)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
       })
     })
   })

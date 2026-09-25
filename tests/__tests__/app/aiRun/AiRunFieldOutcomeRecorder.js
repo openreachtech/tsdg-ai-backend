@@ -1,6 +1,7 @@
 import AiRunFieldOutcomeRecorder from '../../../../app/aiRun/AiRunFieldOutcomeRecorder.js'
 
 import AiRunFieldOutcome from '../../../../sequelize/models/AiRunFieldOutcome.js'
+import AiRunStep from '../../../../sequelize/models/AiRunStep.js'
 
 describe('AiRunFieldOutcomeRecorder', () => {
   describe('constructor', () => {
@@ -1368,6 +1369,351 @@ describe('AiRunFieldOutcomeRecorder', () => {
         const recorder = AiRunFieldOutcomeRecorder.create()
 
         const received = recorder.generateComparableAiRunFieldStatusId(input)
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('.get:AiRunStepCtor', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const received = AiRunFieldOutcomeRecorder.AiRunStepCtor
+
+        expect(received)
+          .toBe(AiRunStep) // same reference
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#findAiRunStep()', () => {
+    /*
+     * The run the guard compares against comes from here, so the row this answers with has to
+     * carry the run the step actually belongs to. The two steps read are on two different runs and
+     * carry two different step names, so a read that ignored the id it was handed would answer
+     * with the wrong run rather than with a row that happens to look right either way.
+     */
+    describe('when a step carries the id', () => {
+      const cases = [
+        {
+          input: {
+            aiRunStepId: 10240004,
+          },
+          expected: expect.objectContaining({
+            id: 10240004,
+            AiRunId: 10010004,
+            stepIndex: 4,
+            stepName: 'drop-disallowed-readings',
+          }),
+        },
+        {
+          input: {
+            aiRunStepId: 10240010,
+          },
+          expected: expect.objectContaining({
+            id: 10240010,
+            AiRunId: 10010003,
+            stepIndex: 3,
+            stepName: 'read-media',
+          }),
+        },
+      ]
+
+      test.each(cases)('aiRunStepId: $input.aiRunStepId', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = await recorder.findAiRunStep(input)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+
+    /*
+     * A step id naming nothing is the second half of what the guard has to tell apart, and it is
+     * reachable: `ai_run_field_outcomes.ai_run_step_id` carries no database foreign key, so
+     * nothing but this read stands between an id that was never a step and a row hung off it.
+     */
+    describe('when no step carries the id', () => {
+      const cases = [
+        {
+          // Reserved inside this feature's own id block as a step that is never created
+          input: {
+            aiRunStepId: 10229003,
+          },
+        },
+        {
+          input: {
+            aiRunStepId: 10229004,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunStepId: $input.aiRunStepId', async ({
+        input,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = await recorder.findAiRunStep(input)
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#belongsToAiRun()', () => {
+    /*
+     * The step arrives as a literal rather than as a row read back, because the reading that has
+     * to be covered is the one no SQLite read can produce: Sequelize hands a `BIGINT` back as a
+     * number here and as text on MariaDB, and the id the caller states may itself have come
+     * through a query string. A pair that matches has to keep matching in every one of those
+     * combinations, or the guard would refuse calls that are correct.
+     */
+    describe('should be truthy', () => {
+      const cases = [
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: 10010004,
+            },
+            aiRunId: 10010004,
+          },
+        },
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: '10010003', // as MariaDB hands a BIGINT back
+            },
+            aiRunId: 10010003,
+          },
+        },
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: 10010005,
+            },
+            aiRunId: '10010005', // as a request hands one in
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunId', ({
+        input,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = recorder.belongsToAiRun(input)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * The crossed pair is the first two cases: a step that exists, a run that exists, and the step
+     * belonging to the other one. The last three are the pairs that cannot be compared at all — a
+     * run stated as nothing, a run stated in a form that names no run, and a step carrying no run
+     * — and each is refused rather than let through, because a comparison that could not be made
+     * is not a comparison that succeeded.
+     */
+    describe('should be falsy', () => {
+      const cases = [
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: 10010004,
+            },
+            aiRunId: 10010003, // the step is a step of the other run
+          },
+        },
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: 10010006,
+            },
+            aiRunId: 10010001, // the step is a step of the other run
+          },
+        },
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: 10010005,
+            },
+            aiRunId: null,
+          },
+        },
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: 10010002,
+            },
+            aiRunId: '10010002 ', // trailing whitespace names no run
+          },
+        },
+        {
+          input: {
+            aiRunStep: {
+              AiRunId: null,
+            },
+            aiRunId: 10010004,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunId', ({
+        input,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = recorder.belongsToAiRun(input)
+
+        expect(received)
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('AiRunFieldOutcomeRecorder', () => {
+  describe('#generateComparableAiRunId()', () => {
+    describe('when the id is a number', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: 10010004,
+          },
+          expected: 10010004,
+        },
+        {
+          input: {
+            aiRunId: 1,
+          },
+          expected: 1,
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunId', ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = recorder.generateComparableAiRunId(input)
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+
+    /*
+     * A `BIGINT` reaches here as text from MariaDB and from a request alike, and it names the same
+     * run either way.
+     */
+    describe('when the id arrived as text', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: '10010003',
+          },
+          expected: 10010003,
+        },
+        {
+          input: {
+            aiRunId: '7',
+          },
+          expected: 7,
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunId', ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = recorder.generateComparableAiRunId(input)
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+
+    describe('when the value names no run', () => {
+      const cases = [
+        {
+          input: {
+            aiRunId: '010010004', // an id is written without a leading zero
+          },
+        },
+        {
+          input: {
+            aiRunId: '10010004 ', // trailing whitespace
+          },
+        },
+        {
+          input: {
+            aiRunId: '10010004abc',
+          },
+        },
+        {
+          input: {
+            aiRunId: '-10010004', // an id is not signed
+          },
+        },
+        {
+          input: {
+            aiRunId: '10010004.0', // an id is not a decimal
+          },
+        },
+        {
+          input: {
+            aiRunId: '0', // no row carries id zero
+          },
+        },
+        {
+          input: {
+            aiRunId: 'run-key-10010004', // the key of the run, not its id
+          },
+        },
+        {
+          input: {
+            aiRunId: '',
+          },
+        },
+        {
+          input: {
+            aiRunId: 10010004.5, // an id is a whole number
+          },
+        },
+        {
+          input: {
+            aiRunId: null,
+          },
+        },
+        {
+          input: {
+            aiRunId: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunId', ({
+        input,
+      }) => {
+        const recorder = AiRunFieldOutcomeRecorder.create()
+
+        const received = recorder.generateComparableAiRunId(input)
 
         expect(received)
           .toBeNull()

@@ -1,7 +1,12 @@
 import AiRunStatusRecorder from '../../../../app/aiRun/AiRunStatusRecorder.js'
 
 import AiRunTerminalStatusInspector from '../../../../app/aiRun/AiRunTerminalStatusInspector.js'
+import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../../../../app/constants/aiRunFailureReasonConstants.js'
 import AiRun from '../../../../sequelize/models/AiRun.js'
+
+const {
+  AI_RUN_FAILURE_REASON_CODE,
+} = AI_RUN_FAILURE_REASON_CONSTANT_HASH
 
 describe('AiRunStatusRecorder', () => {
   describe('constructor', () => {
@@ -392,7 +397,7 @@ describe('AiRunStatusRecorder', () => {
           input: {
             values: {
               AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
-              failureReasonCode: 'run.failure.model.unavailable',
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.PROVIDER_CALL_FAILED,
               failureParameters: {
                 attemptCount: 3,
               },
@@ -482,7 +487,7 @@ describe('AiRunStatusRecorder', () => {
           input: {
             values: {
               AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
-              failureReasonCode: 'run.failure.model.unavailable',
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.PROVIDER_CALL_FAILED,
               finishedAt: new Date('2026-09-28T16:16:01.001Z'),
             },
           },
@@ -540,7 +545,7 @@ describe('AiRunStatusRecorder', () => {
           input: {
             values: {
               AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
-              failureReasonCode: 'run.failure.medium.unreadable',
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_UNREADABLE,
               failureParameters: null,
               finishedAt: new Date('2026-09-28T20:20:01.001Z'),
             },

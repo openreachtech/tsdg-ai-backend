@@ -1,12 +1,16 @@
 import AI_RUN_FIELD_STATUS_CONSTANT_HASH from '../constants/aiRunFieldStatusConstants.js'
 
 import AiRunFieldOutcome from '../../sequelize/models/AiRunFieldOutcome.js'
+import AiRunStep from '../../sequelize/models/AiRunStep.js'
 
 const {
   AI_RUN_FIELD_STATUS,
 } = AI_RUN_FIELD_STATUS_CONSTANT_HASH
 
 const DEFAULT_MISSING_AI_RUN_FIELD_STATUS_ID = AI_RUN_FIELD_STATUS.MISSING.ID
+
+const UNKNOWN_AI_RUN_STEP_MESSAGE = 'refused a step that does not exist'
+const FOREIGN_AI_RUN_STEP_MESSAGE = 'refused a step belonging to another run'
 
 /*
  * A dotted path into the schema, and nothing that is not one.
@@ -65,6 +69,20 @@ const SUGGESTION_CONFIDENCE_PATTERN = /^(?:0(?:\.\d+)?|1(?:\.0+)?)$/u
  */
 const AI_RUN_FIELD_STATUS_ID_PATTERN = /^[1-9]\d*$/u
 
+/*
+ * A row id of `ai_runs` written as text: digits alone, opening on a non-zero digit.
+ *
+ * It is stated separately from the status-id shape above, and not shared with it, because the two
+ * answer different questions of different columns: one says which of five states a field came out
+ * as, the other says which run a row belongs to. Reading the same constant for both would tie a
+ * `BIGINT` key to a small enumeration's rule, and whichever of the two moved first would move the
+ * other with it.
+ *
+ * What it rejects: a sign, a decimal point, whitespace and every other character, so `'7 '` and
+ * `'7abc'` name no run rather than naming run seven.
+ */
+const AI_RUN_ID_PATTERN = /^[1-9]\d*$/u
+
 /**
  * Writes one `ai_run_field_outcomes` row for each field a run settled.
  *
@@ -104,6 +122,46 @@ const AI_RUN_FIELD_STATUS_ID_PATTERN = /^[1-9]\d*$/u
  * required parameter of the save with no default behind it: a caller that omits it has the row
  * refused by the column, which is the intended outcome. Nothing here invents a step to hang an
  * outcome off.
+ *
+ * **The step must be a step of the run, and that is checked here or nowhere.** `NOT NULL` is the
+ * whole of what the table asks of `AiRunStepId`: there is no database foreign key on it, because
+ * referential integrity in this service is enforced in application code. So a caller holding a run
+ * and a step id that came from two different runs has the row taken, and the row then says the
+ * field was settled by a step of somebody else's run. The column was added for one reason — the
+ * reason code for how a field was settled lives on the step, and this is what makes it reachable
+ * from the field — so a mis-wired pair answers an operator asking why their field returned no
+ * value with another run's reason code, silently, with nothing on the row to show for it. That is
+ * the single wrong answer the column exists to prevent, so the step is read and the pair is checked
+ * before anything is written. The comparison goes through
+ * `#generateComparableAiRunId()` on both sides, for the reason the status id does: a `BIGINT` key
+ * reaches here as a number from SQLite and may reach here as text from MariaDB or from a request,
+ * and a run compared in the form it arrived in would refuse pairs that match.
+ *
+ * **Why this refusal throws, where the rest of the class answers null.** The `generate~` members
+ * answer null because the value asked of them could not be derived — a path that is not a path, a
+ * label that is not a label — and a `NOT NULL` column then turns the row away. Nothing is
+ * underivable here. Both ids arrived, both are well formed, and each names a real row; what is
+ * wrong is that they name two different runs, which makes the call malformed rather than a value
+ * absent. Answering null for the step would refuse the same row while reporting the wrong thing:
+ * the caller would read that the step cannot be null and go looking for a step it plainly had,
+ * and the two ids that contradict each other — the only two facts worth having — would appear
+ * nowhere. So this follows `AiRunStatusRecorder`, which throws for the same class of defect and
+ * for the same reason, and names both ids in the message.
+ *
+ * **A step that is not there and a step of another run are two refusals, not one.** They are one
+ * read and one branch, but they are two different defects in the caller: a step id naming nothing
+ * is an id that was never a step or whose step never saved, and a step id naming another run's
+ * step is two live runs crossed. Each names itself in the message, so the log says which happened
+ * without the reader having to go and look — the same reason `AiRunStatusRecorder` separates a run
+ * that does not exist from a run that has settled.
+ *
+ * **What the guard costs.** It is one primary-key read for every field outcome written, and a run
+ * settles many fields against the one step that settled them — so the same row is read once per
+ * field rather than once per step. One indexed lookup beside the insert it guards is not what makes
+ * a settle slow, and a wrong answer that cannot be detected is worth more than that. The read would
+ * go away entirely if the caller handed in the step it already holds instead of its id, leaving the
+ * guard a property comparison; whether the call takes the step or the id is the caller's shape to
+ * settle, and nothing calls this yet.
  *
  * **A field that settled nothing is recorded, not skipped.** `missing` is a state like any other,
  * and the row saying a field was considered and not answered is the one the second use case of
@@ -175,6 +233,15 @@ export default class AiRunFieldOutcomeRecorder {
   }
 
   /**
+   * get: the step model.
+   *
+   * @returns {typeof AiRunStep} Model.
+   */
+  static get AiRunStepCtor () {
+    return AiRunStep
+  }
+
+  /**
    * get: own constructor, so a subclass's overrides are the ones that answer.
    *
    * @returns {typeof AiRunFieldOutcomeRecorder} The class.
@@ -186,8 +253,13 @@ export default class AiRunFieldOutcomeRecorder {
   /**
    * Save the record of one field a run settled.
    *
+   * The step is read and checked against the run before anything is written: a field outcome
+   * naming a step of another run would hand the second use case of `#run-record` somebody else's
+   * reason code, and nothing on the row would say so.
+   *
    * @param {SaveAiRunFieldOutcomeParams} params - Parameters.
    * @returns {Promise<*>} The saved field outcome.
+   * @throws {Error} When no step carries the id, or when the step belongs to another run.
    * @public
    */
   async saveAiRunFieldOutcome ({
@@ -202,6 +274,23 @@ export default class AiRunFieldOutcomeRecorder {
     confidenceMethodVersion,
     settledAt,
   }) {
+    const aiRunStep = await this.findAiRunStep({
+      aiRunStepId,
+    })
+
+    if (!aiRunStep) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${UNKNOWN_AI_RUN_STEP_MESSAGE}: AiRunId ${aiRunId}, AiRunStepId ${aiRunStepId}`)
+    }
+
+    if (
+      !this.belongsToAiRun({
+        aiRunStep,
+        aiRunId,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#saveAiRunFieldOutcome() ${FOREIGN_AI_RUN_STEP_MESSAGE}: AiRunId ${aiRunId}, AiRunStepId ${aiRunStepId}, AiRunId of the step ${aiRunStep.AiRunId}`)
+    }
+
     const settledFieldPath = this.generateSettledFieldPath({
       fieldPath,
     })
@@ -234,6 +323,99 @@ export default class AiRunFieldOutcomeRecorder {
         settledAt,
       })
     )
+  }
+
+  /**
+   * Find the step a field outcome is recorded against.
+   *
+   * It reads the step and nothing else: whether that step is the run's is the next method's
+   * question, and whether it may be written against is the save's.
+   *
+   * @param {{
+   *   aiRunStepId: *
+   * }} params - Parameters.
+   * @returns {Promise<*>} The step, or null when no step carries the id.
+   * @public
+   */
+  async findAiRunStep ({
+    aiRunStepId,
+  }) {
+    return /** @type {*} */ (
+      this.Ctor.AiRunStepCtor.findOne({
+        where: {
+          id: aiRunStepId,
+        },
+      })
+    )
+  }
+
+  /**
+   * Whether a step is a step of the run the field outcome is being recorded against.
+   *
+   * Both sides go through the same conversion, so the form a run id arrived in never decides the
+   * answer: the step hands its `AiRunId` back as a number on SQLite and may hand it back as text
+   * on MariaDB, and the id the caller states may itself have come through a query string. A value
+   * naming no run at all is not the run in question, whichever side it is on — the pair is refused
+   * rather than let through on a comparison that only looks like one.
+   *
+   * @param {{
+   *   aiRunStep: *
+   *   aiRunId: *
+   * }} params - Parameters.
+   * @returns {boolean} true when the step belongs to the run.
+   * @public
+   */
+  belongsToAiRun ({
+    aiRunStep,
+    aiRunId,
+  }) {
+    const comparableAiRunId = this.generateComparableAiRunId({
+      aiRunId,
+    })
+
+    if (comparableAiRunId === null) {
+      return false
+    }
+
+    const comparableAiRunIdOfStep = this.generateComparableAiRunId({
+      aiRunId: aiRunStep.AiRunId,
+    })
+
+    if (comparableAiRunIdOfStep === null) {
+      return false
+    }
+
+    return comparableAiRunId === comparableAiRunIdOfStep
+  }
+
+  /**
+   * Generate the number a run id names, so that two of them can be compared.
+   *
+   * The run the caller states and the run the step carries go through this same method, which is
+   * why the value arrives as an argument rather than being read off either of them.
+   *
+   * @param {{
+   *   aiRunId: *
+   * }} params - Parameters.
+   * @returns {number | null} The id as a number, or null when the value names no run.
+   * @public
+   */
+  generateComparableAiRunId ({
+    aiRunId,
+  }) {
+    if (Number.isInteger(aiRunId)) {
+      return /** @type {number} */ (aiRunId)
+    }
+
+    if (typeof aiRunId !== 'string') {
+      return null
+    }
+
+    if (!AI_RUN_ID_PATTERN.test(aiRunId)) {
+      return null
+    }
+
+    return Number(aiRunId)
   }
 
   /**

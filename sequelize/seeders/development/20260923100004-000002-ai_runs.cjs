@@ -112,6 +112,7 @@ const aiRunSeeds = [
     finished_at: new Date('2026-09-10T04:04:06.006Z'),
   },
   {
+    // failed — and says why, in the code its own step trace fails with (`media-unreadable`)
     id: 10010005,
     api_client_id: 10000001,
     ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
@@ -123,11 +124,14 @@ const aiRunSeeds = [
     subject_label: 'Subject label of run 10010005',
     correlation_id: 'correlation-id-10010005',
     callback_url: 'https://signing.client.development.invalid/callbacks/10010005',
+    failure_reason_code: 'MEDIA_UNREADABLE',
     accepted_at: new Date('2026-09-10T05:05:05.005Z'),
     started_at: new Date('2026-09-10T05:05:06.006Z'),
     finished_at: new Date('2026-09-10T05:05:07.007Z'),
   },
   {
+    // canceled — asked for and taken effect 400 milliseconds apart, which is the gap two separate
+    // columns are kept to measure
     id: 10010006,
     api_client_id: 10000001,
     ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
@@ -142,6 +146,8 @@ const aiRunSeeds = [
     accepted_at: new Date('2026-09-10T06:06:06.006Z'),
     started_at: new Date('2026-09-10T06:06:07.007Z'),
     finished_at: new Date('2026-09-10T06:06:08.008Z'),
+    cancel_requested_at: new Date('2026-09-10T06:06:07.307Z'),
+    canceled_at: new Date('2026-09-10T06:06:07.707Z'),
   },
   {
     id: 10010007,
@@ -176,6 +182,7 @@ const aiRunSeeds = [
     finished_at: null,
   },
   {
+    // failed for a reason that is not the media's, so the column is read varying rather than fixed
     id: 10010009,
     api_client_id: 10000003,
     ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
@@ -187,11 +194,14 @@ const aiRunSeeds = [
     subject_label: 'Subject label of run 10010009',
     correlation_id: 'correlation-id-10010009',
     callback_url: 'https://switched-off.client.development.invalid/callbacks/10010009',
+    failure_reason_code: 'PROVIDER_CALL_FAILED',
     accepted_at: new Date('2026-09-10T09:09:09.009Z'),
     started_at: new Date('2026-09-10T09:09:10.010Z'),
     finished_at: new Date('2026-09-10T09:09:11.011Z'),
   },
   {
+    // canceled — 2.7 seconds apart, so the gap reads as a measurement rather than as a constant.
+    // `finished_at` follows the instant it took effect, because that is when the work stopped.
     id: 10010010,
     api_client_id: 10000003,
     ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
@@ -205,7 +215,9 @@ const aiRunSeeds = [
     callback_url: 'https://switched-off.client.development.invalid/callbacks/10010010',
     accepted_at: new Date('2026-09-10T10:10:10.010Z'),
     started_at: new Date('2026-09-10T10:10:11.011Z'),
-    finished_at: new Date('2026-09-10T10:10:12.012Z'),
+    finished_at: new Date('2026-09-10T10:10:14.514Z'),
+    cancel_requested_at: new Date('2026-09-10T10:10:11.511Z'),
+    canceled_at: new Date('2026-09-10T10:10:14.211Z'),
   },
 ]
 

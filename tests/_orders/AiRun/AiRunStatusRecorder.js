@@ -1,6 +1,12 @@
+import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../../../app/constants/aiRunFailureReasonConstants.js'
+
 import AiRunStatusRecorder from '../../../app/aiRun/AiRunStatusRecorder.js'
 
 import AiRun from '../../../sequelize/models/AiRun.js'
+
+const {
+  AI_RUN_FAILURE_REASON_CODE,
+} = AI_RUN_FAILURE_REASON_CONSTANT_HASH
 
 /*
  * Every run this file transitions is created by this file, in `#run-record`'s own id block
@@ -461,7 +467,7 @@ describe('AiRunStatusRecorder', () => {
               failureReasonCode: null,
               failureParameters: null,
             },
-            failureReasonCode: 'media_unreachable',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
             failureParameters: {
               attemptCount: 3,
               lastStatusCode: 504,
@@ -471,7 +477,7 @@ describe('AiRunStatusRecorder', () => {
           expected: expect.objectContaining({
             id: 10230021,
             AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
-            failureReasonCode: 'media_unreachable',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
             failureParameters: {
               attemptCount: 3,
               lastStatusCode: 504,
@@ -499,14 +505,14 @@ describe('AiRunStatusRecorder', () => {
               failureReasonCode: null,
               failureParameters: null,
             },
-            failureReasonCode: 'run_time_limit_reached',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.TIME_LIMIT_EXCEEDED,
             failureParameters: null, // the reason stands on its own, and nothing is invented for it
             finishedAt: new Date('2026-09-26T22:22:09.009Z'),
           },
           expected: expect.objectContaining({
             id: 10230022,
             AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
-            failureReasonCode: 'run_time_limit_reached',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.TIME_LIMIT_EXCEEDED,
             failureParameters: null,
             finishedAt: new Date('2026-09-26T22:22:09.009Z'),
           }),
@@ -558,7 +564,7 @@ describe('AiRunStatusRecorder', () => {
               startedAt: new Date('2026-09-26T23:23:02.002Z'),
               finishedAt: new Date('2026-09-26T23:23:03.003Z'),
             },
-            failureReasonCode: 'media_unreachable',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
             failureParameters: null,
             finishedAt: new Date('2026-09-26T23:23:33.033Z'),
           },
@@ -582,7 +588,7 @@ describe('AiRunStatusRecorder', () => {
               startedAt: new Date('2026-09-27T01:01:02.002Z'),
               finishedAt: new Date('2026-09-27T01:01:03.003Z'),
             },
-            failureReasonCode: 'media_unreadable',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_UNREADABLE,
             failureParameters: null,
             finishedAt: new Date('2026-09-27T01:01:44.044Z'),
           },
@@ -606,7 +612,7 @@ describe('AiRunStatusRecorder', () => {
               startedAt: new Date('2026-09-27T02:02:02.002Z'),
               finishedAt: new Date('2026-09-27T02:02:03.003Z'),
             },
-            failureReasonCode: 'media_too_large',
+            failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_LIMIT_EXCEEDED,
             failureParameters: null,
             finishedAt: new Date('2026-09-27T02:02:55.055Z'),
           },
@@ -1701,7 +1707,7 @@ describe('AiRun', () => {
               acceptedAt: new Date('2026-09-29T02:02:01.001Z'),
               startedAt: new Date('2026-09-29T02:02:02.002Z'),
               finishedAt: new Date('2026-09-29T02:02:03.003Z'),
-              failureReasonCode: 'run.failure.10230072',
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.OUTPUT_INVALID,
             },
             values: {
               AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
@@ -1806,7 +1812,7 @@ describe('AiRun', () => {
               acceptedAt: new Date('2026-09-29T05:05:01.001Z'),
               startedAt: new Date('2026-09-29T05:05:02.002Z'),
               finishedAt: new Date('2026-09-29T05:05:03.003Z'),
-              failureReasonCode: 'run.failure.10230075',
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_UNSUPPORTED,
             },
             values: {
               AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
