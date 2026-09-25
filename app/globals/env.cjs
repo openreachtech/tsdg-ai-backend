@@ -23,6 +23,7 @@ module.exports = /** @type {*} */ (
  *   REDIS_HOST: string
  *   REDIS_PORT: string
  *   REDIS_PASSWORD: string
+ *   REDIS_TLS: string
  *   AUTH_REFRESH_TOKEN_TTL_DAYS: string
  *   AUTH_COOKIE_SECURE: string
  *   AUTH_COOKIE_SAME_SITE: string
