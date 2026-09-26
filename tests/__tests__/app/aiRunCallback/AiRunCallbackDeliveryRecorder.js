@@ -375,7 +375,9 @@ describe('AiRunCallbackDeliveryRecorder', () => {
      * attempt could not produce this list.
      *
      * Run 10010005's two attempts both carry a null status, which is the other half of the column:
-     * the attempt was made and the request never completed.
+     * the attempt was made and the request never completed. Run 10010011's one attempt carries a
+     * status the far side really answered with, and a refusing one — so "not landed" is read on a
+     * client that said no as well as on one that said nothing ([[Q117]]).
      *
      * The order asserted is the one the attempts claim in `attempt_index`, and the rows are
      * asserted as a list rather than searched, so a finder answering in insertion order or missing
@@ -460,6 +462,20 @@ describe('AiRunCallbackDeliveryRecorder', () => {
               attemptIndex: 2,
               httpStatusCode: 201,
               attemptedAt: new Date('2026-09-13T06:06:36.216Z'),
+            }),
+          ],
+        },
+        {
+          input: {
+            aiRunId: 10010011,
+            callbackDeliveryCategoryName: 'terminal',
+          },
+          expected: [
+            expect.objectContaining({
+              id: 10510013,
+              attemptIndex: 1,
+              httpStatusCode: 400,
+              attemptedAt: new Date('2026-09-13T07:07:07.127Z'),
             }),
           ],
         },

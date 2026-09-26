@@ -22,12 +22,12 @@ import AiRunResponseBuilder from '../../../../../../../app/aiRun/AiRunResponseBu
  * 10010003, carries neither column on purpose, so what a client reads for a run holding no engine
  * label and no stored result is read off a row too.
  *
- * **`failure.parameters` still reads null on the failed run, and that is the contract's answer.**
- * `MEDIA_LIMIT_EXCEEDED` is the one reason code of the seven that carries parameters at all
- * ([[Q103]]), and 10010005 failed under `MEDIA_UNREADABLE`, which the contract gives none. The
- * parameters-carrying case is covered against a run entity written out in
- * `tests/__tests__/app/aiRun/AiRunResponseBuilder.js`, and the shortfall is reported rather than
- * papered over: nothing here is weakened to assert something looser than what the rows answer.
+ * **`failure.parameters` is read off a row on both sides now.** `MEDIA_LIMIT_EXCEEDED` is the one
+ * reason code of the seven that carries parameters at all ([[Q103]]): 10010005 failed under
+ * `MEDIA_UNREADABLE`, which the contract gives none, and reads null — and 10010011 failed under
+ * `MEDIA_LIMIT_EXCEEDED` and answers with the limit it went past. So what a client really reads
+ * back for a failed run is asserted whole, parameters included, rather than half of it here and
+ * half against an entity written out elsewhere ([[Q114]]).
  *
  * **The client is a plain object.** `AppRestfulApiContext` resolves a client from a signed request,
  * which a renderer test has no request to present; the renderer reads one field off it, and that
@@ -299,9 +299,11 @@ describe('AiRunGetRenderer', () => {
      * counts those rows carry, the two no majority settled, and the media signature echoed back.
      * Both columns are the seeder's, so nothing in the shape below is stated here.
      *
-     * The sixth criterion is the failed run: a reason code and its parameters, and no result. The
-     * seventh is the canceled run: two model calls and the tokens they spent before the stop,
-     * rather than nothing.
+     * The sixth criterion is the two failed runs: a reason code and its parameters, and no
+     * result. One of them failed under a code the contract gives no parameters to and answers
+     * null for them; the other carries the one code that has them, so both halves of the criterion
+     * are read here. The seventh is the canceled run: two model calls and the tokens they spent
+     * before the stop, rather than nothing.
      *
      * No case carries `steps`. The whole response is compared, so the absence of the key is what
      * is asserted — "a response that did not ask for the trace carries none" is the second half of
@@ -546,6 +548,50 @@ describe('AiRunGetRenderer', () => {
               failure: {
                 reasonCode: 'MEDIA_UNREADABLE',
                 parameters: null,
+              },
+            },
+            error: null,
+          },
+        },
+        {
+          input: {
+            query: {},
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010011',
+              },
+            },
+          },
+          expected: {
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010011',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010011',
+              subjectLabel: 'Subject label of run 10010011',
+              correlationId: 'correlation-id-10010011',
+              statusName: 'failed',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 0,
+                inputTokenCount: 0,
+                outputTokenCount: 0,
+              },
+              result: null,
+              failure: {
+                reasonCode: 'MEDIA_LIMIT_EXCEEDED',
+                parameters: {
+                  limitName: 'mediaByteSize',
+                  limitValue: 10485760, // the 10 MB cap the media check applies
+                  declaredValue: 20971521, // the size that run's one medium declared
+                },
               },
             },
             error: null,

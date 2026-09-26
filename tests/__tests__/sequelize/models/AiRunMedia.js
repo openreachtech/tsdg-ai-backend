@@ -7,9 +7,11 @@ import BaseAppRenchanModel from '../../../../sequelize/baseModel/BaseAppRenchanM
 import AiRunMedia from '../../../../sequelize/models/AiRunMedia.js'
 
 /*
- * The medium a run was handed, asked without a row and without a write.
+ * The medium a run was handed.
  *
- * Every member below is read off the declaration itself, so nothing here reads a table.
+ * Every member below is read off the declaration itself, and nothing here writes. The one
+ * describe that does read a table is `.findAll()`, and it is there to hold two failed runs and
+ * their media to one story ([[Q114]]).
  *
  * The association cases carry the foreign key each relation resolves to, and that is the point of
  * them rather than a restatement of the declaration: Sequelize builds a key from the singular of a
@@ -217,6 +219,74 @@ describe('AiRunMedia', () => {
 
         expect(actual) // Assert
           .toHaveProperty(params.associationName, expected)
+      })
+    })
+  })
+})
+
+describe('AiRunMedia', () => {
+  describe('.findAll()', () => {
+    /*
+     * What each failed run was handed, read back against the reason code its row carries.
+     *
+     * The two have to disagree with each other, and each has to agree with its own run. A run
+     * refused for the size of a file was refused before anything was fetched, so its medium
+     * declares a size over the cap and carries no `fetched_at`. A run that failed on its provider
+     * had something to send, so its medium was fetched and read — and the model call the fixtures
+     * hold for it is the call that errored.
+     *
+     * Reading the two in one place is what the fixture set lacked: the over-cap medium had been
+     * hung on the run that failed on its provider, so one run read as having sent nothing and as
+     * having called a provider at once, and no test was red ([[Q114]]). Move it back and this
+     * describe fails.
+     *
+     * Each run holds exactly one medium, so the lists are single-element and nothing here depends
+     * on the order a dialect hands rows back.
+     */
+    describe('should hold each failed run to the media its reason code implies', () => {
+      const cases = [
+        {
+          params: {
+            where: {
+              AiRunId: 10010009, // PROVIDER_CALL_FAILED — fetched, read, and handed over
+            },
+          },
+          expected: [
+            expect.objectContaining({
+              id: 10410018,
+              mediaKey: 'media-key-street-frontage',
+              byteSize: 356722,
+              isReadable: true,
+              fetchedAt: new Date('2026-09-12T09:09:09.909Z'),
+            }),
+          ],
+        },
+        {
+          params: {
+            where: {
+              AiRunId: 10010011, // MEDIA_LIMIT_EXCEEDED — over the cap, so never fetched
+            },
+          },
+          expected: [
+            expect.objectContaining({
+              id: 10410010,
+              mediaKey: 'media-key-oversized-panorama',
+              byteSize: 20971521,
+              isReadable: false,
+              fetchedAt: null,
+            }),
+          ],
+        },
+      ]
+
+      test.each(cases)('where.AiRunId: $params.where.AiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const actual = await AiRunMedia.findAll(params) // Act
+
+        expect(actual) // Assert
+          .toEqual(expected)
       })
     })
   })

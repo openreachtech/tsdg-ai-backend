@@ -28,6 +28,9 @@ const {
  *     content by design
  *   - medium 10410013 belongs to a run still going, and medium 10410017 to one that was canceled
  *     after the upload. Neither outcome removes what already left
+ *   - medium 10410018 belongs to the run that failed on its provider. The file left and the call
+ *     that used it errored, which is what `PROVIDER_CALL_FAILED` names - a run refused for the
+ *     size of a file never reaches this table at all ([[Q114]])
  *
  * `expires_at` is on the table in all three of its states: already past, still ahead, and null for
  * a provider that stated none. The purge of expired provider uploads reads exactly this column, so
@@ -138,6 +141,16 @@ const providerUploadedFileSeeds = [
     provider_file_name: 'stub-file-f7a1b0c2',
     uploaded_at: new Date('2026-09-12T07:07:04.121Z'),
     expires_at: new Date('2026-09-13T07:07:04.121Z'),
+  },
+  {
+    // run 10010009 failed on the call that used this file, and the file left all the same -
+    // which is what makes `PROVIDER_CALL_FAILED` a failure of the call rather than of the fetch
+    id: 10420012,
+    ai_run_media_id: 10410018,
+    ai_provider_id: AI_PROVIDER.STUB.ID,
+    provider_file_name: 'stub-file-a8b2c1d3',
+    uploaded_at: new Date('2026-09-12T09:09:10.132Z'),
+    expires_at: new Date('2027-03-18T09:09:10.132Z'),
   },
 ]
 

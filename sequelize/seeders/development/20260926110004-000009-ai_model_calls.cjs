@@ -34,12 +34,16 @@ const {
  *   - 10010001 is still running and has one reading behind it, so a run with no terminal state
  *              still reports what it has spent.
  *   - 10010009 failed on its provider, and the call that errored is still a call it made — a
- *              failed run reports what it spent rather than nothing.
+ *              failed run reports what it spent rather than nothing. Its own medium was fetched
+ *              and read (`20260926110001-000006-ai_run_media.cjs`), so the run really had
+ *              something to send before the call it failed on ([[Q114]]).
  *   - 10010008 belongs to the rotating client and spends over two readings, so the totals are not
  *              all one client's.
  *   - 10010005 failed on its media before any reading, and is here by being absent: it has no row,
- *              and neither do the two queued runs, so three of the ten runs report three zeros and
- *              a builder that answered zeros for everything is caught by the other seven.
+ *              and neither do the two queued runs nor 10010011, which was refused for the size of
+ *              its medium before a provider was reached at all. So four of the eleven runs report
+ *              three zeros, and a builder that answered zeros for everything is caught by the
+ *              other seven.
  *
  * Every `input_token_count` and `output_token_count` is distinct across the whole file, and no two
  * of them share a value with a `latency_milliseconds` either, so a column read in place of another

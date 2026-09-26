@@ -13,13 +13,14 @@ const {
  * The eighth acceptance criterion of #run-delivery is that a callback which fails to deliver is
  * retried, though a model call in the same run is not. "Was it retried" is a count of rows, and a
  * count is not readable from an empty table — nor from a table holding one attempt per run, which
- * would look correct against an implementation that never retried at all. So five of the six runs
- * below carry more than one attempt, and the attempt indexes run 1, 2, 3 rather than staying at 1.
+ * would look correct against an implementation that never retried at all. So five of the seven
+ * runs below carry more than one attempt, and the attempt indexes run 1, 2, 3 rather than staying
+ * at 1.
  *
  * The runs are the ones #run-contract seeded (`20260923100004-000002-ai_runs.cjs`). This file
  * seeds no run of its own: a second writer for `ai_runs` would give that table two sources of
- * truth, and a reference writes nothing and collides with nothing. Only the six runs that reached
- * succeeded, failed or canceled appear here — a terminal callback is raised by a terminal
+ * truth, and a reference writes nothing and collides with nothing. Only the seven runs that
+ * reached succeeded, failed or canceled appear here — a terminal callback is raised by a terminal
  * transition, so a queued or running run having one would be a fixture stating something the
  * domain does not allow.
  *
@@ -36,6 +37,9 @@ const {
  *              record too.
  *   - 10010010 never completed its first attempt and landed on the second, so a NULL and a status
  *              sit on one run.
+ *   - 10010011 was refused outright on its only attempt so far. The far side answered, and
+ *              answered no — which this version retries on the same schedule as a far side that
+ *              never answered at all ([[Q117]]), so the two are on the record side by side.
  *
  * `http_status_code` is the whole of what the far side said: no response body is stored anywhere
  * in this table, because a client's own payload kept here would outlive the purge that removes it
@@ -159,6 +163,16 @@ const aiRunCallbackDeliverySeeds = [
     attempt_index: 2,
     http_status_code: 201,
     attempted_at: new Date('2026-09-13T06:06:36.216Z'),
+  },
+  {
+    // refused by the client's own service, which answered rather than failing to answer. Nothing
+    // here tells that apart from an outage, and the attempt stands on the record either way
+    id: 10510013,
+    ai_run_id: 10010011,
+    ai_run_callback_delivery_category_id: AI_RUN_CALLBACK_DELIVERY_CATEGORY.TERMINAL.ID,
+    attempt_index: 1,
+    http_status_code: 400,
+    attempted_at: new Date('2026-09-13T07:07:07.127Z'),
   },
 ]
 

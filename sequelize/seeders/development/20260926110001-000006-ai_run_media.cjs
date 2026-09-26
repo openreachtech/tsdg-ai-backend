@@ -34,6 +34,11 @@ const {
  *                                  `ai_run_media_category_id` would look correct against a table
  *                                  holding images alone.
  *
+ * The over-cap medium belongs to run 10010011, which failed under `MEDIA_LIMIT_EXCEEDED` and
+ * carries that refusal's parameters - and not to a run that failed for some other reason. A run
+ * that sent nothing cannot also have called a provider, and a run that holds the one reason code
+ * the contract gives parameters to is the only row those parameters can be read off ([[Q114]]).
+ *
  * `ai_run_media_category_id` and `mime_type` are categorical columns, so a value does repeat
  * across rows - two runs really are handed a JPEG. Every non-categorical value is distinct across
  * the whole file: no id, no media key, no byte size and no instant appears twice, and none of them
@@ -145,10 +150,11 @@ const aiRunMediaSeeds = [
     fetched_at: null,
   },
   {
-    // run 10010009, failed - over the 10 MB cap, so nothing was fetched and nothing was sent.
-    // The size is the caller's declared one, which is what the cap is checked against
+    // run 10010011, failed - over the 10 MB cap, so nothing was fetched and nothing was sent.
+    // The size is the caller's declared one, which is what the cap is checked against, and it is
+    // the `declaredValue` that run's `failure_parameters` names
     id: 10410010,
-    ai_run_id: 10010009,
+    ai_run_id: 10010011,
     media_key: 'media-key-oversized-panorama',
     ai_run_media_category_id: AI_RUN_MEDIA_CATEGORY.IMAGE.ID,
     mime_type: 'image/jpeg',
@@ -233,6 +239,20 @@ const aiRunMediaSeeds = [
     byte_size: 240066,
     is_readable: true,
     fetched_at: new Date('2026-09-12T07:07:02.202Z'),
+  },
+  {
+    // run 10010009, failed on its provider - fetched and read, because a run that reached a
+    // provider had something to send it. Its failure is `PROVIDER_CALL_FAILED` and the call that
+    // errored is the model call `20260926110004-000009-ai_model_calls.cjs` holds for it, so the
+    // medium, the reason code and the call all say the same thing ([[Q114]])
+    id: 10410018,
+    ai_run_id: 10010009,
+    media_key: 'media-key-street-frontage',
+    ai_run_media_category_id: AI_RUN_MEDIA_CATEGORY.IMAGE.ID,
+    mime_type: 'image/jpeg',
+    byte_size: 356722,
+    is_readable: true,
+    fetched_at: new Date('2026-09-12T09:09:09.909Z'),
   },
 ]
 

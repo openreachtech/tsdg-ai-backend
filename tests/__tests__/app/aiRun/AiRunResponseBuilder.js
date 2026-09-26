@@ -23,12 +23,12 @@ import AiRunStatus from '../../../../sequelize/models/AiRunStatus.js'
  * purpose, so the answer for a succeeded run holding no engine label and no stored result is read
  * off a row as well.
  *
- * **`failure.parameters` still has no row behind it, and that is the contract's answer rather than
- * a gap.** `MEDIA_LIMIT_EXCEEDED` is the one reason code of the seven that carries parameters at
- * all ([[Q103]]), and neither failed run carries that code — 10010005 failed under
- * `MEDIA_UNREADABLE` and 10010009 under `PROVIDER_CALL_FAILED`, and the contract names no
- * parameters for either. The parameters-carrying case is therefore read on a run written out in
- * the case, as it was, and the shortfall is reported rather than papered over.
+ * **`failure.parameters` is read off a row now too.** Run 10010011 failed under
+ * `MEDIA_LIMIT_EXCEEDED`, the one reason code of the seven the contract gives parameters to
+ * ([[Q103]]), and carries them — so the sixth acceptance criterion of section 12 is exercised
+ * whole against the table rather than half of it against an entity written out here ([[Q114]]).
+ * The other two failed runs carry none, because the contract names none for `MEDIA_UNREADABLE`
+ * or `PROVIDER_CALL_FAILED`, and that null is read off their rows in the same describe.
  *
  * **The describes that take a value or an entity as their argument still write one out**, because
  * there is nothing for them to read: `#buildEngine()`, `#buildResult()`, `#parseResultBody()`,
@@ -1085,6 +1085,10 @@ describe('AiRunResponseBuilder', () => {
      * stub renderer spells it a second way; that conflict is resolved towards this one and
      * reported, because it is the spelling that says which of the two limits was exceeded and so
      * covers the byte cap as well as the count.
+     *
+     * The cases below name the count limit and a limit on the run's own duration, because this
+     * method is handed its run and the variation is what is being read. The byte cap — the one a
+     * seeded row carries — is read off the table in `#buildAiRunResponse()` ([[Q114]]).
      */
     describe('when the run failed', () => {
       const cases = [
@@ -1457,9 +1461,12 @@ describe('AiRunResponseBuilder', () => {
      * this method a body the row does not hold is what proves it answers out of the entity it was
      * given rather than re-reading the run behind its back.
      *
-     * `failureParameters` is still stated rather than read, because no seeded run carries a reason
-     * code the contract gives parameters to ([[Q103]]). That one is the fixture's gap, and it is
-     * reported rather than papered over.
+     * The reason code and the parameters of the second case are the pair run 10010011 really
+     * carries, rather than a shape invented here: reading them off the table is
+     * `#buildAiRunResponse()` below, and stating the same pair in this case is what keeps the two
+     * describes about one run rather than about two stories ([[Q114]]). The other fields stay
+     * written out, as the first case's `resultBody` is, because that is what proves this method
+     * answers out of the entity it was handed.
      */
     describe('should answer a body carrying what the run itself holds', () => {
       const cases = [
@@ -1511,18 +1518,18 @@ describe('AiRunResponseBuilder', () => {
           // result
           input: {
             aiRun: {
-              id: 10010005,
-              runKey: 'run-key-10010005',
-              externalRef: 'external-ref-10010005',
-              subjectLabel: 'Subject label of run 10010005',
-              correlationId: 'correlation-id-10010005',
+              id: 10010011,
+              runKey: 'run-key-10010011',
+              externalRef: 'external-ref-10010011',
+              subjectLabel: 'Subject label of run 10010011',
+              correlationId: 'correlation-id-10010011',
               engineLabel: 'asset-media-extraction-loop@stub',
               resultBody: null,
               failureReasonCode: 'MEDIA_LIMIT_EXCEEDED',
               failureParameters: {
-                limitName: 'mediaCount',
-                limitValue: 12,
-                declaredValue: 17,
+                limitName: 'mediaByteSize',
+                limitValue: 10485760,
+                declaredValue: 20971521,
               },
               AiRunStatus: {
                 name: 'failed',
@@ -1534,11 +1541,11 @@ describe('AiRunResponseBuilder', () => {
             expandsSteps: false,
           },
           expected: {
-            runKey: 'run-key-10010005',
+            runKey: 'run-key-10010011',
             runCategoryName: 'asset-media-extraction',
-            externalRef: 'external-ref-10010005',
-            subjectLabel: 'Subject label of run 10010005',
-            correlationId: 'correlation-id-10010005',
+            externalRef: 'external-ref-10010011',
+            subjectLabel: 'Subject label of run 10010011',
+            correlationId: 'correlation-id-10010011',
             statusName: 'failed',
             engine: {
               label: 'asset-media-extraction-loop@stub',
@@ -1553,9 +1560,9 @@ describe('AiRunResponseBuilder', () => {
             failure: {
               reasonCode: 'MEDIA_LIMIT_EXCEEDED',
               parameters: {
-                limitName: 'mediaCount',
-                limitValue: 12,
-                declaredValue: 17,
+                limitName: 'mediaByteSize',
+                limitValue: 10485760,
+                declaredValue: 20971521,
               },
             },
           },
@@ -1682,6 +1689,11 @@ describe('AiRunResponseBuilder', () => {
      * rows carry, and the two that no majority settled under `missingFieldPaths`. Read it beside
      * the seeder and a body that had drifted from the rows it claims to summarize would show up
      * here.
+     *
+     * The sixth criterion is read on two failed runs rather than one: 10010005 carries a reason
+     * code the contract gives no parameters to, and 10010011 carries `MEDIA_LIMIT_EXCEEDED` with
+     * the parameters that name which limit it went past. Both halves of "a reason code **and its
+     * parameters**" are therefore assertions about the table ([[Q114]]).
      */
     describe('when the client owns the run', () => {
       const cases = [
@@ -1857,6 +1869,42 @@ describe('AiRunResponseBuilder', () => {
             failure: {
               reasonCode: 'MEDIA_UNREADABLE',
               parameters: null,
+            },
+          },
+        },
+        {
+          // the sixth criterion whole: the reason code **and its parameters**, read off the one
+          // run the contract gives parameters to. The pair below is `ai_runs.failure_parameters`
+          // as the seeder wrote it, and the cap it names is the one the media check applies
+          input: {
+            runKey: 'run-key-10010011',
+            apiClientId: 10000001,
+            expandsSteps: false,
+          },
+          expected: {
+            runKey: 'run-key-10010011',
+            runCategoryName: 'asset-media-extraction',
+            externalRef: 'external-ref-10010011',
+            subjectLabel: 'Subject label of run 10010011',
+            correlationId: 'correlation-id-10010011',
+            statusName: 'failed',
+            engine: {
+              label: null,
+              confidenceMethodVersion: null,
+            },
+            usage: {
+              modelCallCount: 0,
+              inputTokenCount: 0,
+              outputTokenCount: 0,
+            },
+            result: null,
+            failure: {
+              reasonCode: 'MEDIA_LIMIT_EXCEEDED',
+              parameters: {
+                limitName: 'mediaByteSize',
+                limitValue: 10485760,
+                declaredValue: 20971521,
+              },
             },
           },
         },
