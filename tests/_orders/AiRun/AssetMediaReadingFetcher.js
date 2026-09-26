@@ -1,5 +1,7 @@
 import AssetMediaReadingFetcher from '../../../app/assetMediaExtraction/AssetMediaReadingFetcher.js'
 
+import StubAiModelProcessor from '../../../app/tools/AiModelProcessor/StubAiModelProcessor.js'
+
 import AiRun from '../../../sequelize/models/AiRun.js'
 
 /*
@@ -14,6 +16,13 @@ import AiRun from '../../../sequelize/models/AiRun.js'
  * never cross - a real driver would reach a vendor, and the keyless driver this installation
  * carries answers a tool call with no findings in it by design, which is not what step 3's contract
  * is about. `AiModelCallRecorder` runs for real and writes real `ai_model_calls` rows.
+ *
+ * **The two describes at the foot of this file are the exception, and are about that driver.** One
+ * of them runs the real `StubAiModelProcessor` - a driver that opens no connection is not a
+ * boundary, so there is nothing to stand in for - and pins what §20's fourth use case asks of a
+ * keyless installation: a screen's worth of readings, drawn from the media the request names. The
+ * other pins the other half of the same fork, that a driver answering for any other model is
+ * carried through untouched.
  *
  * The runs are created here in `#asset-media-extraction`'s own block, `10610961` upward.
  */
@@ -528,6 +537,352 @@ describe('AssetMediaReadingFetcher', () => {
         await expect(actual)
           .rejects
           .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#fetchAssetMediaReadings()', () => {
+    /*
+     * specs/1.0.0 §20's fourth use case: "the client system builds and demonstrates its whole
+     * suggestion screen before any API key exists, because the stub answers deterministically from
+     * the media the request names".
+     *
+     * The driver here is the real keyless one, and it fills in no findings - so what the three
+     * readings carry is this service's own fixture, and its being there at all is the whole point
+     * of the case. The three readings are identical, which is what lets step 5 settle anything, and
+     * every value is written out rather than recomputed, so a draw that stopped being a function of
+     * the request alone fails here.
+     *
+     * `response_body` is asserted beside them: the stand-in happens before the call is recorded, so
+     * the row a run is billed and traced by carries the findings the run went on to settle rather
+     * than the empty call the driver made.
+     */
+    describe('should answer a keyless run from this service own fixture', () => {
+      const cases = [
+        {
+          params: {
+            aiRunRow: {
+              id: 10610967,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10610967',
+              requestKey: 'request-key-10610967',
+              requestBodyHash: 'request-body-hash-10610967',
+              externalRef: 'external-ref-10610967',
+              subjectLabel: 'Subject label of run 10610967',
+              correlationId: 'correlation-id-10610967',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10610967',
+              acceptedAt: new Date('2026-09-26T11:00:01.001Z'),
+              startedAt: new Date('2026-09-26T11:00:02.002Z'),
+              finishedAt: null,
+            },
+            fetchParams: {
+              aiRunId: 10610967,
+              aiModelId: 10110001, // AI_MODEL.STUB.ID
+              aiAgent: {
+                id: 10150001,
+                name: 'asset-media-extraction-agent',
+              },
+              composedPrompt: {
+                instruction: 'Read the photographs and record what they show.',
+                role: 'You read photographs of a property.',
+                toolSchemas: [
+                  {
+                    name: 'record_field_readings',
+                  },
+                ],
+                instructionSavedAt: new Date('2026-09-24T00:00:03.003Z'),
+              },
+              fieldSchema: [
+                {
+                  path: 'attributes.wallMaterial',
+                  label: 'Wall material',
+                  valueKind: 'select',
+                  isRequired: true,
+                  options: [
+                    'brick',
+                    'concrete',
+                    'timber',
+                  ],
+                },
+                {
+                  path: 'attributes.frontageNote',
+                  label: 'Frontage note',
+                  valueKind: 'text',
+                  isRequired: false,
+                  maxLength: 64,
+                },
+              ],
+              mediaSignature: 'media-signature-10610967',
+              attachedFiles: [
+                {
+                  id: 10610977,
+                  fileUrl: '/workspace/medium-10610977',
+                  fileType: 'image/jpeg',
+                },
+              ],
+              readableMediaKeys: [
+                'media-key-10610977',
+              ],
+            },
+          },
+          expected: {
+            readings: [
+              [
+                {
+                  path: 'attributes.wallMaterial',
+                  value: 'concrete',
+                  evidenceKindName: 'visual-estimate',
+                  reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
+                  sourceMediaKeys: [
+                    'media-key-10610977',
+                  ],
+                },
+                {
+                  path: 'attributes.frontageNote',
+                  value: 'stub-value-430108842',
+                  evidenceKindName: 'visible-text',
+                  reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
+                  sourceMediaKeys: [
+                    'media-key-10610977',
+                  ],
+                },
+              ],
+              [
+                {
+                  path: 'attributes.wallMaterial',
+                  value: 'concrete',
+                  evidenceKindName: 'visual-estimate',
+                  reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
+                  sourceMediaKeys: [
+                    'media-key-10610977',
+                  ],
+                },
+                {
+                  path: 'attributes.frontageNote',
+                  value: 'stub-value-430108842',
+                  evidenceKindName: 'visible-text',
+                  reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
+                  sourceMediaKeys: [
+                    'media-key-10610977',
+                  ],
+                },
+              ],
+              [
+                {
+                  path: 'attributes.wallMaterial',
+                  value: 'concrete',
+                  evidenceKindName: 'visual-estimate',
+                  reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
+                  sourceMediaKeys: [
+                    'media-key-10610977',
+                  ],
+                },
+                {
+                  path: 'attributes.frontageNote',
+                  value: 'stub-value-430108842',
+                  evidenceKindName: 'visible-text',
+                  reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
+                  sourceMediaKeys: [
+                    'media-key-10610977',
+                  ],
+                },
+              ],
+            ],
+            totalReadingCount: 3,
+          },
+          expectedResponseBody: '[{"name":"record_field_readings","arguments":{"readings":[{"path":"attributes.wallMaterial","value":"concrete","evidenceKindName":"visual-estimate","reason":"[stub] demonstration value for attributes.wallMaterial, supplied without a model call.","sourceMediaKeys":["media-key-10610977"]},{"path":"attributes.frontageNote","value":"stub-value-430108842","evidenceKindName":"visible-text","reason":"[stub] demonstration value for attributes.frontageNote, supplied without a model call.","sourceMediaKeys":["media-key-10610977"]}]}}]',
+        },
+      ]
+
+      test.each(cases)('runKey: $params.aiRunRow.runKey', async ({
+        params,
+        expected,
+        expectedResponseBody,
+      }) => {
+        await AiRun.create(params.aiRunRow)
+        const fetcher = AssetMediaReadingFetcher.create()
+        const aiModelProcessor = StubAiModelProcessor.create()
+        const saveAiModelCallSpy = jest.spyOn(fetcher.aiModelCallRecorder, 'saveAiModelCall')
+
+        const actual = await fetcher.fetchAssetMediaReadings({
+          aiRunId: params.fetchParams.aiRunId,
+          aiModelId: params.fetchParams.aiModelId,
+          aiModelProcessor,
+          aiAgent: params.fetchParams.aiAgent,
+          composedPrompt: params.fetchParams.composedPrompt,
+          fieldSchema: params.fetchParams.fieldSchema,
+          mediaSignature: params.fetchParams.mediaSignature,
+          attachedFiles: params.fetchParams.attachedFiles,
+          readableMediaKeys: params.fetchParams.readableMediaKeys,
+          signal: AbortSignal.timeout(60000),
+        })
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveAiModelCallSpy)
+          .toHaveBeenCalledTimes(expected.totalReadingCount)
+        expect(saveAiModelCallSpy)
+          .toHaveBeenNthCalledWith(1, expect.objectContaining({
+            actionName: 'read-media',
+            readingIndex: 1,
+            responseBody: expectedResponseBody,
+          }))
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#fetchAssetMediaReadings()', () => {
+    /*
+     * The other half of the same fork. A driver answering for any model but the keyless one has its
+     * own findings, and they are what the reading carries - the fixture is not merged into them,
+     * not appended to them, and not consulted at all. The schema, the signature and the photographs
+     * are handed in exactly as they are on the case above, so a version that supplied findings for
+     * every driver would answer the fixture here and fail.
+     */
+    describe('should carry another driver answer through untouched', () => {
+      const cases = [
+        {
+          params: {
+            aiRunRow: {
+              id: 10610968,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10610968',
+              requestKey: 'request-key-10610968',
+              requestBodyHash: 'request-body-hash-10610968',
+              externalRef: 'external-ref-10610968',
+              subjectLabel: 'Subject label of run 10610968',
+              correlationId: 'correlation-id-10610968',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10610968',
+              acceptedAt: new Date('2026-09-26T12:00:01.001Z'),
+              startedAt: new Date('2026-09-26T12:00:02.002Z'),
+              finishedAt: null,
+            },
+            fetchParams: {
+              aiRunId: 10610968,
+              aiModelId: 10110001, // AI_MODEL.STUB.ID
+              aiAgent: {
+                id: 10150001,
+                name: 'asset-media-extraction-agent',
+              },
+              composedPrompt: {
+                instruction: 'Read the photographs and record what they show.',
+                role: 'You read photographs of a property.',
+                toolSchemas: [
+                  {
+                    name: 'record_field_readings',
+                  },
+                ],
+                instructionSavedAt: new Date('2026-09-24T00:00:03.003Z'),
+              },
+              fieldSchema: [
+                {
+                  path: 'attributes.wallMaterial',
+                  label: 'Wall material',
+                  valueKind: 'select',
+                  isRequired: true,
+                  options: [
+                    'brick',
+                    'concrete',
+                    'timber',
+                  ],
+                },
+              ],
+              mediaSignature: 'media-signature-10610968',
+              attachedFiles: [
+                {
+                  id: 10610978,
+                  fileUrl: '/workspace/medium-10610978',
+                  fileType: 'image/jpeg',
+                },
+              ],
+              readableMediaKeys: [
+                'media-key-10610978',
+              ],
+            },
+          },
+          expected: {
+            readings: [
+              [
+                {
+                  path: 'attributes.wallMaterial',
+                  value: 'timber',
+                  evidenceKindName: 'visible-text',
+                  reason: 'Written on the plate beside the door.',
+                  sourceMediaKeys: [
+                    'media-key-10610978',
+                  ],
+                },
+              ],
+            ],
+            totalReadingCount: 1,
+          },
+        },
+      ]
+
+      test.each(cases)('runKey: $params.aiRunRow.runKey', async ({
+        params,
+        expected,
+      }) => {
+        await AiRun.create(params.aiRunRow)
+        const fetcher = AssetMediaReadingFetcher.create({
+          readingCount: 1,
+        })
+        const aiModelProcessor = {
+          aiModel: 'some-vendor-model',
+
+          /**
+           * Answer one forced tool call carrying this driver own finding.
+           *
+           * @returns {Promise<*>} The normalized response.
+           */
+          sendRequestToAi: async () => ({
+            hasError: () => false,
+            extractInputTokenCount: () => 2401,
+            extractOutputTokenCount: () => 684,
+            extractFunctionCalls: () => [
+              {
+                name: 'record_field_readings',
+                arguments: {
+                  readings: [
+                    {
+                      path: 'attributes.wallMaterial',
+                      value: 'timber',
+                      evidenceKindName: 'visible-text',
+                      reason: 'Written on the plate beside the door.',
+                      sourceMediaKeys: [
+                        'media-key-10610978',
+                      ],
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        }
+
+        const actual = await fetcher.fetchAssetMediaReadings({
+          aiRunId: params.fetchParams.aiRunId,
+          aiModelId: params.fetchParams.aiModelId,
+          aiModelProcessor,
+          aiAgent: params.fetchParams.aiAgent,
+          composedPrompt: params.fetchParams.composedPrompt,
+          fieldSchema: params.fetchParams.fieldSchema,
+          mediaSignature: params.fetchParams.mediaSignature,
+          attachedFiles: params.fetchParams.attachedFiles,
+          readableMediaKeys: params.fetchParams.readableMediaKeys,
+          signal: AbortSignal.timeout(60000),
+        })
+
+        expect(actual)
+          .toEqual(expected)
       })
     })
   })

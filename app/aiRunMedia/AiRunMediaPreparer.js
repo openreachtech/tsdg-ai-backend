@@ -450,6 +450,11 @@ export default class AiRunMediaPreparer {
    * the rule it feeds is "a photo that was not among those sent" - a photograph the caller sent
    * and this service failed to read is still one the caller sent.
    *
+   * `readableMediaKeys` is the other half of that same distinction, and is taken from what was
+   * fetched for the opposite reason: it names the photographs a reading could honestly have been
+   * made from. `attachedFiles` carries each medium's row id rather than the caller's key, so the
+   * keys are read off the collected media here rather than recovered from the files later.
+   *
    * @param {{
    *   attachedFiles: Array<Record<string, *>>
    *   collectedAiRunMedia: *
@@ -464,11 +469,13 @@ export default class AiRunMediaPreparer {
     mediaDescriptors,
   }) {
     const sentMediaKeys = mediaDescriptors.map(it => it[MEDIA_KEY_FIELD_NAME])
+    const readableMediaKeys = collectedAiRunMedia.readableMedia.map(it => it.mediaKey)
     const { unreadableMediaKeys } = collectedAiRunMedia
 
     return {
       attachedFiles,
       sentMediaKeys,
+      readableMediaKeys,
       unreadableMediaKeys,
     }
   }
@@ -514,6 +521,7 @@ export default class AiRunMediaPreparer {
  * @typedef {{
  *   attachedFiles: Array<Record<string, *>>
  *   sentMediaKeys: Array<string>
+ *   readableMediaKeys: Array<string>
  *   unreadableMediaKeys: Array<string>
  * }} PreparedAiRunMedia
  */

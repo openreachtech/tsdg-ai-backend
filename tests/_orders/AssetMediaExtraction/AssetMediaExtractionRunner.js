@@ -19,9 +19,15 @@ import AiRun from '../../../sequelize/models/AiRun.js'
  * which a test must never reach - it is replaced through `.get:MediaFetchClientCtor`, the seam that
  * exists for it. The workspace is the worker host's own temporary directory; a real one would leave
  * a run's files behind, because removing them belongs to `BaseAiRunJobWorker`'s `finally` and not
- * to anything under test here. And the reading fetcher, in the two cases that reach it, is the
- * provider call: its answer on the stub driver is drawn from a digest of the request, which is not
- * something a run's settled body may be asserted against.
+ * to anything under test here. And the reading fetcher, in the two cases whose subject is the
+ * ending a medium gets rather than the fields a run settles, is handed in so those cases assert one
+ * thing each.
+ *
+ * **The last case stands in for neither the fetcher nor the driver**, and is the one that settles
+ * fields: it runs the keyless driver the default installation seeds, over this service's own
+ * fixture, and asserts the whole body. That is specs/1.0.0 §20's fourth use case - a suggestion
+ * screen demonstrable before any key exists - and it is assertable precisely because the fixture is
+ * a function of the request's own media and of nothing else.
  *
  * **The media step is a class of its own and is built here rather than defaulted**, so that the one
  * member of it a test may not let run - the one that makes a directory on the machine - can be
@@ -443,6 +449,109 @@ describe('AssetMediaExtractionRunner', () => {
         expect(fetchAssetMediaReadingsSpy)
           .not
           .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('AssetMediaExtractionRunner', () => {
+  describe('#runAssetMediaExtraction()', () => {
+    /*
+     * specs/1.0.0 §20's fourth use case, and the version's second acceptance criterion behind it:
+     * "the client system builds and demonstrates its whole suggestion screen before any API key
+     * exists, because the stub answers deterministically from the media the request names".
+     *
+     * **Nothing of the run is stood in for but the network and the workspace directory.** The
+     * driver is the keyless one the default installation seeds, reached through the real catalog
+     * and the real agent rows, and the readings it settles on are this service's own fixture - so
+     * what the body below states is that a machine with no key and no outbound access answers a
+     * whole screen. Steps 4, 5 and 6 run for real over those readings, which is why the fixture is
+     * a reading and never a result.
+     *
+     * **The body is asserted as one exact string**, and that is the determinism half of the
+     * criterion: a value drawn from a clock, a counter or a random source would move it between
+     * runs, and a draw that ignored the media would leave it unchanged when the photographs
+     * changed.
+     *
+     * Four things a client's screen has to be built against are all in one answer here: three
+     * fields settled unanimously, two different field states, two different confidences, and a
+     * required field reported missing. The missing one is a select the request bounded to nothing -
+     * it sends no options - so no reading could be offered for it; the date field beside it is not
+     * missing at all, because step 1 never tried it.
+     */
+    describe('should settle a whole screen on the keyless driver', () => {
+      const cases = [
+        {
+          params: {
+            aiRunRow: {
+              id: 10630106,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10630106',
+              requestKey: 'request-key-10630106',
+              requestBodyHash: 'request-body-hash-10630106',
+              externalRef: 'external-ref-10630106',
+              subjectLabel: 'Subject label of run 10630106',
+              correlationId: 'correlation-id-10630106',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10630106',
+              requestBody: '{"externalRef":"external-ref-10630106","asset":{"categorySlugs":["residential"],"province":"Lam Dong"},"fieldSchema":[{"path":"attributes.wallMaterial","label":"Wall material","valueKind":"select","isRequired":true,"options":["brick","concrete","timber"]},{"path":"attributes.balconyCount","label":"Balcony count","valueKind":"number","isRequired":false,"unit":"balcony","minimum":0,"maximum":4},{"path":"attributes.frontageNote","label":"Frontage note","valueKind":"text","isRequired":false,"maxLength":64},{"path":"attributes.frontDirection","label":"Front direction","valueKind":"select","isRequired":true},{"path":"attributes.handoverDate","label":"Handover date","valueKind":"date","isRequired":true}],"media":[{"mediaKey":"media-key-10630601-photograph","mediaCategoryName":"image","url":"https://storage.client.development.invalid/media-key-10630601-photograph.jpg","mimeType":"image/jpeg","byteSize":260001},{"mediaKey":"media-key-10630602-photograph","mediaCategoryName":"image","url":"https://storage.client.development.invalid/media-key-10630602-photograph.jpg","mimeType":"image/jpeg","byteSize":260002}],"mediaSignature":"media-signature-10630106"}',
+              acceptedAt: new Date('2026-10-14T06:06:01.001Z'),
+              startedAt: new Date('2026-10-14T06:06:02.002Z'),
+              finishedAt: null,
+            },
+          },
+          mockFetchOutcomeHash: {
+            'https://storage.client.development.invalid/media-key-10630601-photograph.jpg': {
+              bytes: Buffer.from('bytes of the first photograph of run 10630106'),
+              byteSize: 45,
+              mimeType: 'image/jpeg',
+              failureReasonCode: null,
+            },
+            'https://storage.client.development.invalid/media-key-10630602-photograph.jpg': {
+              bytes: Buffer.from('bytes of the second photograph of run 10630106'),
+              byteSize: 46,
+              mimeType: 'image/jpeg',
+              failureReasonCode: null,
+            },
+          },
+          expected: '{"fields":[{"path":"attributes.wallMaterial","value":"concrete","fieldStateName":"derived","suggestionConfidence":0.75,"reason":"[stub] demonstration value for attributes.wallMaterial, supplied without a model call.","sourceMediaKeys":["media-key-10630601-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.balconyCount","value":2,"fieldStateName":"extracted","suggestionConfidence":1,"reason":"[stub] demonstration value for attributes.balconyCount, supplied without a model call.","sourceMediaKeys":["media-key-10630602-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.frontageNote","value":"stub-value-3450563698","fieldStateName":"derived","suggestionConfidence":0.75,"reason":"[stub] demonstration value for attributes.frontageNote, supplied without a model call.","sourceMediaKeys":["media-key-10630601-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}}],"missingFieldPaths":["attributes.frontDirection"],"unreadableMediaKeys":[],"mediaSignature":"media-signature-10630106"}',
+        },
+      ]
+
+      test.each(cases)('runKey: $params.aiRunRow.runKey', async ({
+        params,
+        mockFetchOutcomeHash,
+        expected,
+      }) => {
+        await AiRun.create(params.aiRunRow)
+        const aiRunMediaPreparer = AiRunMediaPreparer.create()
+        jest.spyOn(aiRunMediaPreparer, 'createAiRunMediaWorkspace')
+          .mockReturnValue(/** @type {*} */ ({
+            createWorkspace: async () => '/workspace',
+            writeMediumFile: async ({
+              aiRunMediaId,
+            }) => `/workspace/medium-${aiRunMediaId}`,
+          }))
+        const runner = AssetMediaExtractionRunner.create({
+          aiRunMediaPreparer,
+        })
+        jest.spyOn(AiRunMediaCollector, 'MediaFetchClientCtor', 'get')
+          .mockReturnValue(/** @type {*} */ ({
+            create: () => ({
+              fetchMedium: async ({
+                url,
+              }) => mockFetchOutcomeHash[url],
+            }),
+          }))
+
+        const actual = await runner.runAssetMediaExtraction({
+          aiRunId: params.aiRunRow.id,
+          signal: AbortSignal.timeout(60000),
+        })
+
+        expect(actual)
+          .toBe(expected)
       })
     })
   })

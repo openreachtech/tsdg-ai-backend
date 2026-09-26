@@ -373,7 +373,10 @@ export default class AssetMediaExtractionRunner {
     const fetchedAssetMediaReadings = await this.fetchAssetMediaReadings({
       aiRunId,
       aiAgentModelBinding,
+      fieldSchema,
+      mediaSignature: requestBody[MEDIA_SIGNATURE_FIELD_NAME],
       attachedFiles: preparedAiRunMedia.attachedFiles,
+      readableMediaKeys: preparedAiRunMedia.readableMediaKeys,
       signal,
     })
 
@@ -591,19 +594,23 @@ export default class AssetMediaExtractionRunner {
    * The prompt is composed from the agent's own rows rather than from anything in this file, which
    * is what "held as data" means for the instruction, the role and the tool schema alike.
    *
-   * @param {{
-   *   aiRunId: number
-   *   aiAgentModelBinding: import('../aiAgent/AiAgentModelBindingFinder.js').AiAgentModelBinding
-   *   attachedFiles: Array<Record<string, *>>
-   *   signal: AbortSignal
-   * }} params - Parameters.
+   * **The kept schema, the signature and the photographs that were read travel with the call**, and
+   * none of the three is read by the step itself. They are what a run answered by the keyless
+   * driver is demonstrated from: that driver fills in no findings, so this service supplies them,
+   * deterministically from the media the request names. A run answered by any other driver carries
+   * them and never looks at them.
+   *
+   * @param {FetchAssetMediaReadingsStepParams} params - Parameters.
    * @returns {Promise<*>} The readings, and how many were meant to be taken.
    * @public
    */
   async fetchAssetMediaReadings ({
     aiRunId,
     aiAgentModelBinding,
+    fieldSchema,
+    mediaSignature,
     attachedFiles,
+    readableMediaKeys,
     signal,
   }) {
     const startedAt = this.buildCurrentInstant()
@@ -619,7 +626,10 @@ export default class AssetMediaExtractionRunner {
       aiModelProcessor: aiAgentModelBinding.aiModelProcessor,
       aiAgent: aiAgentModelBinding.aiAgent,
       composedPrompt,
+      fieldSchema,
+      mediaSignature,
       attachedFiles,
+      readableMediaKeys,
       signal,
     })
 
@@ -1138,6 +1148,18 @@ export default class AssetMediaExtractionRunner {
 
 /**
  * @typedef {Partial<AssetMediaExtractionRunnerParams>} AssetMediaExtractionRunnerFactoryParams
+ */
+
+/**
+ * @typedef {{
+ *   aiRunId: number
+ *   aiAgentModelBinding: import('../aiAgent/AiAgentModelBindingFinder.js').AiAgentModelBinding
+ *   fieldSchema: Array<*>
+ *   mediaSignature: *
+ *   attachedFiles: Array<Record<string, *>>
+ *   readableMediaKeys: Array<string>
+ *   signal: AbortSignal
+ * }} FetchAssetMediaReadingsStepParams
  */
 
 /**

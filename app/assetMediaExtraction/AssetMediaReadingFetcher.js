@@ -1,6 +1,13 @@
+import StubAssetFieldReadingSupplier from './StubAssetFieldReadingSupplier.js'
+
 import AiModelCallRecorder from '../aiRun/AiModelCallRecorder.js'
 
+import AI_MODEL_CONSTANT_HASH from '../constants/aiModelConstants.js'
 import ASSET_MEDIA_EXTRACTION_TOOL_CONSTANT_HASH from '../constants/assetMediaExtractionToolConstants.js'
+
+const {
+  AI_MODEL,
+} = AI_MODEL_CONSTANT_HASH
 
 const {
   ASSET_MEDIA_EXTRACTION_TOOL,
@@ -70,6 +77,21 @@ const UNOFFERED_TOOL_MESSAGE = 'refused a run whose agent offers no reading tool
  * readings, and `totalReadingCount` is the number of readings the run set out to take - so a field
  * agreed by the one call that worked is one of three, which is not a majority. A denominator
  * counted off the calls that answered would make a single unchecked answer unanimous.
+ *
+ * **On the keyless driver, what the call answered is stood in for by this service's own fixture.**
+ * `StubAiModelProcessor` asks for the tool by name and fills in no findings, and is right to: a
+ * driver that invented values would let a judgment be recorded that no reading earned. But
+ * specs/1.0.0 §20's fourth use case asks that a whole suggestion screen be demonstrable before any
+ * key exists, so the findings have to come from somewhere - and the somewhere is
+ * `StubAssetFieldReadingSupplier`, which belongs to this service and knows what a field schema is.
+ * The fork is the driver's own `#get:aiModel`, compared against the name of the keyless model row:
+ * nothing here imports that driver, and any other driver's answer is carried through untouched.
+ *
+ * **The stand-in is drawn once per run rather than once per reading, and both halves of that
+ * matter.** Three readings of one request must agree for step 5 to settle anything, and the
+ * substitution happens before the call is recorded rather than after - so `response_body` holds the
+ * findings the run went on to settle, and a trace that disagreed with the answer beside it cannot
+ * arise.
  */
 export default class AssetMediaReadingFetcher {
   /**
@@ -79,14 +101,18 @@ export default class AssetMediaReadingFetcher {
    */
   constructor ({
     aiModelCallRecorder,
+    stubAssetFieldReadingSupplier,
     readingCount,
     toolName,
     actionName,
+    stubAiModelName,
   }) {
     this.aiModelCallRecorder = aiModelCallRecorder
+    this.stubAssetFieldReadingSupplier = stubAssetFieldReadingSupplier
     this.readingCount = readingCount
     this.toolName = toolName
     this.actionName = actionName
+    this.stubAiModelName = stubAiModelName
   }
 
   /**
@@ -100,16 +126,20 @@ export default class AssetMediaReadingFetcher {
    */
   static create ({
     aiModelCallRecorder = this.createAiModelCallRecorder(),
+    stubAssetFieldReadingSupplier = this.createStubAssetFieldReadingSupplier(),
     readingCount = DEFAULT_READING_COUNT,
     toolName = ASSET_MEDIA_EXTRACTION_TOOL.NAME,
     actionName = READ_MEDIA_ACTION_NAME,
+    stubAiModelName = AI_MODEL.STUB.NAME,
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
         aiModelCallRecorder,
+        stubAssetFieldReadingSupplier,
         readingCount,
         toolName,
         actionName,
+        stubAiModelName,
       })
     )
   }
@@ -121,6 +151,15 @@ export default class AssetMediaReadingFetcher {
    */
   static createAiModelCallRecorder () {
     return AiModelCallRecorder.create()
+  }
+
+  /**
+   * Create the supplier a run answered by the keyless driver is demonstrated from.
+   *
+   * @returns {StubAssetFieldReadingSupplier} Supplier.
+   */
+  static createStubAssetFieldReadingSupplier () {
+    return StubAssetFieldReadingSupplier.create()
   }
 
   /**
@@ -159,7 +198,10 @@ export default class AssetMediaReadingFetcher {
     aiModelProcessor,
     aiAgent,
     composedPrompt,
+    fieldSchema,
+    mediaSignature,
     attachedFiles,
+    readableMediaKeys,
     signal,
   }) {
     const forcedToolSchema = this.extractForcedToolSchema({
@@ -172,6 +214,13 @@ export default class AssetMediaReadingFetcher {
 
     const readingIndexes = this.buildReadingIndexes()
 
+    const suppliedFunctionCalls = this.buildSuppliedFunctionCalls({
+      aiModelProcessor,
+      fieldSchema,
+      mediaSignature,
+      readableMediaKeys,
+    })
+
     const readings = await this.fetchReadingsSequentially({
       readingIndexes,
       aiRunId,
@@ -181,6 +230,7 @@ export default class AssetMediaReadingFetcher {
       composedPrompt,
       forcedToolSchema,
       attachedFiles,
+      suppliedFunctionCalls,
       signal,
     })
 
@@ -231,6 +281,68 @@ export default class AssetMediaReadingFetcher {
   }
 
   /**
+   * Build the tool call this service stands in for the driver's, or nothing where it stands in for
+   * none.
+   *
+   * Answered once for the whole run rather than once per reading, because the readings of one run
+   * have to agree for step 5 to settle anything - see the class comment.
+   *
+   * @param {BuildSuppliedFunctionCallsParams} params - Parameters.
+   * @returns {Array<Record<string, *>> | null} The calls, or null when the driver answers for
+   * itself.
+   * @public
+   */
+  buildSuppliedFunctionCalls ({
+    aiModelProcessor,
+    fieldSchema,
+    mediaSignature,
+    readableMediaKeys,
+  }) {
+    if (
+      !this.suppliesFixtureReadings({
+        aiModelProcessor,
+      })
+    ) {
+      return null
+    }
+
+    const fieldReadings = this.stubAssetFieldReadingSupplier.buildFieldReadings({
+      fieldSchema,
+      mediaSignature,
+      readableMediaKeys,
+    })
+
+    return [
+      {
+        name: this.toolName,
+        arguments: {
+          [READINGS_ARGUMENT_NAME]: fieldReadings,
+        },
+      },
+    ]
+  }
+
+  /**
+   * Check whether this run's driver is the keyless one, whose findings this service supplies.
+   *
+   * Asked of the name the driver answers for itself - `BaseAiModelProcessor#get:aiModel`, the one
+   * member every driver in the set declares - rather than of the class it is an instance of. A
+   * comparison against the class would make this feature import a driver, and would answer wrongly
+   * for a subclass of it; a comparison against the name is the same question the catalog asks.
+   *
+   * @param {{
+   *   aiModelProcessor: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether the findings are this service's to supply.
+   * @public
+   */
+  suppliesFixtureReadings ({
+    aiModelProcessor,
+  }) {
+    return aiModelProcessor?.aiModel === this.stubAiModelName
+  }
+
+  /**
    * Take the readings one at a time, stopping where the run is told its time is up.
    *
    * Through a `reduce` rather than a loop, and sequentially rather than at once: three calls made
@@ -250,6 +362,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    suppliedFunctionCalls,
     signal,
   }) {
     return readingIndexes.reduce(
@@ -266,6 +379,7 @@ export default class AssetMediaReadingFetcher {
           composedPrompt,
           forcedToolSchema,
           attachedFiles,
+          suppliedFunctionCalls,
           signal,
         })
       },
@@ -300,6 +414,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    suppliedFunctionCalls,
     signal,
   }) {
     if (signal.aborted) {
@@ -315,6 +430,7 @@ export default class AssetMediaReadingFetcher {
       composedPrompt,
       forcedToolSchema,
       attachedFiles,
+      suppliedFunctionCalls,
     })
 
     if (fieldReadings === null) {
@@ -346,6 +462,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    suppliedFunctionCalls,
   }) {
     const calledAt = this.buildCurrentInstant()
 
@@ -359,8 +476,9 @@ export default class AssetMediaReadingFetcher {
 
     const respondedAt = this.buildCurrentInstant()
 
-    const functionCalls = this.extractFunctionCalls({
+    const functionCalls = this.buildReadingFunctionCalls({
       aiModelResponse,
+      suppliedFunctionCalls,
     })
 
     await this.saveAiModelCall({
@@ -432,6 +550,43 @@ export default class AssetMediaReadingFetcher {
       isAutoHandleFunctionCall: false,
       extraToolOptions: {},
     })
+  }
+
+  /**
+   * Build the tool calls one reading is read out of, and recorded as.
+   *
+   * Where this service supplies the findings, the supplied call stands in for the driver's whole
+   * answer rather than being merged into it: the keyless driver asks for the tool by name and fills
+   * in nothing, so there is nothing of its own to keep.
+   *
+   * A call the driver failed is left as it came back. A reading that never reached a model has no
+   * findings to stand in for, and standing in anyway would turn a recorded provider failure into a
+   * field a client is offered.
+   *
+   * @param {{
+   *   aiModelResponse: *
+   *   suppliedFunctionCalls: Array<Record<string, *>> | null
+   * }} params - Parameters.
+   * @returns {Array<Record<string, *>>} The calls.
+   * @public
+   */
+  buildReadingFunctionCalls ({
+    aiModelResponse,
+    suppliedFunctionCalls,
+  }) {
+    const functionCalls = this.extractFunctionCalls({
+      aiModelResponse,
+    })
+
+    if (suppliedFunctionCalls === null) {
+      return functionCalls
+    }
+
+    if (aiModelResponse.hasError()) {
+      return functionCalls
+    }
+
+    return suppliedFunctionCalls
   }
 
   /**
@@ -551,9 +706,11 @@ export default class AssetMediaReadingFetcher {
 /**
  * @typedef {{
  *   aiModelCallRecorder: AiModelCallRecorder
+ *   stubAssetFieldReadingSupplier: StubAssetFieldReadingSupplier
  *   readingCount: number
  *   toolName: string
  *   actionName: string
+ *   stubAiModelName: string
  * }} AssetMediaReadingFetcherParams
  */
 
@@ -568,9 +725,21 @@ export default class AssetMediaReadingFetcher {
  *   aiModelProcessor: *
  *   aiAgent: *
  *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
+ *   fieldSchema: Array<*>
+ *   mediaSignature: *
  *   attachedFiles: Array<Record<string, *>>
+ *   readableMediaKeys: Array<string>
  *   signal: AbortSignal
  * }} FetchAssetMediaReadingsParams
+ */
+
+/**
+ * @typedef {{
+ *   aiModelProcessor: *
+ *   fieldSchema: Array<*>
+ *   mediaSignature: *
+ *   readableMediaKeys: Array<string>
+ * }} BuildSuppliedFunctionCallsParams
  */
 
 /**
@@ -583,8 +752,25 @@ export default class AssetMediaReadingFetcher {
  *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
  *   forcedToolSchema: Record<string, *>
  *   attachedFiles: Array<Record<string, *>>
+ *   suppliedFunctionCalls: Array<Record<string, *>> | null
  *   signal: AbortSignal
  * }} FetchReadingsSequentiallyParams
+ */
+
+/**
+ * @typedef {{
+ *   accumulatedReadings: Array<Array<*>>
+ *   readingIndex: number
+ *   aiRunId: number
+ *   aiModelId: number
+ *   aiModelProcessor: *
+ *   aiAgent: *
+ *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
+ *   forcedToolSchema: Record<string, *>
+ *   attachedFiles: Array<Record<string, *>>
+ *   suppliedFunctionCalls: Array<Record<string, *>> | null
+ *   signal: AbortSignal
+ * }} AppendOneReadingParams
  */
 
 /**
@@ -597,6 +783,7 @@ export default class AssetMediaReadingFetcher {
  *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
  *   forcedToolSchema: Record<string, *>
  *   attachedFiles: Array<Record<string, *>>
+ *   suppliedFunctionCalls: Array<Record<string, *>> | null
  * }} FetchOneReadingParams
  */
 

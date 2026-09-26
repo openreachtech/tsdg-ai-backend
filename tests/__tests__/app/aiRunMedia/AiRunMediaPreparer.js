@@ -278,6 +278,11 @@ describe('AiRunMediaPreparer', () => {
      * rule it feeds is "a photo that was not among those sent", and a photograph the caller sent
      * and this service failed to read is still one the caller sent. A case here carries a medium
      * that came back unreadable, so a version reading the fetched media instead would drop it.
+     *
+     * `readableMediaKeys` is the opposite reading of the same two sources, and the cases pull them
+     * apart in both directions a medium can leave the readable set: the first has one that came
+     * back unreadable, and the third has one that was never handled at all. A version answering it
+     * off the descriptors would name a photograph nobody opened.
      */
     const cases = [
       {
@@ -290,6 +295,12 @@ describe('AiRunMediaPreparer', () => {
             },
           ],
           collectedAiRunMedia: {
+            readableMedia: [
+              {
+                aiRunMediaId: 10630011,
+                mediaKey: 'media-key-10630011',
+              },
+            ],
             unreadableMediaKeys: [
               'media-key-10630012',
             ],
@@ -315,6 +326,9 @@ describe('AiRunMediaPreparer', () => {
             'media-key-10630011',
             'media-key-10630012',
           ],
+          readableMediaKeys: [
+            'media-key-10630011',
+          ],
           unreadableMediaKeys: [
             'media-key-10630012',
           ],
@@ -324,6 +338,7 @@ describe('AiRunMediaPreparer', () => {
         params: {
           attachedFiles: [],
           collectedAiRunMedia: {
+            readableMedia: [],
             unreadableMediaKeys: [],
           },
           mediaDescriptors: [
@@ -336,6 +351,52 @@ describe('AiRunMediaPreparer', () => {
           attachedFiles: [],
           sentMediaKeys: [
             'media-key-10630021',
+          ],
+          readableMediaKeys: [],
+          unreadableMediaKeys: [],
+        },
+      },
+      {
+        params: {
+          attachedFiles: [
+            {
+              id: 10630031,
+              fileUrl: '/workspace/medium-10630031',
+              fileType: 'image/png',
+            },
+          ],
+          collectedAiRunMedia: {
+            readableMedia: [
+              {
+                aiRunMediaId: 10630031,
+                mediaKey: 'media-key-10630031',
+              },
+            ],
+            unreadableMediaKeys: [],
+          },
+          mediaDescriptors: [
+            {
+              mediaKey: 'media-key-10630031',
+            },
+            {
+              mediaKey: 'media-key-10630032',
+            },
+          ],
+        },
+        expected: {
+          attachedFiles: [
+            {
+              id: 10630031,
+              fileUrl: '/workspace/medium-10630031',
+              fileType: 'image/png',
+            },
+          ],
+          sentMediaKeys: [
+            'media-key-10630031',
+            'media-key-10630032',
+          ],
+          readableMediaKeys: [
+            'media-key-10630031',
           ],
           unreadableMediaKeys: [],
         },
