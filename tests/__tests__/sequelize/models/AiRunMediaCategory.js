@@ -51,7 +51,7 @@ describe('AiRunMediaCategory', () => {
         },
         {
           params: {
-            attributeName: 'isActive',
+            attributeName: 'handlingName',
           },
         },
       ]
@@ -106,10 +106,10 @@ describe('AiRunMediaCategory', () => {
         },
         {
           params: {
-            attributeName: 'isActive',
+            attributeName: 'handlingName',
           },
           expected: {
-            type: DataTypes.BOOLEAN,
+            type: DataTypes.STRING(32),
             allowNull: false,
           },
         },

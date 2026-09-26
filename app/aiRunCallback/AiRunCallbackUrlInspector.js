@@ -49,13 +49,14 @@ const DELIVERABLE_URL_PROTOCOLS = [
  * rule the first URL's rule is that `AiRunTerminalCallbackDeliverer` builds both instances from
  * the same `api_clients.callback_url_prefix` — it builds two, one to judge the first URL and one
  * to travel with the request. Build the second from another client's column and both would answer
- * correctly, for the wrong client, with nothing here or in the sender to notice. Two things that caller leans
- * on follow from the comparison being made over the whole normalized `href`, and neither is a
- * rule written here: the scheme is part of what is compared, so no hop can move a callback from
- * `https:` to `http:` or back, and the host is part of it, so no hop can leave the origin the
- * client registered. They are what comparing the normalized text happens to mean — which is why
- * loosening this comparison to anything less than the whole `href` would reopen both at once,
- * with nothing in the sender left to refuse them.
+ * correctly, for the wrong client, with nothing here or in the sender to notice.
+ *
+ * **Two things that caller leans on follow from the comparison being made over the whole
+ * normalized `href`, and neither is a rule written here:** the scheme is part of what is compared,
+ * so no hop can move a callback from `https:` to `http:` or back, and the host is part of it, so
+ * no hop can leave the origin the client registered. They are what comparing the normalized text
+ * happens to mean — which is why loosening this comparison to anything less than the whole `href`
+ * would reopen both at once, with nothing in the sender left to refuse them.
  *
  * **What stays open, stated rather than claimed closed.** A prefix is a URL prefix and not a path
  * boundary, so a registered `https://client.example/cb` matches `https://client.example/cb-other`

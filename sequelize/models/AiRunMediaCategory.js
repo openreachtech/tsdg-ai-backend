@@ -8,9 +8,11 @@ import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
  * AiRunMediaCategory model
  *
  * Master table naming the kinds of file a request may hand over. Image, video and audio all have
- * a row, and only image is handled this version: a request naming one of the other two resolves
- * to a row here and is refused by that name, rather than falling through as a value nobody
- * recognizes. `isActive` is what says which kinds this version handles.
+ * a row, and only image is read this version: a request naming one of the other two resolves to a
+ * row here and is answered by that name, rather than falling through as a value nobody
+ * recognizes. `handlingName` is what says how — it carries one of the three endings
+ * `AI_RUN_MEDIA_HANDLING` declares, so a kind that is refused and a kind that is ignored are two
+ * different rows rather than two readings of one flag.
  *
  * @class AiRunMediaCategory
  * @extends {BaseAppRenchanModel}
@@ -41,8 +43,8 @@ export default class AiRunMediaCategory extends BaseAppRenchanModel {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
-      isActive: {
-        type: DataTypes.BOOLEAN,
+      handlingName: {
+        type: DataTypes.STRING(32),
         allowNull: false,
       },
     }

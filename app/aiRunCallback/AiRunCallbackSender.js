@@ -183,10 +183,12 @@ const mentsuLogger = MentsuLogger.create({
  * retry, and leave a caller's missing argument looking exactly like a client's own redirect.
  *
  * **An exception leaves no response behind either.** Once a response is in hand, every way out of
- * `#sendAiRunCallbackHop()` goes through `#cancelUnreadResponseBody()` — the two refusals, the
+ * `#sendAiRunCallbackHop()` goes through `#cancelUnreadResponseBody()` — the refusals, the
  * response that is answered, the hop that recurses, and an exception raised by anything the hop
- * calls, an inspector of the caller's own among them. The exception travels on unchanged; what
- * does not travel with it is the socket.
+ * calls, an inspector of the caller's own among them. That is a `finally` rather than a list of
+ * branches that each remembered, so "every way out" is what the shape says and not what this
+ * sentence promises on its behalf. The exception travels on unchanged; what does not travel with
+ * it is the socket.
  *
  * **What the line written on a failure carries, and what it does not.** The durable record of an
  * attempt is the row, not the line: the row says an attempt was made and that nothing answered.
@@ -201,19 +203,40 @@ const mentsuLogger = MentsuLogger.create({
  * one: a body read would be a client's payload held in this process for no purpose the record has
  * a column for. Not reading a body and disposing of it are different things, though — a body
  * neither read nor canceled is a connection undici cannot release, one per attempt and one per
- * hop, held for as long as the worker daemon runs, and the size of it is the client's endpoint's
- * to choose. So every response this class answers away from goes through
- * `#abandonCallbackResponse()`, the one hop that continues cancels before it recurses, and
- * `#sendAiRunCallbackHop()` cancels for an exception on its way out. That is disposal and not
- * tidiness: the file descriptor does not come back without it.
+ * hop, and the size of what is left behind is the client's endpoint's to choose.
  *
- * Three describes drive that over loopback sockets and watch the server's connection close — the
- * response a callback was answered with, the `3xx` of a redirect that was refused, and the `3xx`
- * held when deciding the hop raised — so taking the cancel out of any of the three is red rather
- * than green. What still has no guard is a branch added later that *returns* away from a response
- * without going through `#abandonCallbackResponse()`; an exception is covered wherever it is
- * raised, a forgetful return is not, and nothing but this paragraph will say so until somebody
- * writes its describe.
+ * **How long such a connection is held is bounded, and an earlier round of this comment said it
+ * was not.** It said "for as long as the worker daemon runs", and two things end it sooner. The
+ * request's own `AbortSignal.timeout` destroys the connection when it fires, whether or not the
+ * fetch resolved — measured at 1017 ms for a 1000 ms signal — which under
+ * `DEFAULT_REQUEST_TIMEOUT_MILLISECONDS` puts the ceiling at about ten seconds from the start of
+ * the chain, once for the whole chain rather than once per hop. Failing that, the far side's own
+ * keep-alive closes an idle connection — around six seconds against Node's default. So what is
+ * held is a concurrent hold and not a permanent one: every callback in flight keeping its sockets
+ * for the rest of its budget, which at the worker's concurrency is what exhausts a pool, rather
+ * than a descriptor that never comes back. Overstating it is not harmless — the two paths that
+ * bound it are the same two that decide whether a release describe is measuring the cancel or
+ * measuring them, which is what
+ * `tests/__tests__/app/aiRunCallback/AiRunCallbackSender.js` shuts out by pinning the server's
+ * keep-alive and asserting the signal has not fired.
+ *
+ * So every response this class answers away from goes through `#abandonCallbackResponse()`, the
+ * one hop that continues cancels before it recurses, and `#sendAiRunCallbackHop()` disposes in a
+ * `finally` however the hop came out. That is disposal and not tidiness: the file descriptor does
+ * not come back inside the attempt without it.
+ *
+ * Four describes drive that over loopback sockets and watch the server's connection close — the
+ * response a callback was answered with, the `3xx` of a redirect that was refused, the `3xx` held
+ * when deciding the hop raised, and the `3xx` of a redirect that was *followed*, which is the
+ * branch a client's own endpoint exercises on every hop it moves a callback with. The fourth was
+ * missing for a round, and what it cost was measured: with that branch's cancel removed, a
+ * three-request chain left three sockets open 1500 ms later, while every assertion the follow
+ * describe made stayed green.
+ *
+ * What used to have no guard at all was a branch added later that *returns* away from a response
+ * without going through `#abandonCallbackResponse()`. The `finally` in `#sendAiRunCallbackHop()`
+ * is what closed that, and closed it by construction rather than by a paragraph: a branch added
+ * there cannot return past the disposal, only sooner or later than it.
  *
  * **What stays open, stated rather than claimed closed.** The first URL is the caller's to have
  * asked about, not this class's: `AiRunTerminalCallbackDeliverer` asks the inspector before it
@@ -425,32 +448,49 @@ export default class AiRunCallbackSender {
   /**
    * Post one hop of a callback, and answer either what it came back with or what the next hop did.
    *
-   * **This method owns the response, and nothing leaves it holding one.** What it does itself is
-   * post the hop and dispose of what came back; what the hop *comes to* is
-   * `#answerAiRunCallbackHop()`'s, called inside a `try` so that the disposal is reached by an
-   * exception as well as by a return. That is the fourth way out, and it was found missing: an
-   * inspector the caller never passed raised a `TypeError` from inside the walk, past the
-   * disposal, leaving a `3xx` whose body was never canceled and whose socket was still open
-   * 1.5 seconds later. `#sendAiRunCallback()` now refuses that call before anything is posted, so
-   * this `try` is what covers whatever raises next — an inspector of the caller's own that throws,
-   * or a branch added here later.
+   * **This method owns the response, and no way out of it leaves one holding a socket.** What it
+   * does itself is post the hop; what the hop *comes to* is `#answerAiRunCallbackHop()`'s, called
+   * inside a `try` whose `finally` lets the response go however that call ended — returned,
+   * raised, or returned out of the frames of recursion below it. The disposal is reached because
+   * of where it sits and not because a branch remembered it, which is the difference between a
+   * claim this class makes about itself and one its shape enforces.
    *
-   * **The exception is disposed of and re-raised, never swallowed.** Turning it into an outcome
-   * would file a caller's or a client's fault as an ordinary `3xx` attempt, which is the one thing
-   * a refusal must not be mistaken for.
+   * **It was a `catch` before, and a `catch` covers one way out.** That one was found missing
+   * first: an inspector the caller never passed raised a `TypeError` from inside the walk, past
+   * the disposal, leaving a `3xx` whose body was never canceled and whose socket was still open
+   * 1.5 seconds later. The `catch` answered it and left every *returning* branch resting on
+   * `#answerAiRunCallbackHop()` disposing at each of them by hand — four places to remember, and
+   * a fifth for whoever adds the next branch. The audit round after it measured the one that
+   * recursion takes: with that branch's own cancel removed, a three-request chain left three
+   * sockets open 1500 ms later while every assertion the describe that follows a redirect made
+   * stayed green. A `finally` is what makes the forgetting impossible rather than merely caught.
+   *
+   * **Disposing twice costs nothing, which is what makes the `finally` safe, and it was measured
+   * rather than reasoned.** Over loopback against a quarter-megabyte body: a second
+   * `#cancelUnreadResponseBody()` on an already-canceled body resolves in 0 ms without so much as
+   * rejecting, `bodyUsed` reads true afterwards and `response.status` is still readable — and
+   * `#abandonCallbackResponse()` reads the status *before* it cancels, so the outcome it answered
+   * is already built by the time this `finally` runs. Measured end to end over a three-request
+   * chain, the two forms are indistinguishable: the same outcome, the same request count, and no
+   * socket left open either way.
+   *
+   * **The exception travels on unchanged, never swallowed.** A `finally` re-raises of its own
+   * accord; turning the raise into an outcome would file a caller's or a client's fault as an
+   * ordinary `3xx` attempt, which is the one thing a refusal must not be mistaken for.
    *
    * It recurses rather than loops because there is no loop form this repository permits, and
    * because the hop count is what the recursion carries — three frames at most.
    *
-   * `return await` inside the `try` is load-bearing rather than noise, the same way it is in
-   * `BaseAiRunJobWorker#executeJob()`: a bare `return` hands the promise back before it settles,
-   * so the `catch` would never see the rejection and the response would be left holding its
-   * socket — which is the whole of what this `try` is here for.
+   * `return await` inside the `try` now decides *when* the disposal runs rather than whether.
+   * Measured: with it, the response is let go after the hop below has settled; with a bare
+   * `return` the `finally` runs while that hop is still in flight. Both dispose, so this one is
+   * ordering — unlike `BaseAiRunJobWorker#executeJob()`, whose `catch` a bare `return` really
+   * would carry a rejection past.
    *
    * @param {SendAiRunCallbackHopParams} params - Parameters.
    * @returns {Promise<AiRunCallbackSendOutcome>} The status the chain ended on, or null when the
    * request never completed.
-   * @throws {*} Whatever deciding the hop raised, with the response disposed of on the way out.
+   * @throws {*} Whatever deciding the hop raised, with the response let go on the way out.
    * @public
    */
   async sendAiRunCallbackHop ({
@@ -479,12 +519,10 @@ export default class AiRunCallbackSender {
         aiRunCallbackUrlInspector,
         remainingRedirectCount,
       })
-    } catch (hopDecisionFailure) {
+    } finally {
       await this.cancelUnreadResponseBody({
         response,
       })
-
-      throw hopDecisionFailure
     }
   }
 
@@ -494,17 +532,28 @@ export default class AiRunCallbackSender {
    *
    * **This is where the client's prefix is asked of a hop that is not the first.** The check runs
    * before the hop is posted, so a URL outside the prefix is never sent the body: no connection,
-   * no signature, nothing in anybody's access log. Two things decided here end the chain with the
-   * `3xx` they were decided on: a hop the inspector refuses, and a chain that has used up its
-   * hops. A third ends it without this method deciding anything — a request that failed, which
+   * no signature, nothing in anybody's access log. **Three** things decided here end the chain
+   * with the `3xx` they were decided on: a `3xx` naming nowhere to go — a `location` absent, blank
+   * or resolving to no URL, all of which `#extractRedirectedUrl()` answers null for — a chain that
+   * has used up its hops, and a hop the inspector refuses. The blank-`location` one arrived with
+   * its own guard and the sentence here went on saying two for a round afterwards, which is why
+   * the number is spelled out rather than left to be counted off the branches: the first of the
+   * three shares its branch with the ordinary non-redirect answer, so branches and endings are not
+   * the same count. A fourth ending belongs to nothing decided here — a request that failed, which
    * `#sendSingleAiRunCallbackRequest()` has already answered null for, one frame above.
    *
-   * **Every branch leaving a response behind disposes of its body.** The two refusals and the
-   * response that is answered all go through `#abandonCallbackResponse()`, and the one branch that
-   * recurses cancels before it does. A body neither read nor canceled is a connection undici
-   * cannot release — see the class comment, which says why that is disposal rather than tidiness.
-   * A branch added here that raises instead of returning is covered too, by the caller's `try`,
-   * which is the one thing this method does not have to remember.
+   * **Whether a response is disposed of is no longer this method's to remember; when it happens
+   * is.** The caller's `finally` lets every response go whatever this method does with it, so a
+   * branch added here that forgets leaks nothing. What the disposals written here buy is
+   * promptness: `#abandonCallbackResponse()` cancels at the moment it reads the status, and the
+   * recursing branch cancels before it posts the next hop rather than after the whole chain has
+   * settled. Measured over a three-request chain with the `finally` in place: with that cancel,
+   * the earlier sockets went while the chain was still running — 7 ms and 5 ms before it settled;
+   * with it removed, not one of them went before, and every one of them closed 3 ms after. Held
+   * for the rest of a chain entitled to ten seconds is a cost and not a leak, which is what that
+   * one line is worth. Measured with the `finally` removed as well, the sockets were not released
+   * at all inside 1500 ms. A body neither read nor canceled is a connection undici cannot
+   * release — see the class comment, which says why that is disposal rather than tidiness.
    *
    * @param {AnswerAiRunCallbackHopParams} params - Parameters.
    * @returns {Promise<AiRunCallbackSendOutcome>} The status the chain ended on, or null when a
@@ -661,16 +710,31 @@ export default class AiRunCallbackSender {
    * the hop itself, which is inside the client's own prefix, so it passes the inspector and is
    * posted to again. Measured before this guard, over loopback: a `307` carrying `location: ''`
    * or `location: '   '` spent the whole hop count, four POSTs of one signed body to one path,
-   * where the client had named no destination at all. Whitespace is trimmed before the comparison
-   * because `new URL` strips it too — what is refused here is every text the resolution would
-   * have read as empty.
+   * where the client had named no destination at all.
+   *
+   * **The trim refuses a little more than the resolution would have read as empty, and the
+   * difference is stated rather than claimed away.** `String#trim()` strips Unicode whitespace;
+   * `new URL` strips only the ASCII set. Measured against `http://client.example/callbacks/7`: an
+   * ASCII space, tab, newline or form feed trims to empty and resolves to the hop itself, which is
+   * the case this guard exists for — while a non-breaking space, a BOM, an em space or an
+   * ideographic space also trims to empty but would have resolved to a *distinct* path
+   * (`…/callbacks/%C2%A0`, `%EF%BB%BF`, `%E2%80%83`, `%E3%80%80`). Those four are refused here
+   * though the resolution would have followed them somewhere real. The direction is the safe one —
+   * a hop refused is a `3xx` answered, never a body posted — and a client whose `location` is one
+   * invisible character has not named a destination anybody would defend. What must not be read
+   * out of this guard is that trimming and resolving agree: they do not, and a later author who
+   * reaches for `trim()` as a stand-in for "what `new URL` would ignore" will be wrong in the
+   * other direction the first time it matters.
    *
    * **What is *not* refused here is a location naming the same resource again.** A `307` to the
    * path it arrived on, or to a fragment of that path, does name somewhere — the same somewhere —
-   * and is followed until the hop count stops it, measured at four requests under the default of
-   * three. The count is the answer to every cycle, a two-URL one included, and adding a
-   * same-URL rule here would take the only thing the count is tested against and leave the
-   * two-URL cycle to it anyway.
+   * and is followed until the hop count stops it: four requests under the default of three. That
+   * four is the count's own bound and not a measurement of this case. The describe that measured
+   * it drives a server answering a *growing* path, a different URL every hop, and no describe in
+   * this repository drives a `location` naming the path it arrived on or a fragment of it — so a
+   * same-path short-circuit added later would leave that describe green. The count is the answer
+   * to every cycle, a two-URL one included, and adding a same-URL rule here would take the only
+   * thing the count is tested against and leave the two-URL cycle to it anyway.
    *
    * @param {{
    *   response: Response
@@ -779,9 +843,19 @@ export default class AiRunCallbackSender {
    *
    * **This is what returns the socket, and it is not housekeeping.** A body that was neither read
    * to its end nor canceled leaves undici unable to release the connection it came on, so a
-   * response answered away from is a file descriptor and a pool slot held for the life of the
-   * process — one per attempt, and the size of what is left unread is the client's endpoint's own
-   * choice.
+   * response answered away from is a file descriptor and a pool slot held — one per attempt, and
+   * the size of what is left unread is the client's endpoint's own choice.
+   *
+   * Held until when, exactly, is worth saying rather than rounding up to "the life of the
+   * process", which is what this said before and is not true. Two things end it without anybody
+   * canceling: the request's own `AbortSignal.timeout`, measured destroying the connection at
+   * 1017 ms for a 1000 ms signal and so at about ten seconds under this class's default, and the
+   * far side's keep-alive after that. What the cancel buys is therefore the difference between
+   * milliseconds and the rest of the attempt's budget — measured at 5 ms to 28 ms against a
+   * quarter-megabyte body — which at the worker's concurrency is the difference between a pool
+   * that holds and one that does not. Rounding it up to forever would be the more alarming
+   * sentence and the less useful one: it is exactly the overstatement that hid how much a release
+   * describe owes to the timeout rather than to the cancel.
    *
    * A cancel that throws is answered rather than raised, and writes no line. The ways it can are
    * more than one, and they do not all mean the same thing. A body already read, already canceled

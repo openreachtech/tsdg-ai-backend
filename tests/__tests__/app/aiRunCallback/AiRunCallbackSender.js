@@ -20,38 +20,66 @@ import AiRunCallbackUrlInspector from '../../../../app/aiRunCallback/AiRunCallba
  * The URLs of those describes are the development clients' registered prefixes, under the reserved
  * `.invalid` domain — so a request escaping the mock reaches nothing.
  *
- * **Ten describes use a real network instead, over loopback, and say so where they sit.** A
- * stubbed `fetch` follows nothing, so it could not have shown the thing those ten are about: left
- * to itself `fetch` follows up to twenty hops, re-posting this body and its signature to every one
- * of them, and answers with the last. Nor has a stubbed `fetch` a socket, which is the only thing
- * the three release describes can observe. Measured against the options shape this file was
- * written for — the four keys with no `redirect` among them — a `307` naming a second loopback
- * server had the whole body and a valid `x-ort-signature` delivered there, and the `200` that
- * server answered recorded as the attempt's status.
+ * **Eleven describes use a real network instead, over loopback, and say so where they sit.** A
+ * stubbed `fetch` follows nothing, so it could not have shown the thing those eleven are about:
+ * left to itself `fetch` follows up to twenty hops, re-posting this body and its signature to
+ * every one of them, and answers with the last. Nor has a stubbed `fetch` a socket, which is the
+ * only thing the four release describes can observe. Measured against the options shape this file
+ * was written for — the four keys with no `redirect` among them — a `307` naming a second
+ * loopback server had the whole body and a valid `x-ort-signature` delivered there, and the `200`
+ * that server answered recorded as the attempt's status.
  *
- * The ten are: the four that judge a hop — an origin outside the prefix, a path outside it, a
+ * The eleven are: the four that judge a hop — an origin outside the prefix, a path outside it, a
  * scheme that climbs, and one inside the prefix that is followed — the two that bound a chain,
  * no hop allowed and the default three, the one that refuses a `Location` naming nowhere, and
- * the three that watch a connection be released.
+ * the four that watch a connection be released.
  *
  * **The counts in this paragraph are the thing this file has been wrong about before.** A fix
  * added a describe and left the number as it was; the round after it read the number rather than
  * the file. If a describe here is added or taken away, both sentences above change with it.
  *
- * **The three release describes hold on to the `Response` they were handed, and that is not
+ * **The four release describes hold on to the `Response` they were handed, and that is not
  * tidiness.** Undici releases a connection on the cancel this class makes, and also, separately,
  * when the unread `Response` is finalized — which is garbage collection, and lands wherever it
  * lands. Each therefore wraps `fetchClient` around the real `globalThis.fetch` — a pass-through,
  * so the socket, the body and the headers all stay real — purely to keep a reference to every
- * `Response` alive for the length of the test. What is left to release the socket is then the
- * cancel and nothing else. Measured over this shape: released at 5 ms and at 22 ms with the
- * cancel, and not at all inside two seconds with the cancel taken out.
+ * `Response` alive for the length of the test.
  *
- * That last sentence is a claim about undici rather than about this class, and the canary that
- * guards it is not written twice: `tests/__tests__/app/aiRunMedia/MediaFetchClient.js` holds one —
- * a describe that takes the cancel out on purpose and asserts the socket is **not** released.
- * Its red is the signal for these three describes as much as for its own, because both rest on
- * the same property of the same package.
+ * **What holding the `Response` leaves is not the cancel alone, and this file said it was.** It
+ * said "what is left to release the socket is then the cancel and nothing else", and two other
+ * things release it, neither of them this class's:
+ *
+ *   1. the request's own `AbortSignal.timeout`, which destroys the connection when it fires
+ *      whether or not the fetch resolved — measured at 1017 ms for a 1000 ms signal;
+ *   2. the far side's own keep-alive, which closes an idle connection on its own — measured
+ *      beyond the wait at Node's five-second default, and round 3 measured it closing one at
+ *      around twelve seconds on a thirty-second timeout.
+ *
+ * Both sat beyond the wait, so the describes discriminated — for a reason no line of this file
+ * stated and none of them owned. Each is now shut out by something a describe *does* rather than
+ * by something it says. Every release server pins `keepAliveTimeout` to
+ * `SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS`, far above the wait, so the margin is this
+ * file's rather than Node's. The abort signal is captured off the options the pass-through was
+ * handed and asserted **not** to have fired. Measured with the disposal removed: at a 1000 ms
+ * timeout the socket is released at 1017 ms and the captured signal reads `aborted: true`, where
+ * the socket assertion alone would have gone quietly green; at the 10000 ms default it reads
+ * `aborted: false` and nothing is released inside the wait. Lowering a timeout under the wait —
+ * which `DEFAULT_REQUEST_TIMEOUT_MILLISECONDS`' own comment in
+ * `app/aiRunCallback/AiRunCallbackSender.js` argues toward, a shorter limit reaching the next
+ * attempt sooner — is therefore red, and red naming the signal.
+ *
+ * What is left is the cancel's own promptness, asserted only as "inside the wait" and not as a
+ * number: measured at 5 ms, 22 ms and 28 ms across these shapes, and a cancel that took 1900 ms
+ * would still pass. Pinning a millisecond figure would be a timing assertion on a shared build
+ * host, which is the trade made here knowingly.
+ *
+ * That the held `Response` releases nothing of its own inside the wait is a claim about undici
+ * rather than about this class, and the canary that guards it is not written twice:
+ * `tests/__tests__/app/aiRunMedia/MediaFetchClient.js` holds one — a describe that takes the
+ * cancel out on purpose and asserts the socket is **not** released. Its red is the signal for
+ * these four describes as much as for its own, because both rest on the same property of the same
+ * package. The two guards above are that file's too, and were carried across from it one round
+ * later than they should have been.
  *
  * Each describe using a server closes it before it asserts, not after. A failing assertion ends
  * the test body where it stands, so a `close()` written below the assertions is a listening handle
@@ -64,11 +92,15 @@ import AiRunCallbackUrlInspector from '../../../../app/aiRunCallback/AiRunCallba
  * The size is load-bearing. An empty body arrives complete, so undici can release its connection
  * whether anybody cancelled it or not, and a describe built on one would pass against the defect
  * it exists to catch. A quarter of a megabyte does not fit the buffers between here and there, so
- * the connection is only released by the cancel.
+ * the body stays undelivered and the connection stays held — and the cancel is then the only
+ * thing that releases it *inside the wait*, the request's abort signal and the far side's
+ * keep-alive having been shut out by the two measures the head comment sets out. Without that
+ * qualifier the sentence is the one round 3 found false.
  *
- * It is the body of a `3xx` in one of them and of a `200` in the other, because both are a
- * response this class answers away from without reading — and the size of either is the client's
- * endpoint's own choice.
+ * It is the body of a `3xx` in three of the four — the refused hop, the raised one and the
+ * followed one — and the body of the `200`, `503` or `202` that ends a chain in two of them,
+ * because every one of those is a response this class answers away from without reading, and the
+ * size of any of them is the client's endpoint's own choice.
  */
 const LEAKY_RESPONSE_BODY_BYTE_SIZE = 262144
 
@@ -78,8 +110,45 @@ const LEAKY_RESPONSE_BODY_BYTE_SIZE = 262144
  * The wait is bounded rather than open-ended so that a regression fails on the assertion, naming a
  * socket still alive, instead of on a suite timeout naming nothing. With the cancel in place the
  * wait ends in single-figure to low-double-figure milliseconds and this figure is never reached.
+ *
+ * **This figure has to sit below every path that releases the socket without the cancel, and two
+ * of them are foreign to this file.** Neither is undici's own finalizer, which the held `Response`
+ * already keeps out. They are:
+ *
+ *   1. `DEFAULT_REQUEST_TIMEOUT_MILLISECONDS` in `app/aiRunCallback/AiRunCallbackSender.js`, which
+ *      becomes the request's `AbortSignal.timeout` and destroys the connection to the millisecond
+ *      when it fires — measured at 1017 ms for a 1000 ms signal, whether or not the fetch
+ *      resolved;
+ *   2. `server.keepAliveTimeout`, Node's own, five seconds by default.
+ *
+ * So the coupling is:
+ *
+ *   2000 ms  <  SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+ *   2000 ms  <  every release describe's own request timeout
+ *
+ * The first is pinned by the constant below rather than left to Node. The second cannot be pinned
+ * here — it is a `.create()` parameter, and the sender's default is ten seconds — so it is
+ * asserted instead: each release describe captures the signal off the options its pass-through was
+ * handed and asserts it has not fired. Lowering a timeout under this wait therefore turns that
+ * assertion red rather than turning a describe into one that passes with the disposal removed.
+ *
+ * The same two paths, the same two measures and the same reasoning live in
+ * `tests/__tests__/app/aiRunMedia/MediaFetchClient.js`, which found them one round earlier. A
+ * change to either of these figures belongs in both files.
  */
 const SOCKET_RELEASE_WAIT_MILLISECONDS = 2000
+
+/*
+ * How long the servers in those describes hold an idle connection open before closing it on their
+ * own.
+ *
+ * Node's default `server.keepAliveTimeout` is five seconds, and a held, uncancelled `Response` has
+ * its socket closed by the server once that elapses — a release the describes above do not own and
+ * would have credited to the cancel had the wait ever reached it. Pinned to a minute, the path is
+ * switched off rather than merely parked beyond the wait. The figure is deliberately far larger
+ * than the wait: it is not a margin to be tuned.
+ */
+const SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS = 60000
 
 /*
  * What a loopback server answers a request its case did not plan for.
@@ -2275,6 +2344,11 @@ describe('AiRunCallbackSender', () => {
      * count is the only thing that can end it. Measured: four requests, the first plus the three
      * hops allowed, and the outcome the `308` the fourth answered.
      *
+     * **A growing path is the one shape this measures, and the four should not be lent to
+     * another.** A `Location` naming the path it arrived on, or a fragment of one, is bounded by
+     * the same count by argument and by no describe in this file — the comment below and the class
+     * comment both used to cite this describe's four for it.
+     *
      * **Four requests is also the ceiling on what one attempt costs.** Each of them re-posts the
      * whole signed body, so a run's seven attempts are twenty-eight posts of one result at worst.
      * That is the amplification this count bounds, and this describe is where the bound is a
@@ -2368,7 +2442,15 @@ describe('AiRunCallbackSender', () => {
      *
      * What this does **not** cover is a `Location` that names the same path outright, or a
      * fragment of it: those name somewhere, they are followed, and the hop count is the only thing
-     * that ends them — measured at four requests, which is the describe above.
+     * that ends them — four requests under the default of three.
+     *
+     * **That four is the count's own bound and not a measurement of this case**, which is what
+     * this paragraph said before and what the class comment said with it. The describe above
+     * measures four against a server answering a *growing* path, a different URL every hop; no
+     * describe in this file drives a `Location` naming the path it arrived on or a fragment of
+     * one. So a same-path short-circuit added to `#extractRedirectedUrl()` later would change this
+     * case and leave that describe green, with a comment claiming it had measured the case it
+     * changed.
      */
     describe('should not follow a redirect whose location names nowhere', () => {
       const cases = [
@@ -2444,10 +2526,17 @@ describe('AiRunCallbackSender', () => {
      * Nothing here reads the response body, and that is right — section 12 says a delivery record
      * says whether the callback arrived and not what came back. What the audit found is that not
      * reading a body and disposing of it are different things: a body neither read nor cancelled
-     * leaves undici unable to release the connection, one per attempt, held for as long as the
-     * worker daemon runs, and the size of what is left behind is the client's endpoint's choice.
-     * Measured before the fix with twelve sequential posts against a two-megabyte answer: eleven
-     * sockets still open after 1.5 seconds, against none with the body cancelled.
+     * leaves undici unable to release the connection, one per attempt, and the size of what is
+     * left behind is the client's endpoint's choice. Measured before the fix with twelve
+     * sequential posts against a two-megabyte answer: eleven sockets still open after 1.5 seconds,
+     * against none with the body cancelled.
+     *
+     * How long one is held was written here as "for as long as the worker daemon runs", and that
+     * is the overstatement round 3 named: the request's own abort signal ends it when it fires,
+     * and the far side's keep-alive after that, so it is a concurrent hold for the rest of an
+     * attempt's budget rather than a descriptor that never comes back. Those two are also the
+     * reason this describe needs the keep-alive pinned and the signal asserted — the same fact
+     * from the other side, which is why leaving the overstatement standing hid the gap.
      *
      * The network is real because a socket is the only thing that can show it, and the answer
      * carries a quarter of a megabyte because an empty body arrives complete and leaks nothing.
@@ -2476,6 +2565,7 @@ describe('AiRunCallbackSender', () => {
       }) => {
         const releasedSockets = []
         const fetchedResponses = []
+        const requestSignals = []
 
         const answeringServer = http.createServer((request, response) => {
           response.writeHead(mockResponseStatus, {
@@ -2483,6 +2573,8 @@ describe('AiRunCallbackSender', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61))
         })
+
+        answeringServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         answeringServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -2503,6 +2595,8 @@ describe('AiRunCallbackSender', () => {
 
         jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, requestOptions) => {
+            requestSignals.push(requestOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, requestOptions)
 
             fetchedResponses.push(response)
@@ -2540,6 +2634,8 @@ describe('AiRunCallbackSender', () => {
           .toEqual(expected)
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2583,6 +2679,7 @@ describe('AiRunCallbackSender', () => {
       }) => {
         const releasedSockets = []
         const fetchedResponses = []
+        const requestSignals = []
         const secondServiceRequests = []
 
         const secondServiceServer = http.createServer((request, response) => {
@@ -2591,6 +2688,8 @@ describe('AiRunCallbackSender', () => {
           response.writeHead(200)
           response.end('taken')
         })
+
+        secondServiceServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         secondServiceServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -2606,6 +2705,8 @@ describe('AiRunCallbackSender', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61))
         })
+
+        redirectingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         redirectingServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -2626,6 +2727,8 @@ describe('AiRunCallbackSender', () => {
 
         jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, requestOptions) => {
+            requestSignals.push(requestOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, requestOptions)
 
             fetchedResponses.push(response)
@@ -2667,6 +2770,8 @@ describe('AiRunCallbackSender', () => {
           .toHaveLength(1)
         expect(secondServiceRequests)
           .toHaveLength(0)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2689,9 +2794,11 @@ describe('AiRunCallbackSender', () => {
      * The missing argument itself is refused earlier now, before anything is posted, so what this
      * describe drives is what is left: an inspector the caller did hand over, which raises when it
      * is asked. That is the general case — anything raised while a response is in hand — and the
-     * `try` in `#sendAiRunCallbackHop()` is what it is held by. Take that `try` out and the
-     * exception still travels, which is why the released socket rather than the exception is the
-     * assertion that discriminates.
+     * `finally` in `#sendAiRunCallbackHop()` is what it is held by. That was a `catch` when this
+     * describe was written, and the round that turned it into a `finally` changed nothing here:
+     * either shape disposes on the way out of a raise, and neither stops the exception. Take it
+     * out and the exception still travels, which is why the released socket rather than the
+     * exception is the assertion that discriminates.
      *
      * **The exception is re-raised, not turned into an outcome.** An inspector that raises is a
      * fault of the caller's or of its own; answering it as a `3xx` would file it as the client's
@@ -2719,6 +2826,7 @@ describe('AiRunCallbackSender', () => {
       }) => {
         const releasedSockets = []
         const fetchedResponses = []
+        const requestSignals = []
 
         const redirectingServer = http.createServer((request, response) => {
           response.writeHead(307, {
@@ -2727,6 +2835,8 @@ describe('AiRunCallbackSender', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61))
         })
+
+        redirectingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         redirectingServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -2747,6 +2857,8 @@ describe('AiRunCallbackSender', () => {
 
         jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, requestOptions) => {
+            requestSignals.push(requestOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, requestOptions)
 
             fetchedResponses.push(response)
@@ -2787,6 +2899,165 @@ describe('AiRunCallbackSender', () => {
           .toHaveProperty('message', expected)
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#sendAiRunCallback()', () => {
+    /*
+     * The fourth release, on the branch that *follows* a hop — and the one a client's own endpoint
+     * reaches most often.
+     *
+     * The three above take the answered branch, the refused branch and the raised branch. The
+     * recursion branch was taken by two describes and watched by neither, which left the one case
+     * the hand-written redirect follow exists to serve with nothing looking at its socket: a
+     * client answering `308` to the same path with a trailing slash, or moving a callback behind a
+     * gateway of its own, runs this branch on every hop.
+     *
+     * Measured with that branch's own cancel removed and everything else identical, over a chain
+     * of three requests: the same `202` outcome, the same three requests, and three sockets still
+     * open 1500 ms later against none with it in place — while every assertion the follow describe
+     * makes was identical across both runs. Eight sequential attempts leaked nine sockets. In this
+     * describe's own two-request shape: the first socket released at 5 ms and at 28 ms with the
+     * disposal, and not at all inside the 2000 ms waited for without it.
+     *
+     * **What it pins is that the followed branch disposes, not which line does the disposing.**
+     * `#sendAiRunCallbackHop()` now lets the response go in a `finally`, so removing the cancel
+     * that runs before the recursion no longer leaks: measured, the socket is then released 7 ms
+     * later, when the `finally` of the frame that owns it runs — after the whole chain has
+     * settled rather than before the next hop is posted. That is a cost paid inside one
+     * ten-second budget, not a descriptor left behind, so it is green here and said in the class
+     * comment instead. Take the disposal off this branch *and* out of the `finally`, and this
+     * describe is red.
+     *
+     * The two requests asserted are what say the branch was really taken: a chain that stopped at
+     * the `3xx` would release the same socket and prove nothing about the hop that follows one.
+     */
+    describe('should release the connection a followed redirect arrived on', () => {
+      const cases = [
+        {
+          mockRedirectStatus: 307,
+          expected: {
+            httpStatusCode: 202,
+          },
+        },
+        {
+          mockRedirectStatus: 308,
+          expected: {
+            httpStatusCode: 202,
+          },
+        },
+      ]
+
+      test.each(cases)('mockRedirectStatus: $mockRedirectStatus', async ({
+        mockRedirectStatus,
+        expected,
+      }) => {
+        const releasedSockets = []
+        const fetchedResponses = []
+        const requestSignals = []
+
+        const plannedAnswers = [
+          {
+            status: mockRedirectStatus,
+            headers: {
+              location: '/callbacks/10010004/moved',
+              'content-length': String(LEAKY_RESPONSE_BODY_BYTE_SIZE),
+            },
+            body: Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61),
+          },
+          {
+            status: 202,
+            headers: {
+              'content-length': String(LEAKY_RESPONSE_BODY_BYTE_SIZE),
+            },
+            body: Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x62),
+          },
+        ]
+
+        const movingServer = http.createServer((request, response) => {
+          /*
+           * The same shifted-answer shape the follow describe above uses: a request beyond the
+           * planned list is answered 599 rather than raising inside the handler, and no
+           * conditional is written to do it.
+           */
+          const answer = {
+            ...UNEXPECTED_REQUEST_ANSWER,
+            ...plannedAnswers.shift(),
+          }
+
+          response.writeHead(answer.status, answer.headers)
+          response.end(answer.body)
+        })
+
+        movingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+
+        movingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const followedSocketReleased = new Promise(resolve => {
+          movingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          movingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, requestOptions) => {
+            requestSignals.push(requestOptions.signal)
+
+            const response = await globalThis.fetch(requestedUrl, requestOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
+        const callbackUrlPrefix = `http://127.0.0.1:${movingServer.address().port}/callbacks/`
+
+        const sender = AiRunCallbackSender.create()
+
+        const actual = await sender.sendAiRunCallback({
+          callbackUrl: `${callbackUrlPrefix}10010004`,
+          headerHash: {
+            'x-ort-run-key': 'run-key-10010004',
+          },
+          rawBody: '{"runKey":"run-key-10010004"}',
+          runKey: 'run-key-10010004',
+          aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+            callbackUrlPrefix,
+          }),
+        })
+
+        await Promise.race([
+          followedSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        movingServer.closeAllConnections()
+        movingServer.close()
+
+        expect(actual)
+          .toEqual(expected)
+        expect(fetchedResponses)
+          .toHaveLength(2)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })

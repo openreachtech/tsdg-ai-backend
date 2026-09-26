@@ -7,7 +7,7 @@ declare global {
       name: string
       displayName: string
       displayOrder: number
-      isActive: boolean
+      handlingName: string
     }
   }
 }

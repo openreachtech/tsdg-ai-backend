@@ -14,10 +14,12 @@ const {
  * test would agree with whatever the module happened to hold.
  *
  * Video and audio are asserted alongside image on purpose. They are the kinds this version does
- * not handle, and they exist so that a request naming one resolves to a row and is refused by that
+ * not read, and they exist so that a request naming one resolves to a row and is answered by that
  * name — so a hash that dropped them, and a reader that only ever saw images, would both look
- * correct until a caller sent a clip. `IS_ACTIVE` is what separates the kind this version handles
- * from the two it only recognizes, which is why every case pins it.
+ * correct until a caller sent a clip. `HANDLING_NAME` is what separates all three, which is why
+ * every case pins it: the two kinds this version does not read end differently from each other,
+ * video refused by name and audio ignored, and a hash carrying one word for both would make them
+ * the same medium to everything downstream.
  */
 
 describe('aiRunMediaCategoryConstants', () => {
@@ -33,7 +35,7 @@ describe('aiRunMediaCategoryConstants', () => {
             NAME: 'image',
             DISPLAY_NAME: 'Image',
             DISPLAY_ORDER: 10,
-            IS_ACTIVE: true,
+            HANDLING_NAME: 'handle',
           },
         },
         {
@@ -45,7 +47,7 @@ describe('aiRunMediaCategoryConstants', () => {
             NAME: 'video',
             DISPLAY_NAME: 'Video',
             DISPLAY_ORDER: 20,
-            IS_ACTIVE: false,
+            HANDLING_NAME: 'refuse',
           },
         },
         {
@@ -57,7 +59,7 @@ describe('aiRunMediaCategoryConstants', () => {
             NAME: 'audio',
             DISPLAY_NAME: 'Audio',
             DISPLAY_ORDER: 30,
-            IS_ACTIVE: false,
+            HANDLING_NAME: 'ignore',
           },
         },
       ]
@@ -89,21 +91,21 @@ describe('aiRunMediaCategoryConstants', () => {
             NAME: 'image',
             DISPLAY_NAME: 'Image',
             DISPLAY_ORDER: 10,
-            IS_ACTIVE: true,
+            HANDLING_NAME: 'handle',
           },
           VIDEO: {
             ID: 2,
             NAME: 'video',
             DISPLAY_NAME: 'Video',
             DISPLAY_ORDER: 20,
-            IS_ACTIVE: false,
+            HANDLING_NAME: 'refuse',
           },
           AUDIO: {
             ID: 3,
             NAME: 'audio',
             DISPLAY_NAME: 'Audio',
             DISPLAY_ORDER: 30,
-            IS_ACTIVE: false,
+            HANDLING_NAME: 'ignore',
           },
         }
 

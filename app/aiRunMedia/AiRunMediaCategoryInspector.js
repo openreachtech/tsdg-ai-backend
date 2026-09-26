@@ -1,10 +1,15 @@
 import AiRunKeyInspector from '../aiRun/AiRunKeyInspector.js'
 
 import AI_RUN_MEDIA_CATEGORY_CONSTANT_HASH from '../constants/aiRunMediaCategoryConstants.js'
+import AI_RUN_MEDIA_HANDLING_CONSTANT_HASH from '../constants/aiRunMediaHandlingConstants.js'
 
 const {
   AI_RUN_MEDIA_CATEGORY,
 } = AI_RUN_MEDIA_CATEGORY_CONSTANT_HASH
+
+const {
+  AI_RUN_MEDIA_HANDLING,
+} = AI_RUN_MEDIA_HANDLING_CONSTANT_HASH
 
 /*
  * The rows of `ai_run_media_categories`, read from the constants the master seeder seeds from.
@@ -17,14 +22,20 @@ const {
 const DEFAULT_AI_RUN_MEDIA_CATEGORIES = Object.values(AI_RUN_MEDIA_CATEGORY)
 
 /**
- * Answers whether a medium is of a kind this version handles, and what that kind is called.
+ * Answers what this version does with a medium of a given kind, and what that kind is called.
  *
- * **The answer is the flag on the row, never the word `image`.** `ai_run_media_categories` carries
- * `is_active` - true for image, false for video and audio - precisely so that "a kind this version
- * does not handle is refused by name" is a data fact rather than a branch. Turning video on later
- * is then a flag flipped on an existing row, and a fourth kind is a new row; neither is a change to
+ * **The answer is the handling on the row, never the word `image`.** `ai_run_media_categories`
+ * carries `handling_name` - `handle` for image, `refuse` for video, `ignore` for audio - precisely
+ * so that what happens to a kind is a data fact rather than a branch. Turning video on later is
+ * then a value changed on an existing row, and a fourth kind is a new row; neither is a change to
  * this class. A class that compared against the name `image` would have to be edited for both, and
- * the flag would be sitting there saying something nothing read.
+ * the column would be sitting there saying something nothing read.
+ *
+ * **Three endings, because the specification asks for three.** A video URL is refused with
+ * `MEDIA_UNSUPPORTED` "rather than being silently skipped" and audio is ignored, so the two cannot
+ * share one answer - which is what the boolean this column replaced gave them. `#isHandled*()`
+ * answers the one question with a yes or a no; a caller that has to tell the other two apart reads
+ * the handling name itself and dispatches on it, rather than asking a predicate per ending.
  *
  * **Refused by name is the whole point of the other two rows being seeded at all.** A request
  * naming `video` resolves to a row, and the run fails under `MEDIA_UNSUPPORTED` naming the kind -
@@ -91,7 +102,7 @@ export default class AiRunMediaCategoryInspector {
   }
 
   /**
-   * Check whether a medium of this kind is one this version handles.
+   * Check whether a medium of this kind is one this version reads.
    *
    * @param {{
    *   aiRunMediaCategoryId: *
@@ -102,19 +113,38 @@ export default class AiRunMediaCategoryInspector {
   isHandledAiRunMediaCategoryId ({
     aiRunMediaCategoryId,
   }) {
+    const handlingName = this.extractAiRunMediaHandlingNameById({
+      aiRunMediaCategoryId,
+    })
+
+    return handlingName === AI_RUN_MEDIA_HANDLING.HANDLE
+  }
+
+  /**
+   * Extract what this version does with the kind an id names.
+   *
+   * @param {{
+   *   aiRunMediaCategoryId: *
+   * }} params - Parameters.
+   * @returns {string | null} One of the handlings, or null when the id names no kind at all.
+   * @public
+   */
+  extractAiRunMediaHandlingNameById ({
+    aiRunMediaCategoryId,
+  }) {
     const aiRunMediaCategory = this.extractAiRunMediaCategoryById({
       aiRunMediaCategoryId,
     })
 
     if (aiRunMediaCategory === null) {
-      return false
+      return null
     }
 
-    return aiRunMediaCategory.IS_ACTIVE
+    return aiRunMediaCategory.HANDLING_NAME
   }
 
   /**
-   * Check whether a kind a request named is one this version handles.
+   * Check whether a kind a request named is one this version reads.
    *
    * @param {{
    *   mediaCategoryName: *
@@ -125,15 +155,39 @@ export default class AiRunMediaCategoryInspector {
   isHandledMediaCategoryName ({
     mediaCategoryName,
   }) {
+    const handlingName = this.extractAiRunMediaHandlingNameByName({
+      mediaCategoryName,
+    })
+
+    return handlingName === AI_RUN_MEDIA_HANDLING.HANDLE
+  }
+
+  /**
+   * Extract what this version does with the kind a request named.
+   *
+   * A kind that resolves to no row answers null, which is a different thing from a kind that
+   * resolves and is ignored: the first is a name this service does not know, and the second is a
+   * name it knows and drops. Only the caller can tell a refusal apart from a silence, so only the
+   * caller is given both answers.
+   *
+   * @param {{
+   *   mediaCategoryName: *
+   * }} params - Parameters.
+   * @returns {string | null} One of the handlings, or null when the name names no kind at all.
+   * @public
+   */
+  extractAiRunMediaHandlingNameByName ({
+    mediaCategoryName,
+  }) {
     const aiRunMediaCategory = this.extractAiRunMediaCategoryByName({
       mediaCategoryName,
     })
 
     if (aiRunMediaCategory === null) {
-      return false
+      return null
     }
 
-    return aiRunMediaCategory.IS_ACTIVE
+    return aiRunMediaCategory.HANDLING_NAME
   }
 
   /**
@@ -249,6 +303,6 @@ export default class AiRunMediaCategoryInspector {
  *   NAME: string
  *   DISPLAY_NAME: string
  *   DISPLAY_ORDER: number
- *   IS_ACTIVE: boolean
+ *   HANDLING_NAME: string
  * }} AiRunMediaCategoryRecord
  */

@@ -47,11 +47,35 @@ const FETCHABLE_URL_PROTOCOLS = [
 /*
  * How long one fetch may take before it is given up as a failure.
  *
- * The run's own limit is 300 seconds for everything a run does - up to twelve fetches, an upload
- * and three readings - so a single file holding the connection open until the run's clock ran out
- * would fail the run under `TIME_LIMIT_EXCEEDED` and say nothing about which file did it. Thirty
- * seconds is short enough that twelve of them cannot consume the run's budget between them, and
- * long enough for a photo of the size the cap allows.
+ * **What it buys is a named failure in place of an unnamed one.** The run's own limit is 300
+ * seconds for everything a run does - up to twelve fetches, an upload and three readings - so a
+ * host that accepts a connection and then answers nothing would hold the fetch until the run's
+ * clock ran out and fail the run under `TIME_LIMIT_EXCEEDED`, saying nothing about which file did
+ * it. Bounded here, that same host is `MEDIA_FETCH_FAILED` against a medium the caller can name.
+ * That is true of the first stalled file whatever the figure is, and it is the whole of what this
+ * constant is for.
+ *
+ * **What it does not buy is a bound on the run, and an earlier round of this comment claimed it
+ * did.** The arithmetic runs the other way: twelve fetches of thirty seconds is 360 seconds
+ * against a run budget of 300, before the upload and the three readings are counted at all. So a
+ * run of twelve slow-but-not-stalled files still ends under `TIME_LIMIT_EXCEEDED` naming no file,
+ * and `BaseAiRunJobWorker`'s limit is the only thing bounding the run. This one bounds one fetch.
+ *
+ * Thirty seconds is therefore chosen for the single fetch rather than as a twelfth of anything. It
+ * is long enough for a photo of the size the cap allows over a modest link - ten megabytes inside
+ * thirty seconds is about 350 KB/s - and short enough that a host answering nothing is given up
+ * rather than sat on. Tightening it until twelve of them fitted the budget would mean twenty
+ * seconds or less, which refuses an honest slow transfer of a file this service accepts: a worse
+ * failure than the one the tightening would prevent, and one that would arrive as
+ * `MEDIA_FETCH_FAILED` with nothing in it naming the speed.
+ *
+ * Which leaves the rationing to the caller, deliberately. `requestTimeoutMilliseconds` is a
+ * factory parameter, so a caller that knows how many media a run carries and how much of its clock
+ * is left can hand down a tighter bound than this default; and a caller that fetches the twelve
+ * concurrently spends one bound of wall-clock rather than twelve. Neither is assumed here. The
+ * concurrent shape in particular is not free and is not recommended from this file: twelve bodies
+ * of up to ten megabytes each are assembled in memory at once, which is the exhaustion the class
+ * comment's own reasoning about `arrayBuffer()` is written against.
  */
 const DEFAULT_REQUEST_TIMEOUT_MILLISECONDS = 30000
 
@@ -103,6 +127,15 @@ const DEFAULT_MAXIMUM_READ_BYTE_SIZE = AI_RUN_MEDIA_LIMIT.MAXIMUM_BYTE_SIZE
  * average frame of a hundred and sixty bytes. A host serving a photograph sends kilobytes at a
  * time, so this sits roughly an order of magnitude below the chattiest honest one and refuses only
  * the body that is framed to be expensive.
+ *
+ * **What it admits is not free, and the figure is here so that nobody reads the sentence above as
+ * saying it is.** A body of 65535 one-byte frames sits one frame inside the bound and is read
+ * whole: measured, 62 to 78 ms of wall-clock and about 18 MB of heap above a clean baseline, for
+ * 65535 bytes of payload - roughly 290 times the bytes it delivers. The heap figure moves with
+ * when the collector runs and was seen as high as 44 MB across repeats; the wall-clock did not
+ * move. That is the worst case this bound accepts, and it is accepted because it is bounded and
+ * brief - one of these costs a run tens of milliseconds, not its budget. A host framing worse than
+ * that is refused at the frame after.
  */
 const DEFAULT_MAXIMUM_READ_CHUNK_COUNT = 65536
 
@@ -171,6 +204,12 @@ const mentsuLogger = MentsuLogger.create({
  * default. A hop the allow-list refuses, and a chain longer than that, both end the fetch under
  * `MEDIA_FETCH_FAILED`.
  *
+ * One thing is refused before any of that, and `#extractRedirectedUrl()` says why: a `location`
+ * carrying no text is answered as naming nowhere rather than resolved, because resolving it
+ * answers the hop itself and sends the fetch back to the URL it just came from. The `3xx` then
+ * falls to the status refusal like any other unfetchable status, so it adds no eighth branch to
+ * the disposal list below.
+ *
  * Refusing redirects outright would have been the simpler half of the choice and it was not taken.
  * A pre-signed URL fronting a redirector is how object storage ordinarily serves a private object,
  * so `redirect: 'error'` would refuse a deployment doing nothing wrong and would say only
@@ -229,13 +268,22 @@ const mentsuLogger = MentsuLogger.create({
  * that is false. The request carries an `AbortSignal.timeout`, and when it fires it destroys the
  * connection whether or not the fetch resolved - measured at 205 ms, 511 ms and 1012 ms for
  * signals of 200 ms, 500 ms and 1000 ms, and measured destroying a leaked `3xx`'s connection at
- * 1025 ms for a 1000 ms signal. So a leak is bounded by `requestTimeoutMilliseconds` from the
- * start of that request - thirty seconds at the default, and often less, because the host's own
- * keep-alive may close an idle connection first (measured at 6032 ms against a Node server's
- * default). The disposal is still worth its code: twelve media per run, times the number of runs
- * a worker has in flight, times thirty seconds of held descriptors and pool slots, is a real
- * exhaustion window, and the cancel shortens it to milliseconds - 7 to 40 ms measured across the
- * shapes checked this round. What it is not is unbounded.
+ * 1025 ms for a 1000 ms signal. So a leak is bounded by `requestTimeoutMilliseconds` - thirty
+ * seconds at the default, and often less, because the host's own keep-alive may close an idle
+ * connection first (measured at 6032 ms against a Node server's default).
+ *
+ * **The bound runs from the start of the chain, not of the hop that leaked.** The signal is built
+ * once per `#sendFetchRequest()` and the same options object is carried through every hop, which
+ * is what that method's docblock says and what makes the limit the chain's rather than each
+ * hop's. A `3xx` leaked at the second hop is therefore bounded by whatever is left of the one
+ * thirty seconds, not by a fresh thirty of its own. The bound is the conservative reading either
+ * way; an earlier round of this paragraph stated it against the wrong clock, and a reader who
+ * believed that one would have expected a chain of three hops to hold three budgets.
+ *
+ * The disposal is still worth its code: twelve media per run, times the number of runs a worker
+ * has in flight, times thirty seconds of held descriptors and pool slots, is a real exhaustion
+ * window, and the cancel shortens it to milliseconds - 7 to 40 ms measured across the shapes
+ * checked this round. What it is not is unbounded.
  *
  * All seven of those branches have a describe of their own that drives the branch over a loopback
  * socket and watches the server's connection close, so taking the cancel out of any one of them
@@ -327,9 +375,11 @@ const mentsuLogger = MentsuLogger.create({
  * plainly that it has not been made.
  *
  * A disposal that failed is the third of these, and the newest. Both cancel sites swallow a
- * rejecting cancel, and two of the cases that reject leave the socket unreleased, so this class
- * cannot tell a returned connection from a held one and says nothing either way. What bounds it
- * is the abort signal rather than anything here.
+ * rejecting cancel, and at each of them a rejecting cancel can leave the socket unreleased, so
+ * this class cannot tell a returned connection from a held one and says nothing either way. Which
+ * rejections can arise is not the same at the two of them, because they cancel different things -
+ * `#cancelBoundedStreamRead()` sets the enumeration out and says which limb belongs where. What
+ * bounds it is the abort signal rather than anything here.
  *
  * **A refusal writes no line, and what says so is the rule rather than a list.** There are two
  * call sites of `#logFailedMediaFetch()` in this class and both sit inside a `catch`: one in
@@ -798,6 +848,37 @@ export default class MediaFetchClient {
    * resolved against the URL of the hop it arrived on, which is also what makes the host the
    * allow-list is then asked about the host the request would really go to.
    *
+   * **A `location` carrying no text names nowhere, and nowhere is what it is answered as.** A
+   * header that is absent and a header that is empty say the same thing about where the host moved
+   * the object to, and the resolution step does not agree: `new URL('', hopUrl)` answers the hop
+   * itself, which is on the host the list just allowed, so it passes the allow-list and is fetched
+   * again. Measured before this guard, over loopback against a `302`: `location: ''` spent the
+   * whole hop count, four requests for one photo at one path, ending `MEDIA_FETCH_FAILED` where
+   * the host had named no destination at all - and a location of three spaces, and one of a tab,
+   * did the same, because the Headers layer answers all three as `''`.
+   *
+   * **This is the guard the sibling `AiRunCallbackSender` was given in the same commit and this
+   * class was not.** The defect is the same one, arrived at from the same `redirect: 'manual'`
+   * decision, and the two now agree so that a reader of either is not left asking why only one of
+   * them looks.
+   *
+   * The trim is there because a header the Headers layer did not trim - a hand-built `Response` in
+   * a test, a future layer that passes the value through - should be refused too, and the
+   * direction is safe: a location this refuses would have resolved to the hop itself. **What is
+   * not true is that it refuses exactly what the resolution reads as empty**, and the sibling's
+   * equivalent sentence claims it does. `String#trim()` strips Unicode whitespace and `new URL`
+   * strips only ASCII, so a lone non-breaking space is refused here while the resolution would
+   * have read it as a distinct path - measured, a location of U+00A0 alone resolves to a path of
+   * `.../%C2%A0`, while its `trim()` is `''`. That is a hop refused rather than a hop followed,
+   * which is the safe direction, but it is a narrowing and not an equality.
+   *
+   * **What is *not* refused here is a location naming the same object again.** A `302` to the path
+   * it arrived on, or to a fragment of it, does name somewhere - the same somewhere - and is
+   * followed until the hop count stops it, measured at four requests under the default of three
+   * for `location: '#frag'`. The count is the answer to every cycle, a two-URL one included, and a
+   * same-URL rule here would take away the only thing that count is tested against while leaving
+   * the two-URL cycle to it anyway. The sibling took that decision first and for that reason.
+   *
    * @param {{
    *   response: Response
    *   url: string
@@ -819,10 +900,33 @@ export default class MediaFetchClient {
       return null
     }
 
+    if (
+      this.isBlankRedirectLocation({
+        location,
+      })
+    ) {
+      return null
+    }
+
     return this.buildResolvedUrlText({
       location,
       url,
     })
+  }
+
+  /**
+   * Check whether a location names nowhere at all.
+   *
+   * @param {{
+   *   location: string
+   * }} params - Parameters.
+   * @returns {boolean} Whether it names nowhere.
+   * @public
+   */
+  isBlankRedirectLocation ({
+    location,
+  }) {
+    return location.trim() === ''
   }
 
   /**
@@ -1197,17 +1301,26 @@ export default class MediaFetchClient {
    * errored - each a body holding nothing - and used that to call the swallow free. It is not the
    * enumeration. Measured against Node's own `ReadableStream`: an already-canceled stream and one
    * already read to its end both **resolve**; an already-errored one rejects with the error it
-   * stored; a stream **locked by a reader** rejects with `TypeError: Invalid state:
-   * ReadableStream is locked`, and its underlying source's cancel is not called at all; and a
-   * stream that is **readable and still holding bytes** rejects with whatever its underlying
-   * source's own cancel algorithm threw. The last two are not bodies holding nothing, and in
-   * neither is the work known to have been done.
+   * stored; a stream that is **readable and still holding bytes** rejects with whatever its
+   * underlying source's own cancel algorithm threw; and `stream.cancel()` on a stream **locked by
+   * a reader** rejects with `TypeError: Invalid state: ReadableStream is locked` without its
+   * underlying source's cancel being called at all.
    *
-   * So what the swallow gives up is larger than one log line, and is stated plainly here rather
-   * than argued away: a cancel that failed to release the socket is now indistinguishable from one
-   * that succeeded. The outcome is `MEDIA_UNREADABLE` either way, no line is written, and an
-   * operator has no way to see that the connection was not returned - it waits for the request's
-   * abort signal instead, which the class comment bounds at `requestTimeoutMilliseconds`.
+   * **That last limb is not this method's, and a previous round of this comment listed it as
+   * though it were.** This method holds the only reader and cancels through it, and measured,
+   * `reader.cancel()` while holding the lock **resolves** and does call the source's cancel - the
+   * lock is the reader's own. So the limb that cannot arise here is precisely the one where the
+   * source's cancel never ran. It is live at the sibling `#cancelUnreadResponseBody()`, which
+   * cancels the stream rather than a reader of it, and that method's comment is where it belongs.
+   *
+   * What still reaches this call site is the readable-and-holding-bytes limb, whose rejection is a
+   * source cancel that threw - and that one is not a body holding nothing either. So the swallow
+   * gives up more than one log line, and it is stated plainly here rather than argued away: a
+   * cancel that failed to release the socket is still indistinguishable from one that succeeded.
+   * Narrowing the enumeration by one limb narrows the cases, not the cost. The outcome is
+   * `MEDIA_UNREADABLE` either way, no line is written, and an operator has no way to see that the
+   * connection was not returned - it waits for the request's abort signal instead, which the class
+   * comment bounds at `requestTimeoutMilliseconds`.
    *
    * The swallow stays all the same, because the alternative is worse in this exact place. Raising
    * would put the rejection back into `#readResponseBytes()`'s catch, which writes a log line on a

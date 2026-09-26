@@ -134,12 +134,28 @@ const FOREIGN_WORKSPACE_MESSAGE = 'refused a workspace path this process does no
  * platform names no user therefore has the weaker of the two checks, and this says which one it
  * has lost rather than leaving a reader to assume both are kept.
  *
- * The mode numbers are requests, and a platform answers them or it does not. Where user ids exist
- * the mode is both asked for and read back, so a directory granting anything beyond its owner is
- * refused; where they do not, the platform reports the same bits whatever was asked for and
- * neither the request nor a check of it would mean anything, so neither is made. What is
- * load-bearing on every platform is the pair of refusals - an existing path that is not a
- * directory, and an existing file - rather than the bits.
+ * The mode numbers are requests, and how much of one a platform answers differs. Where user ids
+ * exist the mode is both asked for and read back, so a directory granting anything beyond its
+ * owner is refused. Where they do not, the read-back is skipped - and it is skipped because
+ * `#isOwnPrivateDirectory()` answers on `ownUserId === null` before it reaches the bits, not
+ * because the bits would have passed. Measured on Windows, `mkdir` asking `0o700` reads back
+ * `0o666`, as does one asking `0o000`, so the check would refuse every directory this class had
+ * just created if it ran.
+ *
+ * **What does not follow is that the mode argument is inert there, and an earlier round of this
+ * comment said it was.** Measured on the same platform, a file asked for `0o600` reads back
+ * `0o666` and one asked for `0o400` reads back `0o444`: the owner-write bit survives the
+ * translation and becomes the read-only attribute, while the group and other bits are invented.
+ * `0o200` reads back `0o666` and `0o000` reads back `0o444`, which is the same rule seen from the
+ * other side. A write over the `0o400` file is refused with `EPERM`; a write over the `0o600` file
+ * succeeds. So `MEDIUM_FILE_MODE` carries one real bit on such a platform and must stay on
+ * `#writeMediumFile()`: dropping it as decoration would hand the file to the process umask and
+ * change what the read-only attribute says, which is not nothing even where the other six bits
+ * are fiction.
+ *
+ * What is load-bearing on every platform is still the pair of refusals - an existing path that is
+ * not a directory, and an existing file - rather than the bits. The bits are worth what the
+ * platform makes of them, which on Windows is one of them.
  */
 export default class AiRunMediaWorkspace {
   /**

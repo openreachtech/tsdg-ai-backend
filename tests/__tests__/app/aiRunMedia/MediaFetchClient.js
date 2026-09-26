@@ -49,11 +49,13 @@ import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
  *
  * The second and the third are what make a release describe discriminate for a reason that is not
  * this class's, and a comment saying "keep them parked beyond the wait" is the kind of sentence
- * four audit rounds have found stale. So each of the two is shut out by something the test does
- * rather than by something it says. The server's keep-alive is pinned to
+ * four audit rounds have found stale. The two are not shut out the same way, and this says which
+ * is which rather than claiming both. The server's keep-alive is pinned to
  * `SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS`, far above the wait, so the margin is this
- * file's rather than Node's. The abort signal is captured off the options the pass-through was
- * handed and asserted **not** to have fired - so a later author who lowers a describe's
+ * file's rather than Node's - but it is a margin, it is not switched off, and its own comment
+ * carries the measured boundary and says that nothing asserts it. The abort signal is the one
+ * that is shut out by something the test does: it is captured off the options the pass-through
+ * was handed and asserted **not** to have fired - so a later author who lowers a describe's
  * `requestTimeoutMilliseconds` under the wait gets a red assertion naming the signal, where before
  * the describe went quietly green with the disposal removed. Measured: with the cancel sabotaged
  * and the timeout at 1000 ms the socket is released at 1014 ms and the captured signal reads
@@ -108,17 +110,23 @@ const LEAKY_RESPONSE_BODY_BYTE_SIZE = 262144
  * 205 ms, 511 ms and 1012 ms for 200 ms, 500 ms and 1000 ms signals, to the millisecond, whether
  * or not the fetch resolved - and the server's own keep-alive, measured closing an idle connection
  * at 6032 ms against Node's default. A wait above either would mean the describe could not tell
- * the cancel from that path, and that is the whole of the coupling:
+ * the cancel from that path, and the two couplings are not of the same kind:
  *
- *   2000 ms  <  SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
- *   2000 ms  <  every release describe's own `requestTimeoutMilliseconds`
+ *   2000 ms  <  every release describe's own `requestTimeoutMilliseconds`   -- asserted
+ *   the server's keep-alive parked far beyond 2000 ms                       -- not asserted
  *
- * The first of those is pinned by the constant below rather than left to Node. The second cannot
- * be pinned here - it is a `factoryParams` field, and this file already carries describes at 12000
- * and at 1 - so it is asserted instead: each release describe captures the signal off the options
- * its pass-through was handed and asserts it has not fired. Lowering a timeout under this wait
- * therefore turns the assertion red rather than turning the describe into one that passes with the
- * disposal removed.
+ * The first cannot be pinned here - it is a `factoryParams` field, and this file already carries
+ * describes at 12000 and at 1 - so it is asserted instead: each release describe captures the
+ * signal off the options its pass-through was handed and asserts it has not fired. Lowering a
+ * timeout under this wait therefore turns the assertion red rather than turning the describe into
+ * one that passes with the disposal removed.
+ *
+ * The second is written as a parking rather than as an inequality on purpose, and
+ * `SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS` carries the measurements. `2000 ms < pin` is not
+ * the condition: measured, a pin of 2000 releases nothing and a pin of 900 releases inside the
+ * wait, so the boundary is undici's own and sits between 900 ms and 1000 ms. Asserting the
+ * inequality would therefore go red where the experiment is still sound, which is why nothing
+ * asserts it and why this line says so instead of implying it is covered.
  *
  * **Two margins above it, one enforced and one not.** Jest's per-test limit was its 5000 ms
  * default against a body that always spends this 2000 ms, leaving roughly 3000 ms of head-room -
@@ -138,9 +146,27 @@ const SOCKET_RELEASE_WAIT_MILLISECONDS = 2000
  * Node's default `server.keepAliveTimeout` is five seconds, and measured against it a held,
  * uncancelled `Response` had its socket closed by the server at 6032 ms - a release the describes
  * above do not own and would have credited to the cancel had the wait ever reached it. Pinned to
- * a minute, nothing was released inside a 9000 ms wait, so the path is out of the experiment
- * rather than merely parked beyond it. The figure is deliberately far larger than the wait: it is
- * not a margin to be tuned, it is a path being switched off.
+ * a minute, nothing was released inside a 9000 ms wait.
+ *
+ * **It is a parking and not a switching-off, which an earlier round of this comment claimed it
+ * was.** There is no setting that takes the path out of the experiment. Measured, holding an
+ * unread `Response` and waiting 9000 ms: at a pin of 60000 nothing was released; at 5000 the
+ * socket went at 3011 ms; and at 0 - the value Node documents as disabling the keep-alive - it
+ * went at 4026 and 4038 ms across two runs. Zeroing it does not switch the path off, it removes
+ * the hint the client keeps its own shorter fallback against, which is worse than the parking.
+ * So the lever is how far beyond the wait the path is parked, and a minute is far.
+ *
+ * **The relation the head comment states is not the relation the path obeys, either.** Measured
+ * in the canary's own shape - an oversize body, the cancel sabotaged away, the 2000 ms wait -
+ * lowering this pin turns `releasedSockets` non-empty somewhere between 900 ms and 1000 ms: 500,
+ * 600, 700, 800 and 900 each released a socket inside the wait; 1000, 2000, 3000 and 60000 each
+ * released none. A pin of 2000 is equal to the wait and violates the stated strict inequality,
+ * and nothing was released at it. So `wait < pin` is neither necessary nor sufficient here - the
+ * boundary belongs to undici's own arithmetic over the server's hint - and asserting the stated
+ * inequality would have produced a red at a pin of 1500 that the experiment is still sound at.
+ * That is why no assertion was added for it, and it is what leaves this figure guarded by nothing
+ * but its distance: an edit lowering it to anything at or above a second would be caught nowhere,
+ * and the canary, which is what catches the rest, reports it as news about undici.
  */
 const SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS = 60000
 
@@ -2395,9 +2421,331 @@ describe('MediaFetchClient', () => {
           .toBeNull()
       })
     })
+
+    /*
+     * A `location` that is present and carries no text. It says the same thing about where the
+     * host moved the object to as no header at all, and it did not behave like it: `new URL('',
+     * hopUrl)` answers the hop itself, whose host the allow-list has just allowed, so the hop was
+     * fetched again until the count ran out.
+     *
+     * Measured before the guard, over loopback against a `302`: four requests for one photo, every
+     * one of them to `/photos/a.jpg`, ending `MEDIA_FETCH_FAILED` where the host had named no
+     * destination at all. Measured after it: one request, same code.
+     *
+     * Every blank spelling arrives here as `''` - measured, the Headers layer answers `''` for a
+     * value of three spaces and for a tab, off a socket and in a hand-built `Response` alike - so
+     * writing them out as separate cases here would be one case written twice. They are exercised
+     * where they are still distinct, on `#isBlankRedirectLocation()`, which is handed the text as
+     * given.
+     */
+    describe('should answer null when the location carries no text', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseStatus: 302,
+          params: {
+            url: 'https://files.client.example/photos/front-elevation.jpg',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseStatus: 307,
+          params: {
+            url: 'https://files.client.example/photos/kitchen.png',
+          },
+        },
+      ]
+
+      test.each(cases)('mockResponseStatus: $mockResponseStatus', ({
+        factoryParams,
+        mockResponseStatus,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.extractRedirectedUrl({
+          response: new Response(null, {
+            status: mockResponseStatus,
+            headers: {
+              location: '',
+            },
+          }),
+          url: params.url,
+        })
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
   })
 })
 
+describe('MediaFetchClient', () => {
+  describe('#isBlankRedirectLocation()', () => {
+    /*
+     * The spellings of "nowhere" a header can arrive in. Over a socket the Headers layer will have
+     * trimmed most of them to `''` already; this method is what makes the answer the same whether
+     * or not some layer did that first, so it is handed each spelling as written.
+     *
+     * **The last case is refused here and would not have resolved to nothing**, and it is in this
+     * describe rather than the one below because that is what the method answers. `String#trim()`
+     * strips Unicode whitespace and `new URL` strips only ASCII, so a lone U+00A0 is text the
+     * resolution would have read as a distinct path - measured, `new URL` answers `.../%C2%A0` -
+     * while `trim()` reduces it to `''`. The guard is therefore a narrowing of "what resolves to
+     * the hop itself" and not an equality with it. The direction is the safe one, a hop refused
+     * rather than a hop followed, and this case is what would notice if the trim were swapped for
+     * an ASCII-only one and the narrowing quietly went away.
+     *
+     * It is written as an escape rather than as the character so that nothing here depends on an
+     * invisible byte surviving an editor.
+     *
+     * The title uses `label` because no field path tells these five apart - `$params.location`
+     * renders every one of them as blank.
+     */
+    describe('should answer that the location names nowhere', () => {
+      const cases = [
+        {
+          label: 'empty text',
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '',
+          },
+        },
+        {
+          label: 'spaces',
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '   ',
+          },
+        },
+        {
+          label: 'a tab',
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '\t',
+          },
+        },
+        {
+          label: 'a line break',
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '\n',
+          },
+        },
+        {
+          label: 'a non-breaking space, which would have resolved to a path of its own',
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '\u00a0',
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        factoryParams,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.isBlankRedirectLocation(params)
+
+        expect(actual)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#isBlankRedirectLocation()', () => {
+    /*
+     * A location naming somewhere is not this method's to refuse, whatever it names - a host off
+     * the allow-list included, which `#isFetchableUrl()` answers for and this does not.
+     *
+     * The padded case is the one that says the trim decides emptiness rather than trimming the
+     * value that is then resolved: `'  /objects/padded  '` is not blank, and what the resolution
+     * is handed is still the padded text.
+     *
+     * The fragment case is the one the guard deliberately lets through. It names the same object
+     * again, it is followed, and the hop count is what ends it - measured at four requests under
+     * the default of three, both before this guard and after. A same-URL rule here would take away
+     * the only thing that count is tested against and leave a two-URL cycle to it anyway, which is
+     * the decision the sibling `AiRunCallbackSender` took first and for that reason.
+     */
+    describe('should answer that the location names somewhere', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '/objects/1234',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '  /objects/padded  ',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: 'https://elsewhere.example/loot',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            location: '#fragment-of-the-same-object',
+          },
+        },
+      ]
+
+      test.each(cases)('location: $params.location', ({
+        factoryParams,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.isBlankRedirectLocation(params)
+
+        expect(actual)
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * A `302` whose `location` names nowhere is answered as the `302` it was, and costs one
+     * request rather than four.
+     *
+     * The network is real because the header is the thing under test and the Headers layer is part
+     * of how it arrives: an empty value, a whitespace-only value and a tab are all `''` by the
+     * time `.get()` answers, and that is only true of a value that came off a socket the way these
+     * did.
+     *
+     * Measured before the guard, over exactly this shape: each of the three spent the whole hop
+     * count - four requests for one photo, every one of them to `/photos/a.jpg`, because
+     * `new URL('', hopUrl)` answers the hop itself and the hop's host is the one the allow-list
+     * just allowed. The host named no destination and the code read one out of it. Measured after
+     * the guard: one request for each of the three, and the same `MEDIA_FETCH_FAILED` - the `302`
+     * is no longer a redirect this class follows, so it falls to the status refusal, which is also
+     * the branch that disposes of its body.
+     *
+     * **The four is the hop count's own bound and not a property of this case.** What this does
+     * not cover is a `location` naming the same object outright, or a fragment of it: those name
+     * somewhere, they are followed, and only the count ends them. The chain-length describe above
+     * measures four against a server answering a growing path, a different URL every hop, so no
+     * describe in this file drives a `location` naming the path it arrived on. A same-path
+     * short-circuit added to `#extractRedirectedUrl()` later would change that case and leave both
+     * describes green.
+     */
+    describe('should not follow a redirect whose location names nowhere', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          label: 'an empty location header',
+          mockRedirectLocation: '',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          label: 'a location header holding only spaces',
+          mockRedirectLocation: '   ',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          label: 'a location header holding only a tab',
+          mockRedirectLocation: '\t',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        factoryParams,
+        mockRedirectLocation,
+      }) => {
+        const hopRequestPaths = []
+        const redirectingServer = http.createServer((request, response) => {
+          hopRequestPaths.push(request.url)
+
+          response.writeHead(302, {
+            location: mockRedirectLocation,
+          })
+          response.end('moved nowhere')
+        })
+
+        await new Promise(resolve => {
+          redirectingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${redirectingServer.address().port}/photos/a.jpg`,
+        })
+
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(hopRequestPaths)
+          .toEqual([
+            '/photos/a.jpg',
+          ])
+      })
+    })
+  })
+})
 describe('MediaFetchClient', () => {
   describe('#isReadableResponseSize()', () => {
     /*
@@ -3494,10 +3842,14 @@ describe('MediaFetchClient', () => {
      * discriminating and their shape needs rewriting, not that this class regressed.
      *
      * **Its red has one other cause, and it is not undici.** This body always spends the whole
-     * 2000 ms wait, and `jest.config.js` declares no `testTimeout`, so jest's own 5000 ms default
-     * is what bounds it - roughly 3000 ms of head-room. A runner stall past that reads as a false
-     * alarm about undici, which is how a test gets skipped. Before believing the alarm, check the
-     * failure: a timeout names jest, a real regression names `releasedSockets`.
+     * 2000 ms wait, so a runner stall on top of that can time the test out for a reason that has
+     * nothing to do with what it watches. `jest.config.js` sets `testTimeout: 15000` and says at
+     * its own line why, which leaves about 13000 ms of head-room rather than the roughly 3000 ms
+     * jest's 5000 ms default left - an earlier round of this paragraph described that default as
+     * though it were still in force, and told an operator to add a setting the config already
+     * carries. A runner stall past the ceiling still reads as a false alarm about undici, which is
+     * how a test gets skipped, so before believing the alarm check the failure: a timeout names
+     * jest, a real regression names `releasedSockets`.
      *
      * The cancel is removed by overriding the method on the instance, which is sabotage rather
      * than a stub. It is written nowhere else in this file, and should not be. The seventh
@@ -4485,12 +4837,18 @@ describe('MediaFetchClient', () => {
      *
      * A cancel rejects on more than one occasion, and an earlier round of this file named only the
      * harmless ones. Measured against Node's own `ReadableStream`: an already-errored stream
-     * rejects with the error it stored, a stream **locked by a reader** rejects with
-     * `TypeError: Invalid state: ReadableStream is locked`, and a readable stream **still holding
-     * bytes** rejects with whatever its underlying source's own cancel algorithm threw. An
-     * already-cancelled stream and one already read to its end both resolve. So the rejecting
-     * cases include at least two in which nothing was released - and for the locked one, measured,
-     * the underlying source's cancel was not called at all.
+     * rejects with the error it stored, and a readable stream **still holding bytes** rejects with
+     * whatever its underlying source's own cancel algorithm threw. An already-cancelled stream and
+     * one already read to its end both resolve. The second of the rejecting two is one in which
+     * nothing was released, which is what makes the swallow cost something.
+     *
+     * **A third rejecting case exists and is not this method's, though a previous round of this
+     * file listed it here.** `stream.cancel()` on a stream **locked by a reader** rejects with
+     * `TypeError: Invalid state: ReadableStream is locked` without the underlying source's cancel
+     * being called - but this method holds the only reader and cancels through it, and measured,
+     * `reader.cancel()` while holding the lock resolves and does call the source's cancel. That
+     * case belongs to `#cancelUnreadResponseBody()`, which cancels the stream. Both cases below
+     * are therefore spelled as what can reach *this* call site.
      *
      * A host resetting the connection in the same tick the bound is hit reaches this. Before the
      * guard, that rejection left this method, was caught by `#readResponseBytes()` and written as
@@ -4514,7 +4872,7 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 30000,
             maximumReadByteSize: 1024,
           },
-          mockCancelFailureMessage: 'the reader holds the stream',
+          mockCancelFailureMessage: 'the source cancel algorithm threw',
         },
       ]
 

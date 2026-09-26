@@ -773,10 +773,34 @@ export default class AiRunTerminalCallbackDeliverer {
    * attempt that was made, and the null status is the column's own case.
    *
    * **What "whatever came back" cannot cover is something raised instead of answered**, which
-   * would leave this method unreached and an attempt unrecorded. The send has one raise and it is
-   * `AiRunCallbackSender`'s refusal of a call carrying no URL inspector — raised before its first
-   * request, so there is no attempt behind it to have lost. Every way a request itself can fail is
-   * answered as a null status and arrives here.
+   * would leave this method unreached and an attempt unrecorded. Every way a *request* can fail is
+   * answered as a null status and arrives here, so what is left is the raises, and there are two
+   * of them rather than the one an earlier round of this comment named.
+   *
+   * The first is `AiRunCallbackSender`'s refusal of a call carrying no URL inspector, raised
+   * before its first request — so there is no attempt behind it to have lost, which is the whole
+   * of why raising there is allowed.
+   *
+   * **The second has an attempt behind it.** `AiRunCallbackSender#answerAiRunCallbackHop()`
+   * re-raises whatever deciding a hop raised, and deciding a hop happens *after* a request has
+   * gone out — the sender's own describe for it measures one request made before the raise. Such
+   * a raise travels past this method, and the attempt it leaves unrecorded is a real one: exactly
+   * round 2's hole, in the one shape its fix did not close.
+   *
+   * **What holds today is that nothing on that path can raise, and it holds by inspection rather
+   * than by a guard.** The only object this class hands the sender is one it built itself from
+   * `api_clients.callback_url_prefix`, and `AiRunCallbackUrlInspector#isDeliverableCallbackUrl()`
+   * cannot throw for any input: the null-prefix guard runs first, the normalizer type-checks
+   * before it parses, and the parse itself catches. So the second raise is unreachable from here —
+   * not absent.
+   *
+   * Two edits make it reachable, and neither of them is in this file: a guard added inside the
+   * sender's hop walk that throws rather than refuses, and an inspector of some other class handed
+   * over on the call. Either one reintroduces an attempt that went out and left no row, and a
+   * sentence saying the send has one raise would vouch for its impossibility while it happened.
+   * What would close it for good is a `try` around the send that records the attempt before
+   * re-raising; it is not written, because a raise nothing can produce is a branch nothing can
+   * test.
    *
    * @param {SaveAiRunTerminalCallbackDeliveryParams} params - Parameters.
    * @returns {Promise<*>} The saved delivery record.
