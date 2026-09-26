@@ -5,6 +5,12 @@
  * first and the renderer's own writes cannot change what it sees. `BaseAiRunPostRenderer` reads
  * the runs `#run-contract` seeded as idempotency inputs, which is what that seeder is for.
  *
+ * `AssetMediaExtractionPostRenderer` follows it for the same reason `BaseAiRunPostRenderer` is
+ * where it is: it creates its runs through the acceptor and takes their ids from the
+ * auto-increment, so it belongs above every file that writes an explicit id. It borrows no seeded
+ * run — each of its cases carries an idempotency key of its own, in `#asset-media-extraction`'s
+ * own block — so its position relative to the three recorders below states nothing.
+ *
  * **The three recorders below are order-independent, and deliberately so.** Each creates the
  * `ai_runs` rows it stands on, in its own id block — `1021xxxx`, `1022xxxx`, `1023xxxx` — and
  * borrows none. Their position here carries no meaning and states no dependency.
@@ -29,6 +35,7 @@
  */
 import './AiRunAcceptor.js'
 import './BaseAiRunPostRenderer.js'
+import './AssetMediaExtractionPostRenderer.js'
 import './AiRunStatusRecorder.js'
 import './AiRunStepRecorder.js'
 import './AiRunFieldOutcomeRecorder.js'

@@ -72,8 +72,8 @@ declare global {
      * beside them was scored from exactly this.
      */
     interface AssetMediaExtractionAgreementResult {
-      agreedCount: number
-      readingCount: number
+      agreedReadingCount: number
+      totalReadingCount: number
     }
   }
 }
