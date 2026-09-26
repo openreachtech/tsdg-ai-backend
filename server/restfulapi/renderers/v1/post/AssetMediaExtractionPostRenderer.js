@@ -85,15 +85,13 @@ const UNACCEPTABLE_FIELD_STATUS_CODE = 422
  * already says of "a value the schema does not accept". The figures are derived in
  * `constants/assetMediaExtractionRequestLimitConstants.cjs` and nowhere else.
  *
- * **Those two `422` lines are not in the contract's shapes table either**, which describes
- * `fieldSchema[]` and `mediaSignature` without a ceiling on either. Reported as drift beside the
- * `429` below, for the same reason: the contract is the client's as much as it is this service's.
- *
- * **`429` is not in the contract's refusal table.** That table fixes `401`, `403`, `404`, `409` and
- * `422`, and was written before this criterion had an implementation to describe. The status is the
- * one every client library already understands for this, and nothing else in the table means "come
- * back later"; reported as drift rather than resolved here, because the contract is the client's as
- * much as it is this service's.
+ * **All three refusals are in the contract**, which is where a client reads them: the shapes table
+ * carries the ceiling on `fieldSchema[]` and the ceiling and type of `mediaSignature`, and the
+ * refusal table carries their two `422` lines beside the `429` this route answers when a client is
+ * over its rate limit. Each was reported as drift when this route began answering something the
+ * contract did not describe, and each was written into it rather than left as a note — the contract
+ * is the client's as much as it is this service's, and a refusal a client cannot read about is a
+ * refusal they will meet in production first.
  *
  * @extends {BaseAiRunPostRenderer}
  */
