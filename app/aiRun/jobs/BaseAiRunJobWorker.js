@@ -11,6 +11,8 @@ import {
 
 import AiRunStatusRecorder from '../AiRunStatusRecorder.js'
 
+import AiRunMediaWorkspace from '../../aiRunMedia/AiRunMediaWorkspace.js'
+
 import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../../constants/aiRunFailureReasonConstants.js'
 
 import {
@@ -39,10 +41,16 @@ const FAILED_AI_RUN_WORK_MESSAGE = 'the work of a run threw'
 const FAILED_DELIVERY_MESSAGE = 'a delivery failed'
 const COMPLETED_DELIVERY_MESSAGE = 'a delivery completed'
 const WORKER_ERROR_MESSAGE = 'the worker errored'
+const FAILED_WORKSPACE_REMOVAL_MESSAGE = 'a run ended with its fetched files still on disk'
 
 const FAILED_AI_RUN_WORK_TAGS = [
   'AiRunJob',
   'FailedAiRunWork',
+]
+
+const FAILED_WORKSPACE_REMOVAL_TAGS = [
+  'AiRunJob',
+  'FailedWorkspaceRemoval',
 ]
 
 const FAILED_DELIVERY_TAGS = [
@@ -143,6 +151,34 @@ const mentsuLogger = MentsuLogger.create({
  * The work itself is left to settle or reject on its own afterwards; it writes no status, because
  * the status is this class's to write, so nothing it does later can reach the row.
  *
+ * **A run that ends removes the temporary copies it fetched, and this class is the only place that
+ * knows a run has ended.** Section 18's fifth acceptance criterion is "the temporary copy of a
+ * fetched file is deleted when the run ends", and its sixth is that no fetched file is kept in
+ * long-term storage; `AiRunMediaWorkspace` answers the sixth by putting the copies under the
+ * machine's own temporary directory, and the fifth is this class calling `#removeWorkspace()`.
+ * **The call sits in a `finally` and not after the terminal write**, because "when the run ends" is
+ * not "when the run succeeded": a work that threw, a run that went past its limit and a terminal
+ * write that itself threw are all ways a run ends, and only a `finally` is on all of them at once.
+ * It is asked for every run rather than only for a run that fetched something, because a directory
+ * that was never created is removed without complaining — so this class needs to know that a run
+ * *might* have a workspace and never which runs do, and no job in this version fetches anything
+ * yet.
+ *
+ * **A removal that failed does not change how the run ended.** A run that succeeded and then could
+ * not delete a directory has still succeeded, and a `finally` that threw would replace both the
+ * result and any exception already on its way out. So the removal logs and swallows, which is this
+ * repository's rule for a boundary — and `#executeJob()` is one, being what the framework calls and
+ * what the run's terminal state is written inside. The line it writes is the operator's evidence
+ * that a fetched file outlived its run.
+ *
+ * **Two ways a run can end do not pass through that `finally`, stated rather than implied.** A
+ * delivery whose *process* is killed between the fetch and the removal runs no `finally` at all,
+ * and nothing in this service sweeps a directory a dead process left — `AiRunMediaWorkspace` says
+ * so in its own words, and the machine's temporary directory is the mitigation. And on the
+ * time-limit path the work itself is still running when the removal happens, so a work that writes
+ * another copy afterwards recreates the directory this delivery just removed; there is no signal
+ * that stops it, because `parcel.signal` is unusable for the reason given above.
+ *
  * @abstract
  */
 export default class BaseAiRunJobWorker extends BaseJobWorker {
@@ -227,6 +263,15 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   }
 
   /**
+   * get: the workspace holding one run's fetched files.
+   *
+   * @returns {typeof AiRunMediaWorkspace} - The class.
+   */
+  static get AiRunMediaWorkspaceCtor () {
+    return AiRunMediaWorkspace
+  }
+
+  /**
    * get: the timer module the run time limit is measured with.
    *
    * @returns {typeof timers} - The module.
@@ -276,6 +321,20 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * The returned value is stored in Redis by the framework, so it carries three small fields and
    * never the run's result: the result belongs in `ai_runs`, where the callback and the read-back
    * by run key both find it.
+   *
+   * **Whatever the run settles on, the temporary copies it fetched are removed on the way out**,
+   * which is section 18's fifth acceptance criterion. The `finally` is what makes that true of a
+   * work that threw and of a terminal write that threw, and not only of a run that succeeded.
+   *
+   * **The removal begins where the claim succeeded, and a delivery told the run had already settled
+   * removes nothing.** Such a delivery fetched nothing of its own — its work never ran — so the
+   * only directory it could remove is one another delivery made, and that other delivery may still
+   * be working inside it. The run it was told about was settled by a writer that ran this same
+   * `finally`.
+   *
+   * `return await` inside the `try` is load-bearing rather than noise: a bare `return` inside a
+   * `try` completes the statement before the promise settles, so the `finally` would remove the
+   * workspace while the work was still using it.
    *
    * @override
    * @param {{
@@ -327,12 +386,18 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
       })
     }
 
-    return this.settleAiRun({
-      aiRunId,
-      body: declaredBody,
-      context,
-      parcel,
-    })
+    try {
+      return await this.settleAiRun({
+        aiRunId,
+        body: declaredBody,
+        context,
+        parcel,
+      })
+    } finally {
+      await this.removeAiRunMediaWorkspace({
+        aiRunId,
+      })
+    }
   }
 
   /**
@@ -860,6 +925,101 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
       aiRunId,
       resultBody,
       finishedAt,
+    })
+  }
+
+  /**
+   * Remove the temporary copies of the files this run fetched.
+   *
+   * **This is where section 18's fifth acceptance criterion is kept.** The criterion asks for the
+   * deletion and says nothing about how the run ended, and the caller's `finally` is what puts this
+   * method on every ending at once.
+   *
+   * **It is asked of every run, including every run that fetched nothing.** No job in this version
+   * fetches a file — the step that will is section 20's second — and a run that fetched nothing has
+   * no directory to remove. `AiRunMediaWorkspace#removeWorkspace()` removes an absent directory
+   * without complaining, which is what lets this class know that a run *might* have a workspace and
+   * never which runs do. A hook, not a use of one.
+   *
+   * **A removal that failed is written down and swallowed, and that is deliberate.** The run's
+   * terminal state is already in the row by the time this runs, and a run that succeeded and then
+   * could not delete a directory has still succeeded — the repository's rule is that a boundary
+   * logs and swallows, and `#executeJob()` is the boundary the framework calls. Rethrowing would do
+   * worse than report it: the call sits in a `finally`, so a throw from here would replace the
+   * result the delivery was returning, or the exception it was already raising, with one about a
+   * directory. The line it writes is the operator's evidence that a fetched file outlived its run,
+   * and the null it answers is how a caller and a test tell the two outcomes apart.
+   *
+   * The workspace is built inside the `try` rather than above it for that same reason: what this
+   * method promises its caller is that nothing leaves it, and a construction sitting outside would
+   * make that true of part of the method instead of all of it.
+   *
+   * @param {{
+   *   aiRunId: number
+   * }} params - Parameters.
+   * @returns {Promise<string | null>} The path removed, or null when the removal failed.
+   * @public
+   */
+  async removeAiRunMediaWorkspace ({
+    aiRunId,
+  }) {
+    try {
+      const aiRunMediaWorkspace = this.createAiRunMediaWorkspace({
+        aiRunId,
+      })
+
+      return await aiRunMediaWorkspace.removeWorkspace()
+    } catch (error) {
+      this.logFailedWorkspaceRemoval({
+        aiRunId,
+        error,
+      })
+
+      return null
+    }
+  }
+
+  /**
+   * Create the workspace holding one run's fetched files.
+   *
+   * The run is handed in rather than read from a property, because a worker is one long-lived
+   * instance per queue and the run is what one delivery is about.
+   *
+   * @param {{
+   *   aiRunId: number
+   * }} params - Parameters.
+   * @returns {AiRunMediaWorkspace} The workspace.
+   * @public
+   */
+  createAiRunMediaWorkspace ({
+    aiRunId,
+  }) {
+    return this.Ctor.AiRunMediaWorkspaceCtor.create({
+      aiRunId,
+    })
+  }
+
+  /**
+   * Write the line a removal that failed leaves behind.
+   *
+   * The error's own message is not repeated, for the reason `#logFailedAiRunWork()` gives. What is
+   * written is the run and the error's class, which are this service's own words, and together they
+   * say which machine directory an operator has to go and look at.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   error: Error
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedWorkspaceRemoval ({
+    aiRunId,
+    error,
+  }) {
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${FAILED_WORKSPACE_REMOVAL_MESSAGE}: AiRunId ${aiRunId}, ${error.constructor.name}`,
+      tags: FAILED_WORKSPACE_REMOVAL_TAGS,
     })
   }
 

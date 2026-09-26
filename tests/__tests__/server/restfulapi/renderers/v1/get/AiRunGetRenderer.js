@@ -433,8 +433,9 @@ describe('AiRunGetRenderer', () => {
             failure: {
               reasonCode: 'MEDIA_LIMIT_EXCEEDED',
               parameters: {
-                mediaCountLimit: 12,
-                sentMediaCount: 17,
+                limitName: 'mediaCount',
+                limitValue: 12,
+                declaredValue: 17,
               },
             },
           },

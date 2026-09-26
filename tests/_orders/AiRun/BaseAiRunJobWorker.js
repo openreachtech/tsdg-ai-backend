@@ -1,6 +1,10 @@
+import fsPromises from 'node:fs/promises'
+
 import BaseAiRunJobWorker from '../../../app/aiRun/jobs/BaseAiRunJobWorker.js'
 
 import BaseAiRunJobManifest from '../../../app/aiRun/jobs/BaseAiRunJobManifest.js'
+
+import AiRunMediaWorkspace from '../../../app/aiRunMedia/AiRunMediaWorkspace.js'
 
 /*
  * Why the recorder is handed in rather than run for real.
@@ -968,6 +972,559 @@ describe('BaseAiRunJobWorker', () => {
             context: params.context,
             parcel: params.parcel,
           })
+      })
+    })
+  })
+})
+
+/*
+ * Section 18's fifth acceptance criterion, at the one place that knows a run has ended: the
+ * temporary copy of a fetched file is deleted when the run ends.
+ *
+ * **"However it ends" is what the cases below are for**, and each describe is one of the ways.
+ * The work succeeded; the work threw; the run went past its time limit; the terminal write itself
+ * threw. A removal that ran only on the first of those would keep the criterion for the one case
+ * that never leaks and drop it for every case that does.
+ *
+ * The file system is not mocked in any of them. A spy saying `removeWorkspace` was called would
+ * pass against a worker that removed the wrong run's directory, so each case writes real bytes into
+ * the directory `AiRunMediaWorkspace` builds for that run - under the machine's own temporary
+ * directory, because the worker builds the workspace with no root of its own, which is exactly what
+ * it does in production - and then reads the disk to see that they are gone.
+ *
+ * The run ids are `10450201` upward and the media ids `10450301` upward, a block of
+ * `#media-fetch`'s own that no other file writes.
+ */
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The way a run ends that leaks nothing, and therefore the one a removal on the happy path
+     * alone would be enough for. It is here so the other describes are read as additions to it
+     * rather than as the whole of the criterion.
+     */
+    describe('should delete the temporary copies when the work succeeded', () => {
+      const cases = [
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450301,
+            bytes: Buffer.from('front-elevation-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450201,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450201,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450302,
+            bytes: Buffer.from('rear-elevation-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450202,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450202,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        mockMediumFile,
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+        const workspace = AiRunMediaWorkspace.create({
+          aiRunId: params.body.aiRunId,
+        })
+        const mediumFilePath = await workspace.writeMediumFile(mockMediumFile)
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        await expect(fsPromises.readFile(mediumFilePath))
+          .rejects
+          .toThrow('ENOENT') // the file is gone, not merely unreadable
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A run whose work threw is a run that ended, and it is the way most likely to leave a fetch
+     * half done - a run that fetched four of its twelve files and then failed on the fifth. The
+     * directory is removed whole, so no record of what it managed to fetch is needed.
+     */
+    describe('should delete the temporary copies when the work threw', () => {
+      const cases = [
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450303,
+            bytes: Buffer.from('side-elevation-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450203,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450203,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            hasSettled: true,
+          },
+        },
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450304,
+            bytes: Buffer.from('roof-plan-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450204,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450204,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        mockMediumFile,
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockRejectedValue(new Error('the provider answered 503'))
+        const workspace = AiRunMediaWorkspace.create({
+          aiRunId: params.body.aiRunId,
+        })
+        const mediumFilePath = await workspace.writeMediumFile(mockMediumFile)
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        await expect(fsPromises.readFile(mediumFilePath))
+          .rejects
+          .toThrow('ENOENT') // the file is gone, not merely unreadable
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The run went past its limit and the work never settled at all - the shape the limit exists
+     * for, and the one way of ending where the work is still running when the removal happens.
+     * What is asserted is that the run ending triggers the deletion, and not the work finishing:
+     * nothing here ever lets the work finish.
+     *
+     * The limit of that is written on `#executeJob()` itself rather than hidden here: a work still
+     * running can write another copy afterwards and recreate the directory, and there is no signal
+     * that stops it.
+     */
+    describe('should delete the temporary copies when the run went past its time limit', () => {
+      const cases = [
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450305,
+            bytes: Buffer.from('site-boundary-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450205,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450205,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            hasSettled: true,
+          },
+        },
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450306,
+            bytes: Buffer.from('drainage-run-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450206,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450206,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        mockMediumFile,
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 1,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockReturnValue(new Promise(() => {
+            // A run that holds a worker indefinitely: nothing here ever settles it.
+          }))
+        const workspace = AiRunMediaWorkspace.create({
+          aiRunId: params.body.aiRunId,
+        })
+        const mediumFilePath = await workspace.writeMediumFile(mockMediumFile)
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        await expect(fsPromises.readFile(mediumFilePath))
+          .rejects
+          .toThrow('ENOENT') // the file is gone, not merely unreadable
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A run can also end by the delivery being thrown out of, and the terminal write itself failing
+     * is the way that reaches furthest: by then the work has already run and may already have
+     * fetched. The delivery still raises, so the queue records a failed delivery; what is asserted
+     * beside it is that the raising did not take the removal with it.
+     */
+    describe('should delete the temporary copies when the terminal write threw', () => {
+      const cases = [
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450307,
+            bytes: Buffer.from('floor-plan-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450207,
+            },
+            context: {},
+            parcel: {},
+          },
+        },
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450308,
+            bytes: Buffer.from('ceiling-plan-bytes'),
+          },
+          params: {
+            body: {
+              aiRunId: 10450208,
+            },
+            context: {},
+            parcel: {},
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        mockMediumFile,
+        params,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockRejectedValue(new Error('the transition could not be written'))
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+        const workspace = AiRunMediaWorkspace.create({
+          aiRunId: params.body.aiRunId,
+        })
+        const mediumFilePath = await workspace.writeMediumFile(mockMediumFile)
+
+        const actual = () => worker.executeJob(params)
+
+        await expect(actual)
+          .rejects
+          .toThrow('the transition could not be written')
+        await expect(fsPromises.readFile(mediumFilePath))
+          .rejects
+          .toThrow('ENOENT') // the file is gone, not merely unreadable
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A run that succeeded and then could not delete a temporary directory has still succeeded, and
+     * a run that failed has still failed for the reason it failed for. The removal sits in a
+     * `finally`, where a throw would replace the result the delivery was returning - so what this
+     * asserts is the result surviving a removal that rejected.
+     *
+     * The workspace is stubbed because a directory that refuses to be removed cannot be arranged on
+     * every platform this suite runs on, and the branch is unreachable without one.
+     */
+    describe('should leave the ending of the run untouched when the removal failed', () => {
+      const cases = [
+        {
+          mockResultBody: '{"brand":"alpha"}',
+          params: {
+            body: {
+              aiRunId: 10450209,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450209,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          mockResultBody: null,
+          params: {
+            body: {
+              aiRunId: 10450210,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450210,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        mockResultBody,
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const removeWorkspace = jest.fn()
+          .mockRejectedValue(new Error('EBUSY: resource busy or locked'))
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue(mockResultBody)
+        jest.spyOn(worker, 'createAiRunMediaWorkspace')
+          .mockReturnValue({
+            removeWorkspace,
+          })
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A delivery told the run had already settled fetched nothing of its own - its work never ran -
+     * so the only directory it could remove is one another delivery made, and that other delivery
+     * may still be working inside it. The run it was told about was settled by a writer that ran
+     * the same removal on its own way out.
+     */
+    describe('should remove nothing when another writer already settled the run', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10450211,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450211,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10450212,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10450212,
+            failureReasonCode: null,
+            hasSettled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(false)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        const removeAiRunMediaWorkspaceSpy = jest.spyOn(worker, 'removeAiRunMediaWorkspace')
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(removeAiRunMediaWorkspaceSpy)
+          .not
+          .toHaveBeenCalled()
       })
     })
   })

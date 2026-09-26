@@ -1,3 +1,7 @@
+import fsPromises from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
 import {
   BaseJobWorker,
   ConcreteMemberNotFoundJobError,
@@ -13,6 +17,8 @@ import BaseAiRunJobWorker from '../../../../../app/aiRun/jobs/BaseAiRunJobWorker
 import BaseAiRunJobManifest from '../../../../../app/aiRun/jobs/BaseAiRunJobManifest.js'
 
 import AiRunStatusRecorder from '../../../../../app/aiRun/AiRunStatusRecorder.js'
+
+import AiRunMediaWorkspace from '../../../../../app/aiRunMedia/AiRunMediaWorkspace.js'
 
 describe('BaseAiRunJobWorker', () => {
   describe('super class', () => {
@@ -1722,6 +1728,409 @@ describe('BaseAiRunJobWorker', () => {
             tags: [
               'AiRunJob',
               'WorkerError',
+            ],
+          })
+      })
+    })
+  })
+})
+
+/*
+ * Section 18's fifth acceptance criterion, at the four members that keep it: the temporary copy of
+ * a fetched file is deleted when the run ends.
+ *
+ * The file system is not mocked in the cases that are about the deletion. A spy saying
+ * `removeWorkspace` was called would pass against a worker that removed the wrong run's directory,
+ * so those cases write real bytes under the machine's own temporary directory - the very place
+ * `AiRunMediaWorkspace` puts them in production, because this worker builds the workspace with no
+ * root of its own - and then read the disk to see that they are gone.
+ *
+ * The run ids are `10450001` upward, a block of `#media-fetch`'s own that no other file writes, so
+ * a directory these cases create belongs to these cases alone.
+ *
+ * `#executeJob()` is where the removal is hooked, and its cases are not here: that method writes a
+ * run's terminal state, so they sit in `tests/_orders/AiRun/BaseAiRunJobWorker.js` beside the rest
+ * of the lifecycle.
+ */
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.get:AiRunMediaWorkspaceCtor', () => {
+    test('should be the workspace holding the fetched files of one run', () => {
+      const expected = AiRunMediaWorkspace
+
+      const actual = BaseAiRunJobWorker.AiRunMediaWorkspaceCtor
+
+      expect(actual)
+        .toBe(expected) // same reference
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAiRunMediaWorkspace()', () => {
+    describe('should create the workspace of the run it is given', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10450001,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10450002,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.createAiRunMediaWorkspace(params)
+
+        expect(actual)
+          .toBeInstanceOf(AiRunMediaWorkspace)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAiRunMediaWorkspace()', () => {
+    /*
+     * A worker is one long-lived instance per queue, so the run is what one delivery is about and
+     * never what the worker holds. The workspace it hands back has to be the run's own, which is
+     * the whole of what makes a removal delete this run's files and not another's.
+     */
+    describe('should hand the workspace the run of this delivery', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10450003,
+          },
+          expected: 10450003,
+        },
+        {
+          params: {
+            aiRunId: 10450004,
+          },
+          expected: 10450004,
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.createAiRunMediaWorkspace(params)
+
+        expect(actual)
+          .toHaveProperty('aiRunId', expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#removeAiRunMediaWorkspace()', () => {
+    /*
+     * The deletion itself. The copies are written in the arrange phase because removing them is
+     * what is under test, and the assertion reads the disk because "the file is gone" is not
+     * observable any other way.
+     */
+    describe('should delete every temporary copy the run fetched', () => {
+      const cases = [
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450101,
+            bytes: Buffer.from('kitchen-worktop-bytes'),
+          },
+          params: {
+            aiRunId: 10450011,
+          },
+          expected: path.join(os.tmpdir(), 'ai-run-media-10450011'),
+        },
+        {
+          mockMediumFile: {
+            aiRunMediaId: 10450102,
+            bytes: Buffer.from('bathroom-tiling-bytes'),
+          },
+          params: {
+            aiRunId: 10450012,
+          },
+          expected: path.join(os.tmpdir(), 'ai-run-media-10450012'),
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        mockMediumFile,
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const workspace = AiRunMediaWorkspace.create(params)
+        const mediumFilePath = await workspace.writeMediumFile(mockMediumFile)
+
+        const actual = await worker.removeAiRunMediaWorkspace(params)
+
+        expect(actual)
+          .toBe(expected)
+        await expect(fsPromises.readFile(mediumFilePath))
+          .rejects
+          .toThrow('ENOENT') // the file is gone, not merely unreadable
+      })
+    })
+
+    /*
+     * Every run in this version, and the reason the removal may be asked for unconditionally: no
+     * job fetches a file yet, so no run has a directory, and a run that has none still ends.
+     */
+    describe('should remove nothing without complaining', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10450013,
+          },
+          expected: path.join(os.tmpdir(), 'ai-run-media-10450013'),
+        },
+        {
+          params: {
+            aiRunId: 10450014,
+          },
+          expected: path.join(os.tmpdir(), 'ai-run-media-10450014'),
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = await worker.removeAiRunMediaWorkspace(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#removeAiRunMediaWorkspace()', () => {
+    /*
+     * A directory that is there and could not be removed is a fetched file still sitting on a disk
+     * after the run that fetched it ended. It is reported and swallowed rather than raised: the
+     * call sits in a `finally`, and a throw from here would replace whatever the delivery was
+     * already returning or raising with one about a directory.
+     *
+     * The workspace is stubbed here because a directory that refuses to be removed cannot be
+     * arranged on every platform this suite runs on, and the branch is unreachable without one.
+     */
+    describe('should answer null when the removal failed', () => {
+      const cases = [
+        {
+          mockRemovalFailure: new Error('EBUSY: resource busy or locked'),
+          params: {
+            aiRunId: 10450021,
+          },
+        },
+        {
+          mockRemovalFailure: new TypeError('EACCES: permission denied'),
+          params: {
+            aiRunId: 10450022,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        mockRemovalFailure,
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const removeWorkspace = jest.fn()
+          .mockRejectedValue(mockRemovalFailure)
+        jest.spyOn(worker, 'createAiRunMediaWorkspace')
+          .mockReturnValue({
+            removeWorkspace,
+          })
+
+        const actual = await worker.removeAiRunMediaWorkspace(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#removeAiRunMediaWorkspace()', () => {
+    /*
+     * Swallowing without writing the line down would make a fetched file outliving its run
+     * invisible, which is the one thing an operator has to be told about it.
+     */
+    describe('should write the line a removal that failed leaves behind', () => {
+      const cases = [
+        {
+          mockRemovalFailure: new Error('EBUSY: resource busy or locked'),
+          params: {
+            aiRunId: 10450023,
+          },
+          expected: 'BaseAiRunJobWorker a run ended with its fetched files still on disk: AiRunId 10450023, Error',
+        },
+        {
+          mockRemovalFailure: new TypeError('EACCES: permission denied'),
+          params: {
+            aiRunId: 10450024,
+          },
+          expected: 'BaseAiRunJobWorker a run ended with its fetched files still on disk: AiRunId 10450024, TypeError',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        mockRemovalFailure,
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const removeWorkspace = jest.fn()
+          .mockRejectedValue(mockRemovalFailure)
+        jest.spyOn(worker, 'createAiRunMediaWorkspace')
+          .mockReturnValue({
+            removeWorkspace,
+          })
+        const errorSpy = jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+        await worker.removeAiRunMediaWorkspace(params)
+
+        expect(errorSpy)
+          .toHaveBeenCalledWith({
+            message: expected,
+            tags: [
+              'AiRunJob',
+              'FailedWorkspaceRemoval',
+            ],
+          })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#logFailedWorkspaceRemoval()', () => {
+    /*
+     * The line names the run and the error's class, and the error's own message appears in none of
+     * it - the same bound-message rule `#logFailedAiRunWork()` keeps, for the same reason. Each
+     * `params.error` below carries a message built the way the file system builds one, carrying a
+     * path, so a message creeping back into the line fails here.
+     */
+    describe('should write a line carrying nothing the error said', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10450031,
+            error: new Error('EBUSY: resource busy or locked, rm ./ai-run-media-10450031'),
+          },
+          expected: 'BaseAiRunJobWorker a run ended with its fetched files still on disk: AiRunId 10450031, Error',
+        },
+        {
+          params: {
+            aiRunId: 10450032,
+            error: new TypeError('EACCES: permission denied, rm ./ai-run-media-10450032'),
+          },
+          expected: 'BaseAiRunJobWorker a run ended with its fetched files still on disk: AiRunId 10450032, TypeError',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const errorSpy = jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+        worker.logFailedWorkspaceRemoval(params)
+
+        expect(errorSpy)
+          .toHaveBeenCalledWith({
+            message: expected,
+            tags: [
+              'AiRunJob',
+              'FailedWorkspaceRemoval',
             ],
           })
       })

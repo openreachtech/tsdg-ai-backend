@@ -362,8 +362,9 @@ const CANNED_AI_RUN_RESPONSE_HASH = {
     failure: {
       reasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_LIMIT_EXCEEDED,
       parameters: {
-        mediaCountLimit: 12,
-        sentMediaCount: 17,
+        limitName: 'mediaCount',
+        limitValue: 12,
+        declaredValue: 17,
       },
     },
   },

@@ -326,6 +326,7 @@ export default class AiRun extends BaseAppRenchanModel {
     this.hasMany(this._.AiRunStep)
     this.hasMany(this._.AiRunFieldOutcome)
     this.hasMany(this._.AiRunMedia)
+    this.hasMany(this._.AiModelCall)
     this.hasMany(this._.AiRunCallbackDelivery)
   }
 
