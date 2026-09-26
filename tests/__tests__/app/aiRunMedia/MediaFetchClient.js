@@ -21,10 +21,25 @@ import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
  * hand-written double, so nothing in this file restates what a response is.
  *
  * Several describes use a real one instead, over loopback, and say so where they sit: a redirect
- * refused, a redirect followed, a chain longer than the hops allowed, and the four that watch a
+ * refused, a redirect followed, a chain longer than the hops allowed, and the six that watch a
  * connection be released. A stubbed fetch follows nothing, so it could not have shown that `fetch`
  * left to itself follows up to twenty hops and answers with the last of them - and a stubbed one
  * has no socket at all, which is the only thing the release describes can observe.
+ *
+ * **The six release describes hold on to the `Response` they were handed, and that is not
+ * tidiness.** Undici releases a connection on the cancel this class makes, and also, separately,
+ * when the unread `Response` is finalized - which is garbage collection, and lands wherever it
+ * lands. Measured against a client whose cancel had been taken out again, that second path fired
+ * at 20 ms on one run and not at all within five seconds on four others, so a describe that let
+ * the `Response` go would pass against the very defect it exists to catch on roughly one run in
+ * five. Each of the six therefore wraps `fetchClient` around the real `globalThis.fetch` - a
+ * pass-through, so the socket, the body and the headers all stay real - purely to keep a reference
+ * to every `Response` alive for the length of the test. What is left to release the socket is
+ * then the cancel and nothing else.
+ *
+ * That last sentence is a claim about undici and not about this class, so a seventh describe sits
+ * beside the six and does nothing but check it: it takes the cancel out on purpose and asserts the
+ * socket is not released. Its red is the signal that the six have stopped discriminating.
  *
  * Each of those closes its servers before it asserts, not after. A failing assertion ends the test
  * body where it stands, so a `close()` written below the assertions is a listening handle left
@@ -32,22 +47,28 @@ import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
  */
 
 /*
- * The body a `302` carries in the describes that watch a connection be released.
+ * The body a response carries in the describes that watch a connection be released.
  *
- * The size is load-bearing. An empty `302` arrives complete, so the client can release its
- * connection whether anybody cancelled the body or not, and a describe built on one would pass
- * against the defect it exists to catch. A quarter of a megabyte does not fit the buffers between
- * here and there, so the connection is only released by the cancel.
+ * The size is load-bearing. An empty body arrives complete, so the client can release its
+ * connection whether anybody cancelled it or not, and a describe built on one would pass against
+ * the defect it exists to catch. A quarter of a megabyte does not fit the buffers between here and
+ * there, so the connection is only released by the cancel.
+ *
+ * It is no longer only a `3xx` body: the describe that watches a declared size be refused serves
+ * the same quarter megabyte behind an honest `content-length`, which is why the name says response
+ * rather than redirect.
  */
-const LEAKY_REDIRECT_BODY_BYTE_SIZE = 262144
+const LEAKY_RESPONSE_BODY_BYTE_SIZE = 262144
 
 /*
  * How long those describes wait for the server to see its socket go.
  *
  * The wait is bounded rather than open-ended so that a regression fails on the assertion, naming a
  * socket still alive, instead of on a suite timeout naming nothing. With the cancel in place the
- * wait ends in a millisecond or two and this figure is never reached; without it, nothing ever
- * closes the socket and the whole of it is spent.
+ * wait ends in single-figure milliseconds and this figure is never reached; without it - and with
+ * the `Response` held, so undici's own finalizer cannot stand in for the cancel - nothing closes
+ * the socket and the whole of it is spent. Measured across five runs of each of the two describes
+ * this round added: 2-17 ms with the cancel, and nothing at all inside five seconds without it.
  */
 const SOCKET_RELEASE_WAIT_MILLISECONDS = 2000
 
@@ -2555,7 +2576,7 @@ describe('MediaFetchClient', () => {
           response.writeHead(302, {
             location: redirectedUrlText,
           })
-          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x61))
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61))
         })
 
         redirectingServer.on('connection', socket => {
@@ -2574,6 +2595,17 @@ describe('MediaFetchClient', () => {
         await new Promise(resolve => {
           redirectingServer.listen(0, '127.0.0.1', resolve)
         })
+
+        const fetchedResponses = []
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
 
         const client = MediaFetchClient.create(factoryParams)
 
@@ -2595,6 +2627,8 @@ describe('MediaFetchClient', () => {
 
         expect(actual)
           .toEqual(expected)
+        expect(fetchedResponses)
+          .toHaveLength(2)
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2647,7 +2681,7 @@ describe('MediaFetchClient', () => {
           response.writeHead(302, {
             location: mockLocation,
           })
-          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x62))
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x62))
         })
 
         loopingServer.on('connection', socket => {
@@ -2667,6 +2701,17 @@ describe('MediaFetchClient', () => {
           loopingServer.listen(0, '127.0.0.1', resolve)
         })
 
+        const fetchedResponses = []
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
         const client = MediaFetchClient.create(factoryParams)
 
         const actual = await client.fetchMedium({
@@ -2685,6 +2730,8 @@ describe('MediaFetchClient', () => {
 
         expect(actual)
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(fetchedResponses)
+          .toHaveLength(1)
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2731,7 +2778,7 @@ describe('MediaFetchClient', () => {
           response.writeHead(302, {
             location: mockLocation,
           })
-          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x63))
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x63))
         })
 
         redirectingServer.on('connection', socket => {
@@ -2751,6 +2798,17 @@ describe('MediaFetchClient', () => {
           redirectingServer.listen(0, '127.0.0.1', resolve)
         })
 
+        const fetchedResponses = []
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
         const client = MediaFetchClient.create(factoryParams)
 
         const actual = await client.fetchMedium({
@@ -2769,6 +2827,8 @@ describe('MediaFetchClient', () => {
 
         expect(actual)
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(fetchedResponses)
+          .toHaveLength(1)
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2817,7 +2877,7 @@ describe('MediaFetchClient', () => {
           response.writeHead(mockResponseStatus, {
             'content-type': 'text/html',
           })
-          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x64))
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x64))
         })
 
         refusingServer.on('connection', socket => {
@@ -2837,6 +2897,17 @@ describe('MediaFetchClient', () => {
           refusingServer.listen(0, '127.0.0.1', resolve)
         })
 
+        const fetchedResponses = []
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
         const client = MediaFetchClient.create(factoryParams)
 
         const actual = await client.fetchMedium({
@@ -2855,8 +2926,366 @@ describe('MediaFetchClient', () => {
 
         expect(actual)
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(fetchedResponses)
+          .toHaveLength(1)
         expect(releasedSockets)
           .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The fifth `3xx` branch, and the one no describe in this file could reach: a hop refused for
+     * moving the fetch off `https:`. The describe further down that names that refusal stubs the
+     * network with a `Response` built on a `null` body, whose `body` is therefore `null` - so the
+     * cancel this branch owes returns at a guard and is never made, and the branch could lose its
+     * disposal with the suite still green.
+     *
+     * **The TLS is in the URL and not on the wire, and that is the whole of the stub.** The class
+     * reads the scheme off the URL text it was handed - `#downgradesTransportSecurity()` parses
+     * two strings and touches no socket - so a hop is made to arrive "over TLS" by handing the
+     * client an `https:` URL and rewriting it back to `http:` inside the fetch function, one line
+     * inside a pass-through onto the real `globalThis.fetch`. Everything the branch is about stays
+     * real: a real socket, a real `3xx`, a real quarter megabyte nobody read, a real release.
+     *
+     * What this cannot show is a TLS socket being released, because a loopback server here has no
+     * certificate to stand up. Undici releases a TLS socket by the same `destroy`, so the branch
+     * is the same one either way - but nothing in this suite demonstrates that, and a regression
+     * that released a plaintext socket and held a TLS one would pass here. Standing a certificate
+     * up is what would close it.
+     *
+     * The `location` names the same server, so nothing but the scheme can be what refused it, and
+     * the one request the fetch function was handed is the evidence that the hop was never asked
+     * for.
+     */
+    describe('should release the connection a refused downgrade arrived on', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockRedirectStatus: 302,
+          mockLocationPath: '/objects/1234',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockRedirectStatus: 307,
+          mockLocationPath: '/objects/5678',
+        },
+      ]
+
+      test.each(cases)('mockLocationPath: $mockLocationPath', async ({
+        factoryParams,
+        mockRedirectStatus,
+        mockLocationPath,
+      }) => {
+        const releasedSockets = []
+        const requestedUrls = []
+        const fetchedResponses = []
+
+        const downgradingServer = http.createServer((request, response) => {
+          const downgradingPort = downgradingServer.address().port
+
+          const redirectedUrlText = `http://127.0.0.1:${downgradingPort}${mockLocationPath}`
+
+          response.writeHead(mockRedirectStatus, {
+            location: redirectedUrlText,
+          })
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x65))
+        })
+
+        downgradingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const downgradeSocketReleased = new Promise(resolve => {
+          downgradingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          downgradingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestedUrls.push(requestedUrl)
+
+            const plainUrl = requestedUrl.replace(/^https:/u, 'http:')
+
+            const response = await globalThis.fetch(plainUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `https://127.0.0.1:${downgradingServer.address().port}/photos/front.jpg`,
+        })
+
+        await Promise.race([
+          downgradeSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        downgradingServer.closeAllConnections()
+        downgradingServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(requestedUrls)
+          .toHaveLength(1)
+        expect(fetchedResponses)
+          .toHaveLength(1)
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The sixth branch, and the one the second audit round dropped: a `content-length` declared
+     * past the cap, refused before a byte of the body is read. Its `3xx` siblings above leak one
+     * connection per redirect; this one leaks one per over-declared file, which is the branch a
+     * caller reaches by pointing at any object bigger than the cap.
+     *
+     * **It was dropped for a reason that does not hold, and what makes it not hold is the rescuer
+     * rather than the timing.** The claim was that undici releases the connection on its own after
+     * roughly 650 ms, so no honest test separates fixed from unfixed. What undici does is release
+     * when the unread `Response` is finalized - garbage collection, whose timing is arbitrary in
+     * both directions. Measured over five runs of the shape below with the cancel taken out and
+     * the `Response` let go: released at 20 ms once, at 3107 ms once, and not at all inside five
+     * seconds on the other three. A describe resting on that is not slow, it is green either way.
+     *
+     * Holding the `Response` for the length of the test takes the rescuer out of the experiment.
+     * Measured over five runs of exactly the shape below: 2-14 ms with the cancel, and nothing
+     * inside five seconds on any run without it. That is a separation rather than a race.
+     *
+     * The body is complete and its `content-length` is honest - the server declares the quarter
+     * megabyte it then sends - so what refuses it is this client's own bound and not a malformed
+     * response. The second case sets that bound one byte under the body, which is the boundary the
+     * declared-size check is written against.
+     */
+    describe('should release the connection of a size it refused', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 1024,
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 262143,
+          },
+        },
+      ]
+
+      test.each(cases)('maximumReadByteSize: $factoryParams.maximumReadByteSize', async ({
+        factoryParams,
+      }) => {
+        const releasedSockets = []
+        const fetchedResponses = []
+
+        const oversizeServer = http.createServer((request, response) => {
+          response.writeHead(200, {
+            'content-type': 'image/jpeg',
+            'content-length': String(LEAKY_RESPONSE_BODY_BYTE_SIZE),
+          })
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x66))
+        })
+
+        oversizeServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const oversizeSocketReleased = new Promise(resolve => {
+          oversizeServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          oversizeServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${oversizeServer.address().port}/photos/panorama.jpg`,
+        })
+
+        await Promise.race([
+          oversizeSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        oversizeServer.closeAllConnections()
+        oversizeServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_UNREADABLE')
+        expect(fetchedResponses)
+          .toHaveLength(1)
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * A canary on undici rather than on this class, and the only thing standing between the six
+     * release describes above and their going quietly green-either-way.
+     *
+     * Every one of those six rests on a property of a package this project did not write: while
+     * the unread `Response` is strongly referenced, undici releases the connection on the cancel
+     * and on nothing else. Measured today it holds - across fifteen runs of three shapes, a client
+     * whose cancel had been taken out never released the socket inside five seconds, while the
+     * same shapes with the `Response` let go released at 20 ms once and at 3107 ms once, which is
+     * the finalizer this reference is here to keep out. If a later undici releases on a timer
+     * instead, or keeps a strong reference of its own, all six above would pass with the cancel
+     * removed and nothing in this file would say so.
+     *
+     * So this one takes the cancel out on purpose and asserts the socket is **not** released. It
+     * is the one describe here whose red is good news: red means the six above have stopped
+     * discriminating and their shape needs rewriting, not that this class regressed.
+     *
+     * The cancel is removed by overriding the method on the instance, which is sabotage rather
+     * than a stub. It is written nowhere else in this file, and should not be.
+     */
+    describe('should not release the connection when the cancel is taken out', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 1024,
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 4096,
+          },
+        },
+      ]
+
+      test.each(cases)('maximumReadByteSize: $factoryParams.maximumReadByteSize', async ({
+        factoryParams,
+      }) => {
+        const releasedSockets = []
+        const fetchedResponses = []
+
+        const oversizeServer = http.createServer((request, response) => {
+          response.writeHead(200, {
+            'content-type': 'image/jpeg',
+            'content-length': String(LEAKY_RESPONSE_BODY_BYTE_SIZE),
+          })
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x67))
+        })
+
+        oversizeServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const oversizeSocketReleased = new Promise(resolve => {
+          oversizeServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          oversizeServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        client.cancelUnreadResponseBody = async () => null
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${oversizeServer.address().port}/photos/canary.jpg`,
+        })
+
+        await Promise.race([
+          oversizeSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        oversizeServer.closeAllConnections()
+        oversizeServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_UNREADABLE')
+        expect(fetchedResponses)
+          .toHaveLength(1)
+        expect(releasedSockets)
+          .toHaveLength(0)
       })
     })
   })
@@ -3263,10 +3692,16 @@ describe('MediaFetchClient', () => {
      * The downgrade refused end to end, and the hop it would have gone to never asked for.
      *
      * An allow-list entry cannot say "this host over TLS only", so a listed host answering `302`
-     * to plaintext on a listed host passed every check this class made before. The network is
-     * stubbed here rather than real, because the case needs a hop arriving over TLS and a loopback
-     * server has no certificate this suite could stand up. What is asserted is the URLs the fetch
-     * function was handed: the first and no other.
+     * to plaintext on a listed host passed every check this class made before. What is asserted
+     * here is the URLs the fetch function was handed: the first and no other.
+     *
+     * **This describe covers the refusal and not the disposal, and the stubbed `Response` is why
+     * it cannot cover both.** It is built on a `null` body, so its `body` is `null`, so
+     * `#cancelUnreadResponseBody()`
+     * returns at its own guard and the cancel this branch owes is never reached - take the cancel
+     * out of the branch and this describe stays green. The disposal has a describe of its own over
+     * a real socket, above this one, which reaches the branch by handing the client an `https:`
+     * URL and rewriting the scheme inside the fetch function.
      */
     describe('should refuse a redirect that would move the fetch off https', () => {
       const cases = [
@@ -3726,6 +4161,137 @@ describe('MediaFetchClient', () => {
           .toBeNull()
         expect(canceledReaders)
           .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#cancelBoundedStreamRead()', () => {
+    /*
+     * A cancel that raises, answered rather than raised.
+     *
+     * Per the Streams specification, `cancel()` on a stream that is already errored rejects with
+     * the error the stream stored - so a host resetting the connection in the same tick the bound
+     * is hit reaches this. Before the guard, that rejection left this method, was caught by
+     * `#readResponseBytes()` and written as a log line, which is the one thing the class comment
+     * says a refusal never does. This describe is the method's own answer; the one below it is
+     * where the line is asserted absent, and that one is the discriminating half.
+     */
+    describe('should answer nothing readable when the cancel raised', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 8,
+          },
+          mockCancelFailureMessage: 'terminated',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 1024,
+          },
+          mockCancelFailureMessage: 'the stream is already errored',
+        },
+      ]
+
+      test.each(cases)('mockCancelFailureMessage: $mockCancelFailureMessage', async ({
+        factoryParams,
+        mockCancelFailureMessage,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.cancelBoundedStreamRead({
+          reader: {
+            read: async () => ({
+              done: true,
+            }),
+            cancel: async () => {
+              throw new TypeError(mockCancelFailureMessage)
+            },
+          },
+        })
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#readResponseBytes()', () => {
+    /*
+     * The line a rejecting cancel used to write, asserted absent.
+     *
+     * `#cancelBoundedStreamRead()` answering null is not the whole of the fix, and on its own it
+     * is not even the observable one: the unguarded method answered null here too, by way of
+     * `#readResponseBytes()`'s own catch. What the audit found was the line that catch wrote, so
+     * the only way to see the difference is to watch the logger.
+     *
+     * The body is a real `ReadableStream` whose `cancel()` raises - which is what the Streams
+     * specification says an already-errored stream does - driven one chunk past the byte bound.
+     * Against the unguarded method the same case answers null and writes
+     * `MediaFetchClient MEDIA_UNREADABLE: TypeError`; against this one it answers null and writes
+     * nothing. So the null is not the discriminator and the empty log is.
+     *
+     * The logger is stubbed rather than left real because a line is not observable otherwise - the
+     * client owns a rotating file and writes into it - and because a test should not be writing
+     * into `logs/` to make an assertion.
+     */
+    describe('should write no line when the cancel raised', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 4,
+          },
+          mockResponseBody: 'nine-byte',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 2,
+          },
+          mockResponseBody: 'far more than two bytes of body',
+        },
+      ]
+
+      test.each(cases)('mockResponseBody: $mockResponseBody', async ({
+        factoryParams,
+        mockResponseBody,
+      }) => {
+        const loggedLines = []
+
+        jest.spyOn(MediaFetchClient, 'mentsuLogger', 'get')
+          .mockReturnValue(/** @type {*} */ ({
+            error: line => loggedLines.push(line),
+          }))
+
+        const bodyStream = new ReadableStream({
+          start (controller) {
+            controller.enqueue(Buffer.from(mockResponseBody))
+          },
+          cancel () {
+            throw new TypeError('terminated')
+          },
+        })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.readResponseBytes({
+          response: new Response(bodyStream),
+        })
+
+        expect(actual)
+          .toBeNull()
+        expect(loggedLines)
+          .toHaveLength(0)
       })
     })
   })

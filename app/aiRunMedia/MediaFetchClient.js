@@ -109,8 +109,10 @@ const DEFAULT_MAXIMUM_READ_CHUNK_COUNT = 65536
 /*
  * The scheme a hop may not be moved off.
  *
- * A redirect arriving on this one may only go on over this one - see the class comment on why a
- * downgrade to plaintext is refused, and on what a chain that began on `http:` is entitled to.
+ * A redirect arriving on this one may only go on over this one. The scheme that is read is the
+ * one the hop itself arrived on, never the one the chain's first URL carried - see the class
+ * comment on why a downgrade to plaintext is refused, and on what that per-hop reading does to a
+ * chain that began on `http:` and climbed.
  */
 const SECURE_URL_PROTOCOL = 'https:'
 
@@ -188,11 +190,24 @@ const mentsuLogger = MentsuLogger.create({
  * `http://` on a listed host would otherwise be followed - which hands the caller who controls the
  * object's redirect metadata a way to move a photograph onto plaintext, where a network between
  * here and the host reads it and writes over it. So a hop that arrived on `https:` may only go on
- * over `https:`. A first URL that is already `http:` is untouched and its chain stays plaintext
- * throughout: the key is what decides which hosts exist, and development fetches over plaintext by
- * design. What the refusal costs is a deployment whose listed host really does redirect from TLS
- * to plaintext - that one now fails under `MEDIA_FETCH_FAILED` with nothing in a log naming the
- * scheme, for the same reason every other refusal here writes no line.
+ * over `https:`.
+ *
+ * **The scheme read is the hop's own, and never the one the chain began on.** That is narrower
+ * than "a chain that began on `http:` stays plaintext throughout", and it is what the code does:
+ * `#downgradesTransportSecurity()` is handed the two URLs of one hop and can see nothing else. A
+ * first URL that is already `http:` is held to nothing, because that hop arrived with no
+ * transport to lose; but a chain that began on `http:`, was sent on to `https:` and is then sent
+ * back down to `http:` is refused at that third hop, exactly as an all-TLS chain would be.
+ * Reading the chain's origin instead would be the weaker of the two - it would let a caller open a
+ * chain on plaintext and spend that as a licence to strip TLS off every hop after it - so the
+ * per-hop reading is the deliberate half of the choice.
+ *
+ * What the refusal costs is two deployments rather than one: a listed host that really does
+ * redirect from TLS to plaintext, and a listed host whose chain climbs to TLS and comes back down.
+ * Both now fail under `MEDIA_FETCH_FAILED` with nothing in a log naming the scheme, for the same
+ * reason every other refusal here writes no line - and an operator debugging the second of them
+ * has no reason to suspect the scheme at all, which is what the silence costs and is paid
+ * knowingly.
  *
  * **Every response this class decides not to read is disposed of before it is let go.** A `3xx`
  * arrives with a body like any other response, and asking for the hop by hand is what made that
@@ -203,9 +218,14 @@ const mentsuLogger = MentsuLogger.create({
  * from is theirs. So it is cancelled on every branch that leaves a response behind: a hop that is
  * followed, a chain out of hops, a hop the list refuses, a hop that would downgrade the transport,
  * a status the server answered with, and a size declared past the bound. That is disposal and not
- * tidiness - the file descriptor does not come back without it - and it is now a duty of every
- * branch anybody adds to `#fetchMedium()` or `#sendFetchRequestHop()` after this, which nothing but
- * this paragraph enforces.
+ * tidiness - the file descriptor does not come back without it - and it is a duty of every branch
+ * anybody adds to `#fetchMedium()` or `#sendFetchRequestHop()` after this.
+ *
+ * All six of those branches have a describe of their own that drives the branch over a loopback
+ * socket and watches the server's connection close, so taking the cancel out of any one of them
+ * is red rather than green. What has no guard is a *seventh*: a branch added later that answers
+ * away from a response without cancelling it leaks exactly as these six did, and nothing but this
+ * paragraph will say so until somebody writes its describe.
  *
  * **The host is the parsed URL's own `hostname`, never a piece of the text.** A URL may carry
  * credentials before its host (`https://files.client.example@somewhere.else/photo.jpg`), and the
@@ -217,7 +237,8 @@ const mentsuLogger = MentsuLogger.create({
  * fetched at all - a refused host, a refused or exhausted redirect, a URL that is no URL, a
  * connection that failed or timed out, a status the server answered with. `MEDIA_UNREADABLE` is a
  * file that was fetched and that this service has nothing readable from - a body that threw while
- * being read, one of zero bytes, and one this service stopped reading at the bound below. The
+ * being read, one of zero bytes, one whose declared size was past the byte cap before a byte of it
+ * was read, and one this service stopped reading at either of the two bounds below. The
  * fourth acceptance criterion of section 18 asks for exactly that distinction, and it is drawn here
  * because this is the only place that can see which of the two happened.
  *
@@ -274,10 +295,11 @@ const mentsuLogger = MentsuLogger.create({
  * resolves that way is refused only if the name itself is off the list, never by what it resolves
  * to. Both are properties of the key's value, which is why the key is a deployment decision.
  *
- * The scheme is no longer one of them, and the paragraph above says exactly how far that goes: a
- * chain is refused for being moved off `https:` and never for having begun off it, so a key
- * listing a host reachable over plaintext still fetches over plaintext from end to end, and what
- * made that choice is the key.
+ * The scheme is no longer one of them, and the paragraph above says exactly how far that goes: it
+ * is the hop that is asked. A key listing a host reachable over plaintext fetches that host over
+ * plaintext, and goes on doing so for as long as the chain stays there; a hop the chain has
+ * already climbed to `https:` may not be walked back down. What stays open is the first hop
+ * itself - nothing here refuses a plaintext first URL - and what made that choice is the key.
  *
  * The declared media type is the server's claim and is carried as one. Nothing here reads the first
  * bytes of the file to see whether they agree with it, so a body declared `image/jpeg` that is an
@@ -286,11 +308,19 @@ const mentsuLogger = MentsuLogger.create({
  * files this service refuses - a decision for the spec rather than for this class - and this says
  * plainly that it has not been made.
  *
- * A refused hop, a size declared past the cap and a body abandoned at it write no line - the same
- * as the refused host above them, which has never written one either. None of the four is an
- * exception with a class to name, and the failure reason the caller records is the evidence they
- * leave; a line telling one of them from another would need something about the URL in it to be
- * worth reading, and the media URLs are content.
+ * **A refusal writes no line, and what says so is the rule rather than a list.** There are two
+ * call sites of `#logFailedMediaFetch()` in this class and both sit inside a `catch`: one in
+ * `#sendSingleFetchRequest()`, for a request that raised, and one in `#readResponseBytes()`, for a
+ * body that raised while it was being read. Nothing else in the class writes. So every refusal
+ * this class makes by looking at what arrived and deciding against it is silent, and a branch
+ * added later is silent too unless it raises - which is a property a reader checks from two call
+ * sites rather than a list anybody has to keep up to date. The refusals that are silent today,
+ * named so that the rule can be read against something: a host off the list, a hop off it, a hop
+ * that would downgrade the transport, a chain out of hops, a `location` that resolves to no URL, a
+ * status the server answered with, a size declared past the cap, a body abandoned at either bound,
+ * and a body of zero bytes. None of them is an exception with a class to name, and the failure
+ * reason the caller records is the evidence they leave; a line telling one of them from another
+ * would need something about the URL in it to be worth reading, and the media URLs are content.
  */
 export default class MediaFetchClient {
   /**
@@ -578,8 +608,16 @@ export default class MediaFetchClient {
    * **The response this answers with carries a body nobody has read, and disposing of it is the
    * caller's.** Every response left behind on the way here has been cancelled already; the one
    * handed back has not, and cannot be - reading it is the point of asking. A caller that answers
-   * away from it without reading it must cancel it, which is what `#fetchMedium()` does on each of
-   * its own refusals.
+   * away from it must leave the body disposed of, and cancelling it is one of the two ways to do
+   * that - having read it out is the other.
+   *
+   * `#fetchMedium()` uses both, and which of the two is not the same on all three of its own
+   * refusals. The status refusal and the declared-size refusal cancel, through
+   * `#abandonFetchedResponse()`. The third reads first: by the time `#hasReadableBytes()` answers
+   * no, `#readResponseBytes()` has already read the body to its end, cancelled its reader at a
+   * bound, left it errored by a read that raised, or found no body there to dispose of - so that
+   * branch cancels nothing and has nothing left to cancel. A fourth refusal added between the
+   * fetch and the read would have neither behind it and would have to cancel for itself.
    *
    * @param {{
    *   url: string
@@ -605,9 +643,11 @@ export default class MediaFetchClient {
    *
    * **This is where the allow-list is asked of a hop that is not the first.** The check runs before
    * the hop is sent, exactly as it does for the caller's own URL, so a host off the list is refused
-   * with nothing fetched from it. Three things end the chain with nothing: a hop the list refuses,
-   * a hop that would move the fetch off `https:`, and a chain that has used up its hops. All three
-   * are a file that could not be fetched.
+   * with nothing fetched from it. Three things this method decides end the chain with nothing: a
+   * hop the list refuses, a hop that would move the fetch off `https:`, and a chain that has used
+   * up its hops. A fourth ends it without this method deciding anything - a request that failed,
+   * which `#sendSingleFetchRequest()` has already answered null for. All four are a file that
+   * could not be fetched, and only the three decided here leave a `3xx` to dispose of.
    *
    * **The `3xx` is disposed of on every one of those branches and on the one that recurses.** Its
    * body was never read, and a body neither read nor cancelled holds the connection it arrived on
@@ -784,9 +824,13 @@ export default class MediaFetchClient {
    *
    * The allow-list is hostnames, so nothing in the key can say "this host over TLS only", and a
    * listed host answering `302` to plaintext on a listed host would pass every other check made
-   * here. A hop that arrived over TLS may therefore only go on over TLS. A hop that arrived over
-   * plaintext is not held to anything, because a chain that began there was never protecting
-   * anything to begin with and that was the key's decision.
+   * here. A hop that arrived over TLS may therefore only go on over TLS.
+   *
+   * **It is the hop's own scheme that is read, never the scheme the chain began on.** This method
+   * is handed the two URLs of one hop and can see nothing else, and that is the whole of the rule.
+   * A hop that arrived over plaintext is held to nothing, because that hop had no transport to
+   * lose; a hop that arrived over TLS is held to it whatever the chain looked like earlier, so a
+   * chain that began on `http:` and was sent on to `https:` may not be sent back down.
    *
    * @param {{
    *   url: string
@@ -1101,6 +1145,20 @@ export default class MediaFetchClient {
    * Cancelling the reader is what releases the socket. Without it the rest of an over-long body
    * keeps arriving into a stream nobody reads, which is the cost this bound exists to avoid.
    *
+   * **A cancel that raises is answered rather than raised, which the sibling
+   * `#cancelUnreadResponseBody()` already did and this did not.** Per the Streams specification,
+   * `cancel()` on a stream that is already errored rejects with the error the stream stored - so a
+   * host resetting the connection in the same tick the bound is hit raises here, and, left to
+   * propagate, that rejection was
+   * caught by `#readResponseBytes()` and written as a log line, which is the one thing the class
+   * comment says a refusal never does. The two disposal sites now agree, so the shape a later
+   * branch copies is the same whichever of them it copies.
+   *
+   * What swallowing gives up is one line naming the class of the error a rejecting cancel carried.
+   * It is worth little: a cancel rejects only on a body already read, already cancelled or already
+   * errored, each of which is a body holding nothing, so the failure says the work was done rather
+   * than that it failed. The outcome is `MEDIA_UNREADABLE` either way.
+   *
    * @param {{
    *   reader: ReadableStreamDefaultReader<Uint8Array>
    * }} params - Parameters.
@@ -1110,9 +1168,13 @@ export default class MediaFetchClient {
   async cancelBoundedStreamRead ({
     reader,
   }) {
-    await reader.cancel()
+    try {
+      await reader.cancel()
 
-    return null
+      return null
+    } catch (error) {
+      return null
+    }
   }
 
   /**

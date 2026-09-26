@@ -38,11 +38,35 @@ import AiRunKeyInspector from '../../../../app/aiRun/AiRunKeyInspector.js'
  * assertion ends the test body where it stands, so the only run whose leavings would survive is
  * the run that failed - and that is the one run whose leavings are worth reading, because the
  * directory and its mode are the evidence of what went wrong. The machine's temporary directory is
- * the one place a host is expected to clear, and the paths are this feature's own run ids, so
- * nothing here can collide with anything but itself.
+ * the one place a host is expected to clear.
+ *
+ * **What "nothing here can collide" is true of, stated narrowly.** The run ids are this feature's
+ * own, so nothing this file writes lands on another feature's path. That much was once written as
+ * though it settled the question, and it does not settle it: a POSIX `os.tmpdir()` is shared by
+ * every account on the host, and a directory created under it carries the process umask rather
+ * than a mode of its own. So on a shared build host the second account to run this file meets its
+ * predecessor's leavings rather than its own - `EACCES` from a `mkdir` inside a root somebody
+ * else owns, or this class's own refusal of a workspace owned by another account, which is the
+ * class working correctly and failing the run anyway. The root below is therefore namespaced by
+ * the uid, which is the key both of those turn on.
+ *
+ * What that still does not cover is one account running this file twice at once: each describe's
+ * arrange clears its own path, so two such runs race, and nothing here makes that safe.
  */
 
-const TEST_WORKSPACE_ROOT_PATH = path.join(os.tmpdir(), 'tsdg-ai-media-workspace-test')
+/*
+ * The account the root is namespaced to, because the directory above it is not namespaced at all.
+ *
+ * A POSIX `os.tmpdir()` is one directory for the whole host; Windows already gives each account
+ * its own and has no uid to name, so there the key is the platform's name and carries nothing.
+ */
+const TEST_WORKSPACE_OWNER_KEY = process.getuid?.()
+  ?? 'windows'
+
+const TEST_WORKSPACE_ROOT_PATH = path.join(
+  os.tmpdir(),
+  `tsdg-ai-media-workspace-test-${TEST_WORKSPACE_OWNER_KEY}`
+)
 
 /*
  * The root is created by each case that needs one, rather than by the class under test.

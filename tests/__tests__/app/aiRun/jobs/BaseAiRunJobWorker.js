@@ -1,6 +1,7 @@
 import fsPromises from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import timersPromises from 'node:timers/promises'
 
 import {
   BaseJobWorker,
@@ -19,6 +20,10 @@ import BaseAiRunJobManifest from '../../../../../app/aiRun/jobs/BaseAiRunJobMani
 import AiRunStatusRecorder from '../../../../../app/aiRun/AiRunStatusRecorder.js'
 
 import AiRunMediaWorkspace from '../../../../../app/aiRunMedia/AiRunMediaWorkspace.js'
+
+import AiRunTerminalCallbackRaiser from '../../../../../app/aiRunCallback/AiRunTerminalCallbackRaiser.js'
+
+import DeliverRunCallbackJobDispatcher from '../../../../../app/jobs/deliver-run-callback/DeliverRunCallbackJobDispatcher.js'
 
 describe('BaseAiRunJobWorker', () => {
   describe('super class', () => {
@@ -569,6 +574,7 @@ describe('BaseAiRunJobWorker', () => {
             },
             context: {},
             parcel: {},
+            // signal: nothing reads it here — the member throws before it could be read
           },
         },
         {
@@ -578,6 +584,7 @@ describe('BaseAiRunJobWorker', () => {
             },
             context: {},
             parcel: {},
+            // signal: nothing reads it here — the member throws before it could be read
           },
         },
       ]
@@ -694,11 +701,76 @@ describe('BaseAiRunJobWorker', () => {
         expected,
       }) => {
         const worker = new BaseAiRunJobWorker(factoryParams)
+        const timeLimitAlarmTerminator = new AbortController()
 
-        const actual = await worker.waitOutRunTimeLimit()
+        const actual = await worker.waitOutRunTimeLimit({
+          signal: timeLimitAlarmTerminator.signal,
+        })
 
         expect(actual)
           .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#waitOutRunTimeLimit()', () => {
+    /*
+     * The alarm is cancellable, and this is what cancelling it does.
+     *
+     * A limit nobody is waiting on any more must not fire, because firing is what raises the
+     * work's own signal — a work that answered in time would otherwise be told its run was over,
+     * minutes later. Rejecting rather than resolving is how the cancellation is visible: the race
+     * has a handler on this promise already, so the rejection is answered there.
+     */
+    describe('when the alarm is cancelled', () => {
+      const cases = [
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+          expected: 'The operation was aborted',
+        },
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'beta-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 600000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+          expected: 'The operation was aborted',
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', async ({
+        factoryParams,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker(factoryParams)
+        const timeLimitAlarmTerminator = new AbortController()
+        timeLimitAlarmTerminator.abort()
+
+        const actual = () => worker.waitOutRunTimeLimit({
+          signal: timeLimitAlarmTerminator.signal,
+        })
+
+        await expect(actual)
+          .rejects
+          .toThrow(expected)
       })
     })
   })
@@ -755,11 +827,214 @@ describe('BaseAiRunJobWorker', () => {
         expected,
       }) => {
         const worker = new BaseAiRunJobWorker(factoryParams)
+        const aiRunWorkTerminator = new AbortController()
+        const timeLimitAlarmTerminator = new AbortController()
 
-        const actual = await worker.buildTimeLimitOutcome()
+        const actual = await worker.buildTimeLimitOutcome({
+          aiRunWorkTerminator,
+          timeLimitAlarmSignal: timeLimitAlarmTerminator.signal,
+        })
 
         expect(actual)
           .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildTimeLimitOutcome()', () => {
+    /*
+     * The half of the limit that is new: the work is told, and it is told before the outcome is
+     * answered — the caller writes the terminal state out of what this returns, so raising the
+     * signal here puts the work's notice ahead of the row being settled rather than behind it.
+     *
+     * What it buys is that a work can stop. It cannot make one stop; a work that never reads the
+     * signal runs on exactly as it did before, holding its slot.
+     */
+    describe('should raise the signal the work was handed', () => {
+      const cases = [
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 1,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'beta-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 4,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', async ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker(factoryParams)
+        const aiRunWorkTerminator = new AbortController()
+        const timeLimitAlarmTerminator = new AbortController()
+
+        await worker.buildTimeLimitOutcome({
+          aiRunWorkTerminator,
+          timeLimitAlarmSignal: timeLimitAlarmTerminator.signal,
+        })
+
+        expect(aiRunWorkTerminator.signal.aborted)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#abortAiRunWork()', () => {
+    /*
+     * The one place this service raises the signal a run's work watches. It is a member of its own
+     * so that a reader asking what can abort the work is answered by this method and its single
+     * caller, and so the raising can be stated without waiting out a limit.
+     */
+    describe('should raise the signal of the controller it is given', () => {
+      const cases = [
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'beta-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 600000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker(factoryParams)
+        const aiRunWorkTerminator = new AbortController()
+
+        worker.abortAiRunWork({
+          aiRunWorkTerminator,
+        })
+
+        expect(aiRunWorkTerminator.signal.aborted)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAbortController()', () => {
+    /*
+     * Built per race and never held as a property: a worker is one long-lived instance per queue,
+     * so a signal raised for one delivery's run must not be the signal another delivery's work is
+     * watching. The second assertion is what says so.
+     */
+    describe('should create a controller of its own each time', () => {
+      const cases = [
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'beta-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 600000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker(factoryParams)
+        const alreadyCreatedAbortController = worker.createAbortController()
+
+        const actual = worker.createAbortController()
+
+        expect(actual)
+          .toBeInstanceOf(AbortController)
+        expect(actual)
+          .not
+          .toBe(alreadyCreatedAbortController) // a controller of its own, not a shared one
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.get:AbortControllerCtor', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const expected = AbortController
+
+        const actual = BaseAiRunJobWorker.AbortControllerCtor
+
+        expect(actual)
+          .toBe(expected) // same reference
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.get:timersPromises', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const expected = timersPromises
+
+        const actual = BaseAiRunJobWorker.timersPromises
+
+        expect(actual)
+          .toBe(expected) // same reference
       })
     })
   })
@@ -905,6 +1180,83 @@ describe('BaseAiRunJobWorker', () => {
 })
 
 describe('BaseAiRunJobWorker', () => {
+  describe('#buildAiRunWorkOutcome()', () => {
+    /*
+     * The signal is passed through untouched — it is raised by the other side of the race and
+     * never here.
+     *
+     * The controller is raised before the call, and that is what makes the assertion say
+     * something: a method that built a signal of its own instead of forwarding the one it was
+     * given would hand the work an unraised one, and this would fail.
+     */
+    describe('should hand the work the signal it was given', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10300071,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockResultBody: '{"brand":"alpha"}',
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10300072,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockResultBody: null,
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        mockResultBody,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue(mockResultBody)
+        const aiRunWorkTerminator = new AbortController()
+        aiRunWorkTerminator.abort()
+        const args = {
+          body: params.body,
+          context: params.context,
+          parcel: params.parcel,
+          signal: aiRunWorkTerminator.signal,
+        }
+        const expected = {
+          body: params.body,
+          context: params.context,
+          parcel: params.parcel,
+          signal: expect.objectContaining({
+            aborted: true,
+          }),
+        }
+
+        await worker.buildAiRunWorkOutcome(args)
+
+        expect(executeAiRunWorkSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
   describe('#raceAiRunWorkAgainstTimeLimit()', () => {
     describe('should answer the work outcome when the work finishes inside the limit', () => {
       const cases = [
@@ -1031,6 +1383,320 @@ describe('BaseAiRunJobWorker', () => {
 
         expect(actual)
           .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#raceAiRunWorkAgainstTimeLimit()', () => {
+    /*
+     * A work that answered inside its limit is never told its run is over.
+     *
+     * `aborted` is read off the signal at the moment of the assertion, which is after the race has
+     * answered — so this states both halves at once: unraised while the work ran, and unraised
+     * afterwards. Delete the cancellation of the alarm and this still passes, because the limit
+     * here is thirty seconds; what fails then is the describe below that asserts the alarm.
+     */
+    describe('when the work answers first', () => {
+      describe('should leave the signal the work was handed unraised', () => {
+        const cases = [
+          {
+            params: {
+              body: {
+                aiRunId: 10300073,
+              },
+              context: {},
+              parcel: {},
+            },
+            mockResultBody: '{"brand":"alpha"}',
+            expected: {
+              body: {
+                aiRunId: 10300073,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: false,
+              }),
+            },
+          },
+          {
+            params: {
+              body: {
+                aiRunId: 10300074,
+              },
+              context: {},
+              parcel: {},
+            },
+            mockResultBody: null,
+            expected: {
+              body: {
+                aiRunId: 10300074,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: false,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+          params,
+          mockResultBody,
+          expected,
+        }) => {
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 30000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+            .mockResolvedValue(mockResultBody)
+
+          await worker.raceAiRunWorkAgainstTimeLimit(params)
+
+          expect(executeAiRunWorkSpy)
+            .toHaveBeenCalledWith(expected)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#raceAiRunWorkAgainstTimeLimit()', () => {
+    /*
+     * The channel the third use case asks for: a run that went past its limit tells the work so.
+     *
+     * The work here never settles, which is the shape the limit exists for. What this states is
+     * that the work was handed a raised signal — not that it stopped, which nothing in this class
+     * can make it do.
+     */
+    describe('when the time limit answers first', () => {
+      describe('should raise the signal the work was handed', () => {
+        const cases = [
+          {
+            params: {
+              body: {
+                aiRunId: 10300075,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              body: {
+                aiRunId: 10300075,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+          {
+            params: {
+              body: {
+                aiRunId: 10300076,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              body: {
+                aiRunId: 10300076,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+          params,
+          expected,
+        }) => {
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 1,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+            .mockReturnValue(new Promise(() => {
+              // A run that holds a worker indefinitely: nothing here ever settles it.
+            }))
+
+          await worker.raceAiRunWorkAgainstTimeLimit(params)
+
+          expect(executeAiRunWorkSpy)
+            .toHaveBeenCalledWith(expected)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#raceAiRunWorkAgainstTimeLimit()', () => {
+    /*
+     * The timer the race leaves behind, cancelled on the way out.
+     *
+     * Thirty seconds of a limit nobody is waiting on is not merely a pending entry: when it fires
+     * it raises the work's own signal, so a work that answered in time would be told its run was
+     * over long after it ended well. What says the cancellation happened is the signal the wait was
+     * handed — the spy calls through, so the alarm here is the real one, and `aborted` is read
+     * after the call returned and therefore after the `finally` has run. Delete that `finally` and
+     * this is the assertion that fails.
+     */
+    describe('when the work answers first', () => {
+      describe('should cancel the time-limit alarm it raced', () => {
+        const cases = [
+          {
+            params: {
+              body: {
+                aiRunId: 10300077,
+              },
+              context: {},
+              parcel: {},
+            },
+            mockResultBody: '{"brand":"alpha"}',
+            expected: {
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+          {
+            params: {
+              body: {
+                aiRunId: 10300078,
+              },
+              context: {},
+              parcel: {},
+            },
+            mockResultBody: null,
+            expected: {
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+          params,
+          mockResultBody,
+          expected,
+        }) => {
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 30000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'executeAiRunWork')
+            .mockResolvedValue(mockResultBody)
+          const waitOutRunTimeLimitSpy = jest.spyOn(worker, 'waitOutRunTimeLimit')
+
+          await worker.raceAiRunWorkAgainstTimeLimit(params)
+
+          expect(waitOutRunTimeLimitSpy)
+            .toHaveBeenCalledWith(expected)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#raceAiRunWorkAgainstTimeLimit()', () => {
+    /*
+     * The same cancellation on the other path. The alarm has already fired by then, so nothing is
+     * left of it either way, and the two describes together say that no path out of this method
+     * leaves a timer behind.
+     */
+    describe('when the time limit answers first', () => {
+      describe('should cancel the time-limit alarm it raced', () => {
+        const cases = [
+          {
+            params: {
+              body: {
+                aiRunId: 10300079,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+          {
+            params: {
+              body: {
+                aiRunId: 10300080,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+          params,
+          expected,
+        }) => {
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 1,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'executeAiRunWork')
+            .mockReturnValue(new Promise(() => {
+              // A run that holds a worker indefinitely: nothing here ever settles it.
+            }))
+          const waitOutRunTimeLimitSpy = jest.spyOn(worker, 'waitOutRunTimeLimit')
+
+          await worker.raceAiRunWorkAgainstTimeLimit(params)
+
+          expect(waitOutRunTimeLimitSpy)
+            .toHaveBeenCalledWith(expected)
+        })
       })
     })
   })
@@ -2519,6 +3185,278 @@ describe('BaseAiRunJobWorker', () => {
 
         const actual = worker.onWorkerError(params)
 
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.collectAdditionalDispatcherCtorHash()', () => {
+    /*
+     * Section 12's first acceptance criterion starts here. The delivery path exists in full, and
+     * what the framework needs to reach it is this declaration: it builds one dispatcher per key at
+     * boot and keeps its connection open, so the key below is what a settled run's callback is
+     * dispatched through.
+     */
+    test('should declare the dispatcher a terminal callback is raised through', () => {
+      const expected = {
+        aiRunTerminalCallback: DeliverRunCallbackJobDispatcher,
+      }
+
+      const actual = BaseAiRunJobWorker.collectAdditionalDispatcherCtorHash()
+
+      expect(actual)
+        .toEqual(expected)
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.get:AiRunTerminalCallbackRaiserCtor', () => {
+    test('should be the raiser of a settled run terminal callback', () => {
+      const expected = AiRunTerminalCallbackRaiser
+
+      const actual = BaseAiRunJobWorker.AiRunTerminalCallbackRaiserCtor
+
+      expect(actual)
+        .toBe(expected) // same reference
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAiRunTerminalCallbackRaiser()', () => {
+    describe('should create the raiser a settled run is called back through', () => {
+      const cases = [
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {
+              aiRunTerminalCallback: {
+                queueName: 'alpha-deliver-run-callback-queue',
+              },
+            },
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'beta-ai-run-queue',
+            }),
+            dispatcherHash: {
+              aiRunTerminalCallback: {
+                queueName: 'beta-deliver-run-callback-queue',
+              },
+            },
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+      ]
+
+      test.each(cases)('queueName: $factoryParams.dispatcherHash.aiRunTerminalCallback.queueName', ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker(factoryParams)
+
+        const actual = worker.createAiRunTerminalCallbackRaiser()
+
+        expect(actual)
+          .toBeInstanceOf(AiRunTerminalCallbackRaiser)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAiRunTerminalCallbackRaiser()', () => {
+    /*
+     * The dispatcher comes out of the hash the framework built at boot, under the one key the
+     * declaration put it there under. A hash carrying another dispatcher beside it is what makes
+     * the key load-bearing: taking the wrong one would dispatch a terminal callback onto a queue
+     * whose worker knows nothing about runs.
+     */
+    describe('should hand the raiser the dispatcher the hash carries', () => {
+      const cases = [
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {
+              buddy: {
+                queueName: 'alpha-buddy-queue',
+              },
+              aiRunTerminalCallback: {
+                queueName: 'alpha-deliver-run-callback-queue',
+              },
+            },
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+        {
+          factoryParams: {
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'beta-ai-run-queue',
+            }),
+            dispatcherHash: {
+              buddy: {
+                queueName: 'beta-buddy-queue',
+              },
+              aiRunTerminalCallback: {
+                queueName: 'beta-deliver-run-callback-queue',
+              },
+            },
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          },
+        },
+      ]
+
+      test.each(cases)('queueName: $factoryParams.dispatcherHash.aiRunTerminalCallback.queueName', ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker(factoryParams)
+
+        const actual = worker.createAiRunTerminalCallbackRaiser()
+
+        expect(actual)
+          .toHaveProperty('jobDispatcher', factoryParams.dispatcherHash.aiRunTerminalCallback)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#raiseAiRunTerminalCallback()', () => {
+    /*
+     * Section 12's first acceptance criterion, at the one member that calls the client back: a run
+     * this delivery settled produces one terminal callback, naming that run and nothing else.
+     */
+    describe('should raise the callback of the run this delivery settled', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10570001,
+            hasSettled: true,
+          },
+          expected: {
+            aiRunId: 10570001,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10570002,
+            hasSettled: true,
+          },
+          expected: {
+            aiRunId: 10570002,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        await worker.raiseAiRunTerminalCallback(params)
+
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledWith(expected)
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#raiseAiRunTerminalCallback()', () => {
+    /*
+     * The other half of the word "one". The conditional terminal write answered false, so the run
+     * settled between this delivery's claim and its own write and another writer owns it — that
+     * writer called the client back from this same member. A second call here would be the second
+     * callback for one run, which is what the criterion forbids by saying one.
+     */
+    describe('should raise nothing for a run another writer settled', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10570003,
+            hasSettled: false,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10570004,
+            hasSettled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        const actual = await worker.raiseAiRunTerminalCallback(params)
+
+        expect(raiseTerminalCallback)
+          .not
+          .toHaveBeenCalled()
         expect(actual)
           .toBeNull()
       })

@@ -971,6 +971,7 @@ describe('BaseAiRunJobWorker', () => {
             body: expected,
             context: params.context,
             parcel: params.parcel,
+            signal: expect.any(AbortSignal),
           })
       })
     })
@@ -1189,8 +1190,9 @@ describe('BaseAiRunJobWorker', () => {
      * nothing here ever lets the work finish.
      *
      * The limit of that is written on `#executeJob()` itself rather than hidden here: a work still
-     * running can write another copy afterwards and recreate the directory, and there is no signal
-     * that stops it.
+     * running can write another copy afterwards and recreate the directory. What it is handed now
+     * is a raised signal saying so — asserted in its own describes below — and a work that does
+     * not read one recreates the directory exactly as before.
      */
     describe('should delete the temporary copies when the run went past its time limit', () => {
       const cases = [
@@ -1716,6 +1718,704 @@ describe('BaseAiRunJobWorker', () => {
             resultBody: '{"brand":"alpha"}',
             finishedAt: expect.any(Date),
           })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#settleAiRun()', () => {
+    /*
+     * The third use case's own words, at the place the run is settled: a run that has been going
+     * too long stops by itself instead of holding a worker indefinitely. The work here never
+     * settles, so what can be stated is the half this class owns — the work is told — beside the
+     * half the fourth acceptance criterion already asked for, which is that the row ends as failed
+     * carrying the time-limit reason code. The second assertion is that half, unchanged by the
+     * signal existing at all.
+     *
+     * The other half is not this class's to state and is not asserted here, because it is not
+     * true: nothing can make a work honour the signal. A work that ignores it holds its slot
+     * still, by its own choice.
+     */
+    describe('when the work runs past its limit', () => {
+      describe('should raise the work signal and still record the time-limit reason code', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10300105,
+              body: {
+                aiRunId: 10300105,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              body: {
+                aiRunId: 10300105,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+          {
+            params: {
+              aiRunId: 10300106,
+              body: {
+                aiRunId: 10300106,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              body: {
+                aiRunId: 10300106,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          expected,
+        }) => {
+          const saveSucceededAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const saveFailedAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 1,
+            aiRunStatusRecorder: {
+              saveSucceededAiRunOnce,
+              saveFailedAiRunOnce,
+            },
+          })
+          const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+            .mockReturnValue(new Promise(() => {
+              // A run that holds a worker indefinitely: nothing here ever settles it.
+            }))
+          const expectedFailedWrite = {
+            aiRunId: params.aiRunId,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            finishedAt: expect.any(Date),
+          }
+
+          await worker.settleAiRun(params)
+
+          expect(executeAiRunWorkSpy)
+            .toHaveBeenCalledWith(expected)
+          expect(saveFailedAiRunOnce)
+            .toHaveBeenCalledWith(expectedFailedWrite)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The whole delivery, on the path where the work answered in time. The signal it was handed is
+     * never raised — `aborted` is read at the moment of the assertion, so this covers the delivery
+     * having ended as well as the work having run — and the terminal state is the work's own
+     * outcome, unchanged by the signal existing at all.
+     */
+    describe('when the work answers inside its limit', () => {
+      describe('should leave the work signal unraised and record what the work settled', () => {
+        const cases = [
+          {
+            params: {
+              body: {
+                aiRunId: 10450213,
+              },
+              context: {},
+              parcel: {},
+            },
+            mockResultBody: '{"brand":"alpha"}',
+            expected: {
+              body: {
+                aiRunId: 10450213,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: false,
+              }),
+            },
+          },
+          {
+            params: {
+              body: {
+                aiRunId: 10450214,
+              },
+              context: {},
+              parcel: {},
+            },
+            mockResultBody: null,
+            expected: {
+              body: {
+                aiRunId: 10450214,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: false,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+          params,
+          mockResultBody,
+          expected,
+        }) => {
+          const saveRunningAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const saveSucceededAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const saveFailedAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 30000,
+            aiRunStatusRecorder: {
+              saveRunningAiRunOnce,
+              saveSucceededAiRunOnce,
+              saveFailedAiRunOnce,
+            },
+          })
+          const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+            .mockResolvedValue(mockResultBody)
+          const expectedSucceededWrite = {
+            aiRunId: params.body.aiRunId,
+            resultBody: mockResultBody,
+            finishedAt: expect.any(Date),
+          }
+
+          await worker.executeJob(params)
+
+          expect(executeAiRunWorkSpy)
+            .toHaveBeenCalledWith(expected)
+          expect(saveSucceededAiRunOnce)
+            .toHaveBeenCalledWith(expectedSucceededWrite)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The same delivery on the other path. The work is told its run is over, and the row it can no
+     * longer reach carries `TIME_LIMIT_EXCEEDED` — the terminal state is what it was before this
+     * signal existed, which is the thing that had to stay true.
+     *
+     * The signal is also what a work is to ask before writing into its workspace: the removal has
+     * already run by the time this delivery answers. Whether a work asks is that work's own, and
+     * the first concrete work is where it will be honoured.
+     */
+    describe('when the run goes past its time limit', () => {
+      describe('should raise the work signal and record the time-limit reason code', () => {
+        const cases = [
+          {
+            params: {
+              body: {
+                aiRunId: 10450215,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              body: {
+                aiRunId: 10450215,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+          {
+            params: {
+              body: {
+                aiRunId: 10450216,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              body: {
+                aiRunId: 10450216,
+              },
+              context: {},
+              parcel: {},
+              signal: expect.objectContaining({
+                aborted: true,
+              }),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+          params,
+          expected,
+        }) => {
+          const saveRunningAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const saveSucceededAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const saveFailedAiRunOnce = jest.fn()
+            .mockResolvedValue(true)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 1,
+            aiRunStatusRecorder: {
+              saveRunningAiRunOnce,
+              saveSucceededAiRunOnce,
+              saveFailedAiRunOnce,
+            },
+          })
+          const executeAiRunWorkSpy = jest.spyOn(worker, 'executeAiRunWork')
+            .mockReturnValue(new Promise(() => {
+              // A run that holds a worker indefinitely: nothing here ever settles it.
+            }))
+          const expectedFailedWrite = {
+            aiRunId: params.body.aiRunId,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            finishedAt: expect.any(Date),
+          }
+
+          await worker.executeJob(params)
+
+          expect(executeAiRunWorkSpy)
+            .toHaveBeenCalledWith(expected)
+          expect(saveFailedAiRunOnce)
+            .toHaveBeenCalledWith(expectedFailedWrite)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * Section 12's first acceptance criterion on the succeeded path: the run reached a terminal
+     * state, so exactly one terminal callback is raised for it, naming that run.
+     *
+     * The raiser is the seam rather than the queue, for the reason the note at the top of this file
+     * gives about the recorder: what is this worker's to get right is that the callback is raised,
+     * once, for the run it settled. What the raiser then does with a dispatcher is its own, and is
+     * tested beside it.
+     */
+    describe('should raise one terminal callback for a run that succeeded', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10560001,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10560001,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10560002,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10560002,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        await worker.executeJob(params)
+
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledWith(expected)
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The same criterion on the failed path. A run whose work threw is terminal exactly as a run
+     * that succeeded is, and the client learns of it the same way — the criterion names succeeded
+     * and failed in one breath.
+     */
+    describe('should raise one terminal callback for a run that failed', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10560011,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10560011,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10560012,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10560012,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockRejectedValue(new Error('the provider refused the call'))
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        await worker.executeJob(params)
+
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledWith(expected)
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A run that lost the race against its own time limit is terminal too — it is recorded failed,
+     * carrying `TIME_LIMIT_EXCEEDED` — so it produces a terminal callback like any other failure.
+     * The work here never settles at all, which is the shape the limit exists for, and the callback
+     * is raised without waiting on it.
+     */
+    describe('should raise one terminal callback for a run that went past its time limit', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10560021,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10560021,
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10560022,
+            },
+            context: {},
+            parcel: {},
+          },
+          expected: {
+            aiRunId: 10560022,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 1,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockReturnValue(new Promise(() => {
+            // A run that holds a worker indefinitely: nothing here ever settles it.
+          }))
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        await worker.executeJob(params)
+
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledWith(expected)
+        expect(raiseTerminalCallback)
+          .toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A re-delivery of a job whose run another writer already settled. The claim is refused, the
+     * work never runs, and no callback is raised — the run is terminal, and the writer that made it
+     * so raised the one callback the criterion asks for. Raising a second here is the failure the
+     * word "one" in that criterion rules out.
+     */
+    describe('should raise no terminal callback when another writer already settled the run', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10560031,
+            },
+            context: {},
+            parcel: {},
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10560032,
+            },
+            context: {},
+            parcel: {},
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(false)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        await worker.executeJob(params)
+
+        expect(raiseTerminalCallback)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The narrower half of the same race: the claim was won, but the run settled before this
+     * delivery's own terminal write reached it, so the write was refused and the result this
+     * delivery computed never reached the row. The writer whose write was accepted is the one that
+     * calls the client back, and this delivery raises nothing.
+     */
+    describe('should raise no terminal callback when another writer won the terminal write', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10560041,
+            },
+            context: {},
+            parcel: {},
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10560042,
+            },
+            context: {},
+            parcel: {},
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+      }) => {
+        const raiseTerminalCallback = jest.fn()
+          .mockResolvedValue(null)
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(false)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(false)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+        jest.spyOn(worker, 'createAiRunTerminalCallbackRaiser')
+          .mockReturnValue({
+            raiseTerminalCallback,
+          })
+
+        await worker.executeJob(params)
+
+        expect(raiseTerminalCallback)
+          .not
+          .toHaveBeenCalled()
       })
     })
   })

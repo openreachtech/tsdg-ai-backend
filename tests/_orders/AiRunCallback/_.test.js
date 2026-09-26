@@ -1,13 +1,21 @@
 /*
  * Imports define the run order for this category; add each new test in its correct position.
  *
- * One file so far, and its position states nothing. `AiRunCallbackDeliveryRecorder` creates every
- * run it hangs an attempt off, in `#run-delivery`'s own id block, and borrows none — so it depends
- * on nothing in this folder having run before it, and leaves nothing another file here would read.
+ * Three files, and their order states one thing: every file here creates the runs it hangs its
+ * attempts off, in `#run-delivery`'s own id block, and borrows none. `ai_run_callback_deliveries`
+ * is UNIQUE on `(AiRunId, AiRunCallbackDeliveryCategoryId, attempt_index)`, so a file writing onto
+ * another's run would be two writers competing for one triple — none of them does, and each id
+ * block below is disjoint: 10530011 upward for the recorder, 10530021 upward for the deliverer,
+ * 10530031 upward for the worker.
  *
- * It writes to `ai_run_callback_deliveries` only, and only against runs of its own, so it changes
- * nothing the development seeder's attempts answer for. The read-only half of the same class sits
- * under `tests/__tests__/` and runs before this folder does, so what it reads back is the fixture
- * as committed either way.
+ * The recorder runs first because it is the member the two files after it record through: a
+ * failure there should read as the recorder's own, not as the orchestration's. The deliverer runs
+ * before the worker for the same reason — the worker is the deliverer plus the queue's attempt
+ * number, so a deliverer that is already green narrows what a worker failure can be.
+ *
+ * None of them touches the development seeder's own attempts, which hang off the seeded runs, so
+ * the read-only halves under `tests/__tests__/` answer for the fixture as committed either way.
  */
 import './AiRunCallbackDeliveryRecorder.js'
+import './AiRunTerminalCallbackDeliverer.js'
+import './DeliverRunCallbackJobWorker.js'
