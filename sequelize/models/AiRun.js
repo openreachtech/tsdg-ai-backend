@@ -24,8 +24,26 @@ const REFUSED_SETTLED_TRANSITION_MESSAGE = 'AiRun refuses a move out of a status
  * model builds for a single unsettled run, and the write is then made under that condition. A
  * refusal naming a rule other than the one it applies would send a reader looking for a defect in
  * the wrong place.
+ *
+ * It said "writing AiRunStatusId" up to the round that found `AiRun.update({ ai_run_status_id: 2 },
+ * { where: { id }, fields: ['ai_run_status_id'], validate: false })` walking a canceled run back to
+ * running: the rule named one of the status's two names while the trigger compared against that
+ * one name, and a caller spelling the other was neither refused nor mentioned by the refusal. It
+ * says "the run status" now, because which of its names a key wears is no longer part of the rule.
  */
-const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.'
+const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.'
+
+/*
+ * The message for a key this model declares no attribute for, refused before any rule about the
+ * status is reached.
+ *
+ * It names no key. The keys of a bulk update's values are whatever text the caller put there, and
+ * the one thing this feature keeps out of a log is a caller's text — the same reason
+ * `#generateEmittedWherePredicate()` answers null rather than raising the compiler's message. What
+ * the refusal gives instead is the rule and the way out of it, and the key is in front of whoever
+ * wrote the call.
+ */
+const REFUSED_UNKNOWN_BULK_FIELD_MESSAGE = 'AiRun.update() is refused when its values name a key this model declares no attribute for. Such a key reaches the SET clause as written, past every guard that asks this model what a key means. Write the attribute names this model declares.'
 
 /**
  * AiRun model
@@ -46,8 +64,29 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * `individualHooks`. `Model.update()` on its own reaches `beforeBulkUpdate` only
  * (`sequelize/lib/model.js`, `update()`: `individualHooks` defaults to false and the per-row hooks
  * live inside that branch), and at that point no row has been read, so nothing there can judge a
- * status against the one it would replace. A bulk update that writes anything but the status still
- * runs — it cannot move a status it does not write.
+ * status against the one it would replace. A bulk update whose every key this model resolves to an
+ * attribute other than the status still runs — it cannot move a status it does not write.
+ *
+ * **Which of the values name the status is asked of the model, not of a string.** A column has two
+ * names here — the attribute `AiRunStatusId` that this model declares and the field
+ * `ai_run_status_id` that the table carries — and Sequelize 6.37.8 does not choose between them
+ * before the bulk hook runs: `Model.update()` hands the hook the caller's own keys and maps
+ * attribute names to column names afterwards, through `Utils.mapValueFieldNames()`, which passes a
+ * key it does not recognise through into the `SET` clause as written. So a trigger comparing those
+ * keys against the literal `'AiRunStatusId'` answered no to
+ * `AiRun.update({ ai_run_status_id: 2 }, { where: { id }, fields: ['ai_run_status_id'],
+ * validate: false })`, and a canceled run reached running with the whole apparatus below unentered.
+ * `fields` is what keeps such a key in `options.fields`, and `validate: false` is what keeps it in
+ * the values at all — with validation on, the build drops it and the update degrades to nothing.
+ * Every written key is therefore put to `rawAttributes`, which knows an attribute by its own name
+ * and by its `field`, and what is compared is the attribute the key resolves to.
+ *
+ * **And a key that resolves to no attribute is refused outright, before the status is asked
+ * about.** Such a key is the hazard one column wide, seen whole: whatever it spells reaches the
+ * statement unexamined, so a guard that let it past would be guarding the names it knows against
+ * a caller free to use any other. What it costs is a caller writing a column name for a field that
+ * is not the status — refused now where Sequelize would have quietly dropped it, or passed it to
+ * the database to reject. That is the safe side to be wrong on, and the refusal names the way out.
  *
  * **A bulk update that writes the status is refused unless its `where` is one this model can
  * prove, and reading the caller's condition object is not how it is proved.** What the rule
@@ -114,6 +153,22 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * Nothing in this application takes any of those paths against `ai_runs` today, and each is a
  * deliberate act by a caller rather than something reached by accident.
  *
+ * **A third was added by the round that found the column-name write, and it is the one the list
+ * had no entry for: `beforeUpdate` cannot see a status written under the field name.** Under
+ * `Model.update({ …, individualHooks: true })` Sequelize copies the caller's values into each
+ * instance's `dataValues` wholesale, so the instance handed to `beforeUpdate` carried
+ * `AiRunStatusId: 5` and `ai_run_status_id: 2` at once — the guard compared the attribute against
+ * its own unchanged previous value, found no move, and let a statement past that moved one. That
+ * path is closed here and not there: `beforeBulkUpdate` runs before the `individualHooks` branch
+ * is reached, so a bulk update naming the status under either name is now refused before any
+ * instance is built, and one naming an attribute this model does not declare is refused earlier
+ * still. **`beforeUpdate` itself is no stricter than it was**, and the reason it needs to be no
+ * stricter is that nothing but that bulk path puts a field-named key in front of it: an instance
+ * reached through `instance.set()` drops a key `rawAttributes` does not carry, and
+ * `instance.update({ ai_run_status_id: 2 })` was accepted and wrote nothing at all. Both were run
+ * against the real table. What would re-open it is a bulk write reaching `beforeUpdate` without
+ * passing `beforeBulkUpdate`, which today means `hooks: false` — already the first entry above.
+ *
  * **Read the list as the paths known to go around the hook, and not as a bound on what can move a
  * settled run.** It has been wrong twice. Once by claiming no status is reached by arithmetic,
  * which `increment` disproved. Once by omission that no list of this kind could have covered: the
@@ -132,6 +187,12 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * and in the first test that runs. And nothing here reads which run the id names: an update
  * addressing an unsettled run it had no business addressing is accepted, because the rule this
  * guard carries is about the status a run leaves and not about who may write it.
+ *
+ * **What it asks of a key is what `rawAttributes` answers**, so the two names a column is known by
+ * are the two this model declares it under, and a third that Sequelize might one day resolve
+ * without declaring would be refused rather than read — again the safe side. It reads
+ * `options.attributes` at the position Sequelize 6.37.8 leaves the caller's values in, and that
+ * position, like the one `options.where` is read back at, is a release's to move.
  *
  * @class AiRun
  * @extends {BaseAppRenchanModel}
@@ -308,6 +369,14 @@ export default class AiRun extends BaseAppRenchanModel {
 
     this.beforeBulkUpdate(options => {
       if (
+        this.writesUnrecognizedFieldInBulk({
+          options,
+        })
+      ) {
+        throw new Error(REFUSED_UNKNOWN_BULK_FIELD_MESSAGE)
+      }
+
+      if (
         !this.writesAiRunStatusInBulk({
           options,
         })
@@ -330,8 +399,11 @@ export default class AiRun extends BaseAppRenchanModel {
        * under. Without it the guarantee drops to the weaker sentence: the caller's `where`
        * compiled to this condition at the instant the hook asked, which a `where` answering
        * differently on a second read would satisfy while running something else.
+       *
+       * What permits the assignment is `eslint.config.js`, which relaxes `no-param-reassign`'s
+       * `props` for this file and nothing else — narrower than the inline disable that stood here,
+       * which needed `eslint-comments/no-use` turned off for the whole file to be written at all.
        */
-      // eslint-disable-next-line no-param-reassign
       options.where = provenAiRunCondition
     })
   }
@@ -387,12 +459,45 @@ export default class AiRun extends BaseAppRenchanModel {
   }
 
   /**
+   * Check whether a bulk update writes a key this model declares no attribute for.
+   *
+   * The question asked before the status is asked about, because a key this model cannot place is
+   * one no guard reading this model's attributes can judge: `Utils.mapValueFieldNames()` passes it
+   * into the `SET` clause exactly as the caller wrote it. What follows from true is the refusal,
+   * and it is raised for a key naming any column, not only the status.
+   *
+   * @param {{
+   *   options: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether a written key names no attribute of this model.
+   */
+  static writesUnrecognizedFieldInBulk ({
+    options,
+  }) {
+    const writtenFieldNames = this.extractWrittenFieldNames({
+      options,
+    })
+
+    return writtenFieldNames
+      .some(fieldName =>
+        this.extractAiRunAttributeName({
+          fieldName,
+        }) === null
+      )
+  }
+
+  /**
    * Check whether a bulk update names the run status among the values it writes.
    *
    * `beforeBulkUpdate` is handed the options rather than a row, and `options.attributes` holds the
-   * values the caller passed, keyed by attribute name. An update naming no status is not this
-   * rule's to refuse — it moves no status, so whatever its `where` says about statuses is beside
-   * the point — and this is the question that lets such a write past before any condition is read.
+   * values the caller passed, keyed by whatever text the caller wrote — Sequelize 6.37.8 maps
+   * attribute names to column names after this hook, not before it. So each key is put to
+   * `rawAttributes` and what is compared is the attribute it names: `AiRunStatusId` and
+   * `ai_run_status_id` are one column under two names, and a guard that knew only the first let a
+   * caller spelling the second walk a canceled run back to running. An update naming no status is
+   * not this rule's to refuse — it moves no status, so whatever its `where` says about statuses is
+   * beside the point — and this is the question that lets such a write past before any condition
+   * is read.
    *
    * @param {{
    *   options: *
@@ -402,9 +507,79 @@ export default class AiRun extends BaseAppRenchanModel {
   static writesAiRunStatusInBulk ({
     options,
   }) {
-    const writtenFieldNames = Object.keys(options.attributes ?? {})
+    const writtenFieldNames = this.extractWrittenFieldNames({
+      options,
+    })
 
-    return writtenFieldNames.includes(AI_RUN_STATUS_ATTRIBUTE_NAME)
+    return writtenFieldNames
+      .some(fieldName =>
+        this.extractAiRunAttributeName({
+          fieldName,
+        }) === AI_RUN_STATUS_ATTRIBUTE_NAME
+      )
+  }
+
+  /**
+   * Extract the keys a bulk update states its values under.
+   *
+   * Options carrying no values at all answer none, which is a call that writes nothing rather than
+   * a call this model has anything to say about.
+   *
+   * **A key carried on the values' prototype is an own key by the time this is asked**, so
+   * `Object.keys` is enough here — and that was established by a probe against the real table
+   * rather than assumed. `Model.update()` rebuilds the values through lodash's `omitBy` before
+   * running this hook, and lodash walks the prototype chain into a new plain object, so
+   * `Object.create({ ai_run_status_id: 2 })` arrives with that key its own and is refused. The
+   * prototype channel is worth naming because it is where an earlier guard in this feature failed:
+   * `AiRunStatusRecorder`'s allow-list was read with `Object.keys` while Sequelize's own setter
+   * walked the chain, and the two ends disagreed about what a field is. Here they agree only
+   * because something else flattened them first, which is a fact about lodash and Sequelize and
+   * not about this method.
+   *
+   * @param {{
+   *   options: *
+   * }} params - Parameters.
+   * @returns {Array<string>} The keys, as the caller wrote them.
+   */
+  static extractWrittenFieldNames ({
+    options,
+  }) {
+    return Object.keys(options.attributes ?? {})
+  }
+
+  /**
+   * Extract the attribute a written key names, out of the two names a column is known by.
+   *
+   * An attribute's own name answers itself; the `field` this model maps it to answers the
+   * attribute that maps to it. Anything else answers null, which the caller above turns into a
+   * refusal. The own-key test is what keeps `'constructor'` and `'toString'` from resolving
+   * through `Object.prototype` to something that is no attribute of this table.
+   *
+   * @param {{
+   *   fieldName: string
+   * }} params - Parameters.
+   * @returns {string | null} The attribute name, or null when the key names no attribute.
+   */
+  static extractAiRunAttributeName ({
+    fieldName,
+  }) {
+    const attributeHash = this.rawAttributes
+
+    if (Object.hasOwn(attributeHash, fieldName)) {
+      return fieldName
+    }
+
+    const matchedAttributeEntry = Object.entries(attributeHash)
+      .find(([, attribute]) => attribute.field === fieldName)
+      ?? null
+
+    if (matchedAttributeEntry === null) {
+      return null
+    }
+
+    const [attributeName] = matchedAttributeEntry
+
+    return attributeName
   }
 
   /**

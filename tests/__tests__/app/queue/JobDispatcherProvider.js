@@ -682,7 +682,9 @@ describe('JobDispatcherProvider', () => {
       expect(teardownJobDispatchersSpy)
         .toHaveBeenCalledWith()
       expect(exitSpy)
-        .toHaveBeenCalledWith()
+        .toHaveBeenCalledWith({
+          exitCode: 0, // the clean stop, which is what a teardown that settled is
+        })
     })
   })
 })
@@ -1365,6 +1367,9 @@ describe('JobDispatcherProvider', () => {
      * installed, so a shutdown that carried an exception out of here left the process running
      * **and** unstoppable by the signal that had asked it to stop. Both cases drive a teardown
      * that rejects, and what is asserted is the exit on the far side of it.
+     *
+     * The code it exits under is asserted beside it, because it used to be the same 0 a clean
+     * stop exits under — so `pm2` read a shutdown that had thrown as a shutdown that had not.
      */
     describe('when the teardown threw', () => {
       const cases = [
@@ -1402,7 +1407,9 @@ describe('JobDispatcherProvider', () => {
         await provider.shutdownJobDispatchers()
 
         expect(exitSpy)
-          .toHaveBeenCalledWith()
+          .toHaveBeenCalledWith({
+            exitCode: 1, // the unclean stop, which is what a teardown that did not settle is
+          })
         expect(errorSpy)
           .toHaveBeenCalledWith({
             message: expected,
@@ -1569,8 +1576,14 @@ describe('JobDispatcherProvider', () => {
   describe('#awaitJobDispatcherWithinDeadline()', () => {
     /*
      * A build that answers is answered with, and the deadline is nothing but a timer the race
-     * leaves behind — the real one is used here, and the test ends before a five-second timer
-     * could fire, which is what says the timer is aborted rather than waited on.
+     * leaves behind.
+     *
+     * This describe asserts the answer alone. It used to claim more — that the test ending before
+     * five seconds said the timer was aborted rather than waited on — and that was a false
+     * statement about a test: `Promise.race` returns the moment the build resolves whether or not
+     * the timer was ever cleared, so deleting the `finally { deadlineTerminator.abort() }` would
+     * have left this passing. The abort is asserted in the describe below it, on the signal the
+     * method built.
      */
     describe('when the build answers first', () => {
       const cases = [
@@ -1610,6 +1623,66 @@ describe('JobDispatcherProvider', () => {
 
         expect(received)
           .toBe(tally) // same reference
+      })
+    })
+
+    /*
+     * The timer the race left behind, aborted on the way out.
+     *
+     * Five seconds of a timer nobody is waiting on holds the event loop open, so a process that
+     * built a dispatcher successfully would take five seconds to end. What says the abort
+     * happened is the signal itself: the spy calls through, so the deadline built here is the real
+     * one, and the signal it was handed is the controller's — the same object the `finally`
+     * aborts. Asserting it is what the previous describe's comment claimed and did not do.
+     *
+     * `aborted` is read off the signal at the moment of the assertion, which is after the call has
+     * returned and therefore after the `finally` has run. Delete that `finally` and this is the
+     * assertion that fails.
+     */
+    describe('should abort the deadline it raced', () => {
+      const cases = [
+        {
+          input: {
+            jobDispatcherName: 'UpsilonJobDispatcher',
+          },
+          tally: {
+            teardown: () => null,
+          },
+        },
+        {
+          input: {
+            jobDispatcherName: 'PhiJobDispatcher',
+          },
+          tally: {
+            teardown: () => null,
+          },
+        },
+      ]
+
+      test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+        input,
+        tally,
+      }) => {
+        const provider = JobDispatcherProvider.create() // Arrange
+        const refuseJobDispatcherAtDeadlineSpy = jest.spyOn(provider, 'refuseJobDispatcherAtDeadline')
+        const args = {
+          JobDispatcherCtor: {
+            name: input.jobDispatcherName,
+            createAsync: () => Promise.resolve(tally),
+          },
+          jobDispatcherPromise: Promise.resolve(tally),
+        }
+        const expected = {
+          JobDispatcherCtor: args.JobDispatcherCtor,
+          signal: expect.objectContaining({
+            aborted: true,
+          }),
+        }
+
+        await provider.awaitJobDispatcherWithinDeadline(args) // Act
+
+        expect(refuseJobDispatcherAtDeadlineSpy) // Assert
+          .toHaveBeenCalledWith(expected)
       })
     })
 
@@ -2065,6 +2138,9 @@ describe('JobDispatcherProvider', () => {
      *
      * The teardown here never answers, and what is asserted is the exit on the far side of it,
      * beside the line saying the connections were not all closed.
+     *
+     * The code it exits under is asserted beside them, because a give-up that exits 0 is a
+     * give-up `pm2` reads as the clean stop it is not.
      */
     describe('when the teardown never answers', () => {
       const cases = [
@@ -2110,7 +2186,9 @@ describe('JobDispatcherProvider', () => {
         await provider.shutdownJobDispatchers()
 
         expect(exitSpy)
-          .toHaveBeenCalledWith()
+          .toHaveBeenCalledWith({
+            exitCode: 1, // the unclean stop, which is what a teardown that did not settle is
+          })
         expect(errorSpy)
           .toHaveBeenCalledWith({
             message: expected,
@@ -2119,6 +2197,138 @@ describe('JobDispatcherProvider', () => {
               'FailedShutdown',
             ],
           })
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#generateShutdownExitCode()', () => {
+    /*
+     * The teardown that settled, which is the stop an operator asked for.
+     *
+     * Only `teardownJobDispatchers()` is stood in for — it is what a provider holding no
+     * dispatcher answers anyway, and standing it in is how the answers it gives are varied. The
+     * deadline it is raced against is the real one, and the race is what the code comes out of.
+     */
+    describe('when the teardown settled', () => {
+      const cases = [
+        {
+          input: {
+            teardownResponses: [],
+          },
+          expected: 0, // the clean stop
+        },
+        {
+          input: {
+            teardownResponses: [
+              'teardown-response-0011',
+              'teardown-response-0012',
+            ],
+          },
+          expected: 0, // the clean stop
+        },
+      ]
+
+      test.each(cases)('teardownResponses.length: $input.teardownResponses.length', async ({
+        input,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create() // Arrange
+        jest.spyOn(provider, 'teardownJobDispatchers')
+          .mockResolvedValue(input.teardownResponses)
+
+        const received = await provider.generateShutdownExitCode() // Act
+
+        expect(received) // Assert
+          .toBe(expected)
+      })
+    })
+
+    /*
+     * The teardown that threw, which is a connection that would not close.
+     *
+     * What the code says is that the connections this process was closing may still be open, and
+     * it is the only thing that says so to a supervisor reading no log. The line beside it is
+     * asserted in `#shutdownJobDispatchers()`, which is where it used to be the whole of what a
+     * failed shutdown reported.
+     */
+    describe('when the teardown threw', () => {
+      const cases = [
+        {
+          mockError: new Error('a queue connection would not close'),
+          expected: 1, // the unclean stop
+        },
+        {
+          mockError: new TypeError('a dispatcher was not one'),
+          expected: 1, // the unclean stop
+        },
+      ]
+
+      test.each(cases)('mockError.message: $mockError.message', async ({
+        mockError,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create() // Arrange
+        jest.spyOn(JobDispatcherProvider.mentsuLogger, 'error')
+        jest.spyOn(provider, 'teardownJobDispatchers')
+          .mockRejectedValue(mockError)
+
+        const received = await provider.generateShutdownExitCode() // Act
+
+        expect(received) // Assert
+          .toBe(expected)
+      })
+    })
+
+    /*
+     * The teardown abandoned at the deadline, which is the path that reaches here without a
+     * rejection of its own.
+     *
+     * A teardown waiting on a build that never connected never settles, so what ends the wait is
+     * the deadline the race carries — and the exception it throws is a rejection like any other
+     * by the time this member sees it. The clock is stood in for, because what is asserted is the
+     * giving up and not the five seconds.
+     */
+    describe('when the teardown never answers', () => {
+      const cases = [
+        {
+          input: {
+            ProviderCtor: JobDispatcherProvider,
+          },
+          expected: 1, // the unclean stop
+        },
+        {
+          input: {
+            ProviderCtor: class KappaJobDispatcherProvider extends JobDispatcherProvider {},
+          },
+          expected: 1, // the unclean stop
+        },
+      ]
+
+      test.each(cases)('ProviderCtor: $input.ProviderCtor.name', async ({
+        input,
+        expected,
+      }) => {
+        const provider = input.ProviderCtor.create() // Arrange
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+        jest.spyOn(JobDispatcherProvider.mentsuLogger, 'error')
+        jest.spyOn(provider, 'teardownJobDispatchers')
+          .mockReturnValue(new Promise(() => {}))
+
+        const received = await provider.generateShutdownExitCode() // Act
+
+        expect(received) // Assert
+          .toBe(expected)
       })
     })
   })

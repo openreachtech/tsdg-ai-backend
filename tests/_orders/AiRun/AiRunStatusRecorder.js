@@ -35,6 +35,13 @@ const {
  * conditions in `tests/__tests__/sequelize/models/AiRun.js` name ids up to `10340099` and create
  * nothing; `10340101` upward is this file's, and those rows are created here — the settled runs
  * the model guard is asked about with a condition that reads one way and compiles another.
+ *
+ * `10350001` upward belongs to the third audit round, split the same way again: up to `10350099`
+ * for the options stated in `tests/__tests__/sequelize/models/AiRun.js`, which create nothing, and
+ * `10350101` upward for this file's rows. What that round found was the status written under the
+ * column's other name — `ai_run_status_id` rather than `AiRunStatusId` — which the guard did not
+ * recognize as a status at all, so the runs of this block are the settled ones that write is aimed
+ * at, plus the unsettled one an unrecognized key is aimed at.
  */
 
 describe('AiRunStatusRecorder', () => {
@@ -1818,7 +1825,7 @@ describe('AiRun', () => {
               AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
         {
           input: {
@@ -1844,7 +1851,7 @@ describe('AiRun', () => {
               resultBody: '{"fields":[{"path":"a result the run never settled"}]}',
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
         {
           input: {
@@ -1869,7 +1876,7 @@ describe('AiRun', () => {
               AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
       ]
 
@@ -2057,7 +2064,7 @@ describe('AiRun', () => {
               ),
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
         {
           input: {
@@ -2098,7 +2105,7 @@ describe('AiRun', () => {
               },
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
         {
           input: {
@@ -2146,7 +2153,7 @@ describe('AiRun', () => {
               ),
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
       ]
 
@@ -2320,13 +2327,366 @@ describe('AiRun', () => {
             },
           },
         }
-        const expected = 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.'
+        const expected = 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.'
 
         const received = () => AiRun.update(args.values, args.options) // Act
 
         await expect(received) // Assert
           .rejects
           .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.setupHooks()', () => {
+    /*
+     * The status written under the other name the column answers to, which is how a canceled run
+     * was revived a third time.
+     *
+     * `Model.update()` hands `beforeBulkUpdate` the caller's own keys and converts attribute names
+     * to column names only afterwards, through `Utils.mapValueFieldNames()` — which passes a key
+     * it does not recognize through into the `SET` clause exactly as written. So a trigger
+     * comparing those keys against the string `'AiRunStatusId'` answered no to
+     * `{ ai_run_status_id: 2 }`, returned before any condition was read, and let
+     * `UPDATE ai_runs SET ai_run_status_id = $1 WHERE id = $2` reach a canceled run.
+     *
+     * Two options are what keep such a key alive that far, and both are stated by every case
+     * below. `validate: false` keeps it in the values — with validation on, the build drops the
+     * key and the update degrades to writing nothing. An explicit `fields` array keeps it in
+     * `options.fields`, which is what `mapValueFieldNames()` consults.
+     *
+     * The third case is the one the per-row guard could not help with. Under
+     * `individualHooks: true` Sequelize copies the values into each instance's `dataValues`
+     * wholesale, so `beforeUpdate` was handed an instance carrying `AiRunStatusId: 5` and
+     * `ai_run_status_id: 2` at once, compared the attribute against its own unchanged previous
+     * value and found no move. It is refused here instead, because `beforeBulkUpdate` runs before
+     * the `individualHooks` branch is reached.
+     *
+     * The fourth carries the key on the values' **prototype**, which is the channel an earlier
+     * round of this feature was reached through — an allow-list read with `Object.keys` against a
+     * setter that walked the chain. It is refused here for a reason that is not this model's:
+     * `Model.update()` rebuilds the values through lodash's `omitBy` before any hook runs, and
+     * lodash walks the chain into a new plain object, so the key arrives as its own. The case is
+     * here because that is a fact about two dependencies rather than about the guard, and a
+     * release changing it would change this answer.
+     */
+    describe('when a bulk update spells the status as its column name', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10350101,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+              runKey: 'run-key-10350101',
+              requestKey: 'request-key-10350101',
+              requestBodyHash: 'request-body-hash-10350101',
+              externalRef: 'external-ref-10350101',
+              subjectLabel: 'Subject label of run 10350101',
+              correlationId: 'correlation-id-10350101',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10350101',
+              acceptedAt: new Date('2026-10-10T01:01:01.001Z'),
+              startedAt: new Date('2026-10-10T01:01:02.002Z'),
+              finishedAt: new Date('2026-10-10T01:01:03.003Z'),
+              canceledAt: new Date('2026-10-10T01:01:03.003Z'),
+            },
+            values: {
+              ai_run_status_id: 2, // AI_RUN_STATUS.RUNNING.ID, under the name the table carries
+            },
+            options: {
+              where: {
+                id: 10350101,
+              },
+              fields: [
+                'ai_run_status_id',
+              ],
+              validate: false,
+            },
+          },
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10350102,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10350102',
+              requestKey: 'request-key-10350102',
+              requestBodyHash: 'request-body-hash-10350102',
+              externalRef: 'external-ref-10350102',
+              subjectLabel: 'Subject label of run 10350102',
+              correlationId: 'correlation-id-10350102',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10350102',
+              acceptedAt: new Date('2026-10-10T02:02:01.001Z'),
+              startedAt: new Date('2026-10-10T02:02:02.002Z'),
+              finishedAt: new Date('2026-10-10T02:02:03.003Z'),
+            },
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              ai_run_status_id: 2, // AI_RUN_STATUS.RUNNING.ID, the same status under both names
+            },
+            options: {
+              where: {
+                id: 10350102,
+              },
+              fields: [
+                'AiRunStatusId',
+                'ai_run_status_id',
+              ],
+              validate: false,
+            },
+          },
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10350103,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+              runKey: 'run-key-10350103',
+              requestKey: 'request-key-10350103',
+              requestBodyHash: 'request-body-hash-10350103',
+              externalRef: 'external-ref-10350103',
+              subjectLabel: 'Subject label of run 10350103',
+              correlationId: 'correlation-id-10350103',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10350103',
+              acceptedAt: new Date('2026-10-10T03:03:01.001Z'),
+              startedAt: new Date('2026-10-10T03:03:02.002Z'),
+              finishedAt: new Date('2026-10-10T03:03:03.003Z'),
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.TIME_LIMIT_EXCEEDED,
+            },
+            values: {
+              ai_run_status_id: 2, // AI_RUN_STATUS.RUNNING.ID
+            },
+            options: {
+              where: {
+                id: 10350103,
+              },
+              fields: [
+                'ai_run_status_id',
+              ],
+              validate: false,
+              individualHooks: true, // the per-row guard that read the instance and saw no move
+            },
+          },
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10350104,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+              runKey: 'run-key-10350104',
+              requestKey: 'request-key-10350104',
+              requestBodyHash: 'request-body-hash-10350104',
+              externalRef: 'external-ref-10350104',
+              subjectLabel: 'Subject label of run 10350104',
+              correlationId: 'correlation-id-10350104',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10350104',
+              acceptedAt: new Date('2026-10-10T07:07:01.001Z'),
+              startedAt: new Date('2026-10-10T07:07:02.002Z'),
+              finishedAt: new Date('2026-10-10T07:07:03.003Z'),
+              canceledAt: new Date('2026-10-10T07:07:03.003Z'),
+            },
+            values: Object.create({
+              ai_run_status_id: 2, // AI_RUN_STATUS.RUNNING.ID, carried on the prototype
+            }),
+            options: {
+              where: {
+                id: 10350104,
+              },
+              fields: [
+                'ai_run_status_id',
+              ],
+              validate: false,
+            },
+          },
+          expected: 'AiRun.update() writing the run status is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunRow.id', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const received = () => AiRun.update(input.values, input.options) // Act
+
+        await expect(received) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.setupHooks()', () => {
+    /*
+     * A key this model declares no attribute for, refused before the status is asked about.
+     *
+     * The column-name write above is one column's worth of a wider hazard: whatever a key spells,
+     * `Utils.mapValueFieldNames()` writes it into the `SET` clause unexamined, so a guard that let
+     * an unrecognized key past would be guarding the names it knows against a caller free to use
+     * any other. The refusal is the model's own and not the database's — the second case names a
+     * column that does not exist, which SQLite would have rejected on its own, and the first names
+     * one that nearly does.
+     */
+    describe('when a bulk update writes a key this model declares no attribute for', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10350111,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+              runKey: 'run-key-10350111',
+              requestKey: 'request-key-10350111',
+              requestBodyHash: 'request-body-hash-10350111',
+              externalRef: 'external-ref-10350111',
+              subjectLabel: 'Subject label of run 10350111',
+              correlationId: 'correlation-id-10350111',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10350111',
+              acceptedAt: new Date('2026-10-10T04:04:01.001Z'),
+              startedAt: new Date('2026-10-10T04:04:02.002Z'),
+              finishedAt: new Date('2026-10-10T04:04:03.003Z'),
+              canceledAt: new Date('2026-10-10T04:04:03.003Z'),
+            },
+            values: {
+              ai_run_status: 2, // AI_RUN_STATUS.RUNNING.ID, under a name no column carries
+            },
+            options: {
+              where: {
+                id: 10350111,
+              },
+              fields: [
+                'ai_run_status',
+              ],
+              validate: false,
+            },
+          },
+          expected: 'AiRun.update() is refused when its values name a key this model declares no attribute for. Such a key reaches the SET clause as written, past every guard that asks this model what a key means. Write the attribute names this model declares.',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10350112,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID — unsettled, so no other rule refuses it
+              runKey: 'run-key-10350112',
+              requestKey: 'request-key-10350112',
+              requestBodyHash: 'request-body-hash-10350112',
+              externalRef: 'external-ref-10350112',
+              subjectLabel: 'Subject label of run 10350112',
+              correlationId: 'correlation-id-10350112',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10350112',
+              acceptedAt: new Date('2026-10-10T05:05:01.001Z'),
+              startedAt: new Date('2026-10-10T05:05:02.002Z'),
+              finishedAt: null,
+            },
+            values: {
+              not_a_field_at_all: 'the text a caller put under a name of its own',
+            },
+            options: {
+              where: {
+                id: 10350112,
+              },
+              fields: [
+                'not_a_field_at_all',
+              ],
+              validate: false,
+            },
+          },
+          expected: 'AiRun.update() is refused when its values name a key this model declares no attribute for. Such a key reaches the SET clause as written, past every guard that asks this model what a key means. Write the attribute names this model declares.',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunRow.id', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const received = () => AiRun.update(input.values, input.options) // Act
+
+        await expect(received) // Assert
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.setupHooks()', () => {
+    /*
+     * The other half of the same rule: a field name that is not the status is written, not refused.
+     *
+     * Resolving a key through `rawAttributes` is what makes the refusals above narrow. A caller
+     * writing `engine_label` against a settled run names a column this model declares, names no
+     * status, and moves none — so it runs, exactly as the attribute-named retention sweep does.
+     * A guard refusing every key it had not seen in an attribute-name spelling would have turned
+     * this away too, and the assertion is that it does not.
+     *
+     * The run is canceled, which is what makes the answer worth asking for: the rule this hook
+     * carries is about the status a run leaves, and a settled run is still written to for reasons
+     * that are not transitions.
+     */
+    describe('when a bulk update writes a field name that is not the status', () => {
+      test('should write the row it matched', async () => {
+        const aiRunRow = { // Arrange
+          id: 10350121,
+          ApiClientId: 10000001,
+          AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+          AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+          runKey: 'run-key-10350121',
+          requestKey: 'request-key-10350121',
+          requestBodyHash: 'request-body-hash-10350121',
+          externalRef: 'external-ref-10350121',
+          subjectLabel: 'Subject label of run 10350121',
+          correlationId: 'correlation-id-10350121',
+          callbackUrl: 'https://signing.client.development.invalid/callbacks/10350121',
+          acceptedAt: new Date('2026-10-10T06:06:01.001Z'),
+          startedAt: new Date('2026-10-10T06:06:02.002Z'),
+          finishedAt: new Date('2026-10-10T06:06:03.003Z'),
+          canceledAt: new Date('2026-10-10T06:06:03.003Z'),
+        }
+        await AiRun.create(aiRunRow)
+
+        const args = {
+          values: {
+            engine_label: 'engine-label-of-the-loop-that-answered-run-10350121',
+          },
+          options: {
+            where: {
+              id: 10350121,
+            },
+            fields: [
+              'engine_label',
+            ],
+            validate: false,
+          },
+        }
+        const expected = [
+          1, // the rows the write moved
+        ]
+
+        const received = await AiRun.update(args.values, args.options) // Act
+
+        expect(received) // Assert
+          .toEqual(expected)
       })
     })
   })

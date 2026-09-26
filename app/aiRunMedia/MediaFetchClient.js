@@ -1,0 +1,639 @@
+import {
+  MentsuLogger,
+} from '@openreachtech/mentsu-logger'
+
+import AI_RUN_FAILURE_REASON_CONSTANT_HASH from '../constants/aiRunFailureReasonConstants.js'
+
+import {
+  env,
+  rootPath,
+} from '../globals/_.js'
+
+const {
+  AI_RUN_FAILURE_REASON_CODE,
+} = AI_RUN_FAILURE_REASON_CONSTANT_HASH
+
+/*
+ * How the allow-list is written in the environment: hosts separated by commas.
+ *
+ * A host is a bare hostname - `files.client.example` - with no scheme, no port and no path. The
+ * scheme is decided by the rule below rather than by the key, and a port is deliberately not part
+ * of the entry: see the class comment on what that leaves open.
+ */
+const ALLOWED_HOST_DELIMITER = ','
+
+/*
+ * The schemes a medium may be fetched over.
+ *
+ * Everything else is refused before the host is even looked at, and the ones that matter are not
+ * exotic: `file:` would read this machine's own disk, `data:` would carry bytes the caller wrote
+ * inside the URL itself, and neither is a fetch from the client's storage at all. The allow-list
+ * cannot refuse them, because neither has a host for it to compare.
+ *
+ * `http:` is here beside `https:` because development fetches from a local or fake host, and the
+ * key is what decides which hosts exist in an environment. A deployment that lists a live host
+ * reachable over plaintext has made that choice in the key; this constant does not make it for it.
+ */
+const FETCHABLE_URL_PROTOCOLS = [
+  'http:',
+  'https:',
+]
+
+/*
+ * How long one fetch may take before it is given up as a failure.
+ *
+ * The run's own limit is 300 seconds for everything a run does - up to twelve fetches, an upload
+ * and three readings - so a single file holding the connection open until the run's clock ran out
+ * would fail the run under `TIME_LIMIT_EXCEEDED` and say nothing about which file did it. Thirty
+ * seconds is short enough that twelve of them cannot consume the run's budget between them, and
+ * long enough for a photo of the size the cap allows.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MILLISECONDS = 30000
+
+const LOG_FILE_PATH = rootPath.to('logs/media-fetch-')
+
+/*
+ * What a failure is reported as when it came back as something with no class of its own - a thrown
+ * string, or a thrown null. Nothing in `fetch` does that today; the fallback is here so that the
+ * line is still written rather than the logging itself faulting inside a catch.
+ */
+const UNNAMED_ERROR_NAME = 'Error'
+
+const FAILED_MEDIA_FETCH_TAGS = [
+  'MediaFetch',
+  'FailedFetch',
+]
+
+/*
+ * One logger client per process rather than one per failure, for the reason `AiRunStatusRecorder`
+ * holds one: the client owns a rotating file, and a storage outage fails every medium of every run
+ * at once, which is exactly when these lines are written.
+ */
+const mentsuLogger = MentsuLogger.create({
+  filePath: LOG_FILE_PATH,
+  env,
+})
+
+/**
+ * Fetches one medium from the client's storage, and refuses a URL pointing anywhere else.
+ *
+ * **The allow-list lives here, and it is an environment key.** `MEDIA_FETCH_ALLOWED_HOSTS` holds
+ * the hosts this service may fetch a file from, separated by commas. Section 18 declares its three
+ * tables exhaustively and none of them is an allow-list, and the value cannot be a constant either:
+ * development fetches from a local or fake host and live fetches from the client's own storage, so
+ * it is a deployment fact by definition and adding a host is a deployment change rather than a
+ * migration. See [[Q91]] - the spec defines the term and never says where the set is held, so this
+ * is a reading rather than something it states.
+ *
+ * **An undeclared key refuses everything, and that is the intended direction of failure.** The
+ * environment facade answers `null` for a key nobody declared, which builds an empty allow-list,
+ * which refuses every URL. An allow-list that let everything through while nobody had configured it
+ * would be a service fetching arbitrary hosts on a caller's say-so - the one thing the first
+ * acceptance criterion exists to prevent - and it would look exactly like a working deployment.
+ *
+ * **Nothing is fetched when the host is refused.** The guard runs before the request is built, so
+ * a refused URL never reaches the network: no connection, no DNS lookup, no line in anybody's
+ * access log. That is what the criterion asks for, and it is why the check is inside this class
+ * rather than beside it - a caller that forgot to ask would otherwise fetch first and refuse after.
+ *
+ * **The host is the parsed URL's own `hostname`, never a piece of the text.** A URL may carry
+ * credentials before its host (`https://files.client.example@somewhere.else/photo.jpg`), and the
+ * host of that one is `somewhere.else`. Comparing text rather than the parsed hostname is how an
+ * allow-list is walked past, so the comparison is made against what `URL` resolved and against
+ * nothing else. The comparison is case-insensitive, because a hostname is.
+ *
+ * **What the two failure codes mean here.** `MEDIA_FETCH_FAILED` is a file that could not be
+ * fetched at all - a refused host, a URL that is no URL, a connection that failed or timed out, a
+ * status the server answered with. `MEDIA_UNREADABLE` is a file that was fetched and carries
+ * nothing to read - a body that threw while being read, or one of zero bytes. The fourth acceptance
+ * criterion of section 18 asks for exactly that distinction, and it is drawn here because this is
+ * the only place that can see which of the two happened.
+ *
+ * **A failure is answered, never thrown.** Every path returns an outcome carrying a reason code, so
+ * a caller writes one branch and meets no exception raised inside `fetch`. That follows the
+ * external-client convention's rule that failure is decided from the returned value rather than
+ * from a `try`/`catch` around the call.
+ *
+ * **Nothing about the URL reaches a log.** The media URLs are content under the non-functional
+ * section's personal-data row, so the line written when a fetch fails carries the reason code and
+ * the error's own class name and neither the URL nor the message the error composed out of it.
+ *
+ * **The size cap is not applied here, and the outcome carries what was read so that it can be.**
+ * `AiRunMediaLimitInspector` holds both limits, and the caller checks the size the request declared
+ * against it before a fetch is asked for at all - that is what the second acceptance criterion
+ * means by "before anything reaches a provider". What this class adds is the size that was actually
+ * read, on `byteSize` of the outcome, so the same rule can be asked again of what arrived: a
+ * declared size and a real one need not agree, and only the second of them is a fact.
+ *
+ * **What stays open, stated rather than claimed closed.** A body is read whole into memory before
+ * its size is anybody's to judge, so a host serving far more than it declared is held in memory for
+ * the length of one read. The mitigation is that a host has to be on the allow-list to be read from
+ * at all, which is a deployment's own decision; what would close it is a streamed read that stops
+ * at the cap, and nothing here does that. An entry is a hostname, so the allow-list
+ * bounds *where* a file comes from and not which port, path or object on that host - a host on the
+ * list serving something it should not is not a case this class can see. Nor does it resolve the
+ * host: a listed name that resolves to a loopback or link-local address is fetched, so an
+ * environment that lists a host it does not control has not been protected from that host. Both are
+ * properties of the key's value, which is why the key is a deployment decision.
+ */
+export default class MediaFetchClient {
+  /**
+   * Constructor.
+   *
+   * @param {MediaFetchClientParams} params - Parameters.
+   */
+  constructor ({
+    allowedHosts,
+    requestTimeoutMilliseconds,
+  }) {
+    this.allowedHosts = allowedHosts
+    this.requestTimeoutMilliseconds = requestTimeoutMilliseconds
+  }
+
+  /**
+   * Factory method.
+   *
+   * @template {X extends typeof MediaFetchClient ? X : never} T, X
+   * @param {MediaFetchClientFactoryParams} [params] - Parameters for the factory method.
+   * @returns {InstanceType<T>} Instance of this class.
+   * @this {T}
+   * @public
+   */
+  static create ({
+    allowedHosts = this.buildAllowedHosts(),
+    requestTimeoutMilliseconds = DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
+  } = {}) {
+    return /** @type {InstanceType<T>} */ (
+      new this({
+        allowedHosts,
+        requestTimeoutMilliseconds,
+      })
+    )
+  }
+
+  /**
+   * get: the URL class, which parses a URL and answers its parts.
+   *
+   * @returns {typeof URL} The class.
+   */
+  static get UrlCtor () {
+    return URL
+  }
+
+  /**
+   * get: the signal class the request's time limit is built from.
+   *
+   * @returns {typeof AbortSignal} The class.
+   */
+  static get AbortSignalCtor () {
+    return AbortSignal
+  }
+
+  /**
+   * get: environment variables.
+   *
+   * @returns {typeof env} Environment facade.
+   */
+  static get env () {
+    return env
+  }
+
+  /**
+   * get: the function that performs the network read.
+   *
+   * It is reached through this getter and never as the global directly, so a test substitutes the
+   * network by overriding one member instead of reaching for a module mock.
+   *
+   * @returns {typeof globalThis.fetch} The fetch function.
+   */
+  static get fetchClient () {
+    return globalThis.fetch
+  }
+
+  /**
+   * get: the logger client this process writes failed fetches through.
+   *
+   * @returns {MentsuLogger} Logger client.
+   */
+  static get mentsuLogger () {
+    return mentsuLogger
+  }
+
+  /**
+   * Build the allow-list the environment declares.
+   *
+   * A key nobody declared, and a key declared empty, both build an empty allow-list - which refuses
+   * every URL. Blank entries are dropped so that a trailing comma is not a host, and every entry is
+   * lower-cased so the comparison can be made against a lower-cased hostname without either side
+   * deciding the case of the other.
+   *
+   * @returns {Array<string>} The hosts this service may fetch a file from.
+   */
+  static buildAllowedHosts () {
+    const declaredHosts = this.env.MEDIA_FETCH_ALLOWED_HOSTS
+
+    if (typeof declaredHosts !== 'string') {
+      return []
+    }
+
+    return declaredHosts.split(ALLOWED_HOST_DELIMITER)
+      .map(it => it.trim()
+        .toLowerCase())
+      .filter(it => it !== '')
+  }
+
+  /**
+   * get: own constructor, so a subclass's overrides are the ones that answer.
+   *
+   * @returns {typeof MediaFetchClient} The class.
+   */
+  get Ctor () {
+    return /** @type {typeof MediaFetchClient} */ (this.constructor)
+  }
+
+  /**
+   * Fetch one medium, and answer what came of it.
+   *
+   * @param {{
+   *   url: *
+   * }} params - Parameters.
+   * @returns {Promise<MediaFetchOutcome>} What the fetch produced, or the reason code it failed
+   * under.
+   * @public
+   */
+  async fetchMedium ({
+    url,
+  }) {
+    if (
+      !this.isFetchableUrl({
+        url,
+      })
+    ) {
+      return this.buildFailedFetchOutcome({
+        failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
+      })
+    }
+
+    const response = await this.sendFetchRequest({
+      url,
+    })
+
+    if (
+      !this.hasFetchedResponse({
+        response,
+      })
+    ) {
+      return this.buildFailedFetchOutcome({
+        failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
+      })
+    }
+
+    const bytes = await this.readResponseBytes({
+      response,
+    })
+
+    if (
+      !this.hasReadableBytes({
+        bytes,
+      })
+    ) {
+      return this.buildFailedFetchOutcome({
+        failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_UNREADABLE,
+      })
+    }
+
+    const mimeType = this.extractResponseMimeType({
+      response,
+    })
+
+    return this.buildFetchedOutcome({
+      bytes,
+      mimeType,
+    })
+  }
+
+  /**
+   * Check whether a URL may be fetched at all.
+   *
+   * @param {{
+   *   url: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether it may be fetched.
+   * @public
+   */
+  isFetchableUrl ({
+    url,
+  }) {
+    const host = this.extractFetchableHost({
+      url,
+    })
+
+    if (host === null) {
+      return false
+    }
+
+    return this.allowedHosts.includes(host)
+  }
+
+  /**
+   * Extract the host a URL would be fetched from, when the URL is one that may be fetched.
+   *
+   * The hostname is the parsed URL's own, which is what makes credentials written before the host
+   * unable to stand in for it.
+   *
+   * @param {{
+   *   url: *
+   * }} params - Parameters.
+   * @returns {string | null} The lower-cased host, or null when the value names none.
+   * @public
+   */
+  extractFetchableHost ({
+    url,
+  }) {
+    const parsedUrl = this.buildParsedUrl({
+      url,
+    })
+
+    if (parsedUrl === null) {
+      return null
+    }
+
+    if (!FETCHABLE_URL_PROTOCOLS.includes(parsedUrl.protocol)) {
+      return null
+    }
+
+    return parsedUrl.hostname.toLowerCase()
+  }
+
+  /**
+   * Build the parsed form of a URL.
+   *
+   * @param {{
+   *   url: *
+   * }} params - Parameters.
+   * @returns {URL | null} The parsed URL, or null when the value is not one.
+   * @public
+   */
+  buildParsedUrl ({
+    url,
+  }) {
+    if (typeof url !== 'string') {
+      return null
+    }
+
+    try {
+      return new this.Ctor.UrlCtor(url)
+    } catch (error) {
+      return null
+    }
+  }
+
+  /**
+   * Send the request that reads the file, and answer the response it came back with.
+   *
+   * The failure is caught here rather than raised, because every way this call can fail - a
+   * connection refused, a host that does not resolve, a timeout - is one of the cases the outcome's
+   * reason code already states. The line written names neither the URL nor the message the error
+   * composed out of it.
+   *
+   * @param {{
+   *   url: string
+   * }} params - Parameters.
+   * @returns {Promise<Response | null>} The response, or null when the request failed.
+   * @public
+   */
+  async sendFetchRequest ({
+    url,
+  }) {
+    const fetchOptions = this.buildFetchOptions()
+
+    try {
+      return await this.Ctor.fetchClient(url, fetchOptions)
+    } catch (error) {
+      this.logFailedMediaFetch({
+        failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
+        error,
+      })
+
+      return null
+    }
+  }
+
+  /**
+   * Build the options one fetch is sent under.
+   *
+   * The time limit is a signal rather than a setting on the request, because that is the only form
+   * `fetch` takes one in.
+   *
+   * @returns {{
+   *   signal: AbortSignal
+   * }} The options.
+   * @public
+   */
+  buildFetchOptions () {
+    const signal = this.Ctor.AbortSignalCtor.timeout(this.requestTimeoutMilliseconds)
+
+    return {
+      signal,
+    }
+  }
+
+  /**
+   * Write the line a failed fetch leaves behind.
+   *
+   * @param {{
+   *   failureReasonCode: string
+   *   error: *
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedMediaFetch ({
+    failureReasonCode,
+    error,
+  }) {
+    const errorName = this.extractErrorName({
+      error,
+    })
+
+    const message = `${this.Ctor.name} ${failureReasonCode}: ${errorName}`
+
+    this.Ctor.mentsuLogger.error({
+      message,
+      tags: FAILED_MEDIA_FETCH_TAGS,
+    })
+  }
+
+  /**
+   * Extract the name of the class a failure came back as.
+   *
+   * It is the class name and never the message: a message raised by `fetch` is composed out of the
+   * URL it was given, and the media URLs are content.
+   *
+   * @param {{
+   *   error: *
+   * }} params - Parameters.
+   * @returns {string} The class name of the failure.
+   * @public
+   */
+  extractErrorName ({
+    error,
+  }) {
+    return error?.constructor?.name
+      ?? UNNAMED_ERROR_NAME
+  }
+
+  /**
+   * Check whether a response is one the file was actually fetched in.
+   *
+   * A status the server answered with is a file that could not be fetched, not one that could not
+   * be read: nothing of the file arrived, and a `404` page is not an unreadable photo.
+   *
+   * @param {{
+   *   response: Response | null
+   * }} params - Parameters.
+   * @returns {boolean} Whether the file was fetched.
+   * @public
+   */
+  hasFetchedResponse ({
+    response,
+  }) {
+    if (!response) {
+      return false
+    }
+
+    return response.ok
+  }
+
+  /**
+   * Read the bytes of a fetched file.
+   *
+   * @param {{
+   *   response: Response
+   * }} params - Parameters.
+   * @returns {Promise<Buffer | null>} The bytes, or null when the body could not be read.
+   * @public
+   */
+  async readResponseBytes ({
+    response,
+  }) {
+    try {
+      const responseBody = await response.arrayBuffer()
+
+      return Buffer.from(responseBody)
+    } catch (error) {
+      this.logFailedMediaFetch({
+        failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_UNREADABLE,
+        error,
+      })
+
+      return null
+    }
+  }
+
+  /**
+   * Check whether what was read carries anything to read.
+   *
+   * A body of zero bytes is counted as unreadable rather than as an empty file, because a photo of
+   * no bytes is not a photo - it is what an interrupted transfer and a truncated object both leave
+   * behind, and the run has nothing to hand a provider either way.
+   *
+   * @param {{
+   *   bytes: Buffer | null
+   * }} params - Parameters.
+   * @returns {boolean} Whether there is something to read.
+   * @public
+   */
+  hasReadableBytes ({
+    bytes,
+  }) {
+    if (!bytes) {
+      return false
+    }
+
+    return bytes.length > 0
+  }
+
+  /**
+   * Extract the media type the response declared.
+   *
+   * It is the server's claim and not a finding of this service, which is why it is answered as it
+   * arrived and compared with nothing. What the caller said the file is already sits on the row.
+   *
+   * @param {{
+   *   response: Response
+   * }} params - Parameters.
+   * @returns {string | null} The declared media type, or null when the response declared none.
+   * @public
+   */
+  extractResponseMimeType ({
+    response,
+  }) {
+    return response.headers.get('content-type')
+      ?? null
+  }
+
+  /**
+   * Build the outcome of a fetch that produced a file.
+   *
+   * @param {{
+   *   bytes: Buffer
+   *   mimeType: string | null
+   * }} params - Parameters.
+   * @returns {MediaFetchOutcome} The outcome.
+   * @public
+   */
+  buildFetchedOutcome ({
+    bytes,
+    mimeType,
+  }) {
+    const byteSize = bytes.length
+
+    return {
+      bytes,
+      byteSize,
+      mimeType,
+      failureReasonCode: null,
+    }
+  }
+
+  /**
+   * Build the outcome of a fetch that produced nothing.
+   *
+   * @param {{
+   *   failureReasonCode: string
+   * }} params - Parameters.
+   * @returns {MediaFetchOutcome} The outcome.
+   * @public
+   */
+  buildFailedFetchOutcome ({
+    failureReasonCode,
+  }) {
+    return {
+      bytes: null,
+      byteSize: null,
+      mimeType: null,
+      failureReasonCode,
+    }
+  }
+}
+
+/**
+ * @typedef {{
+ *   allowedHosts: Array<string>
+ *   requestTimeoutMilliseconds: number
+ * }} MediaFetchClientParams
+ */
+
+/**
+ * @typedef {Partial<MediaFetchClientParams>} MediaFetchClientFactoryParams
+ */
+
+/**
+ * @typedef {{
+ *   bytes: Buffer | null
+ *   byteSize: number | null
+ *   mimeType: string | null
+ *   failureReasonCode: string | null
+ * }} MediaFetchOutcome
+ */

@@ -41,6 +41,22 @@ const JOB_DISPATCHER_BUILD_DEADLINE_MILLISECOND = 5000
  */
 const QUEUE_SHUTDOWN_DEADLINE_MILLISECOND = 5000
 
+/*
+ * The two codes the process ends under, and why a shutdown has both.
+ *
+ * `pm2` reads the code and nothing else: a process that stopped with 0 stopped as it was asked to,
+ * and one that stopped with anything else did not. A teardown that threw, or one abandoned at the
+ * deadline above, is the second of those — the connections it was closing may still have been
+ * open — and ending it with 0 told the supervisor the opposite of what happened. Nothing else in
+ * this class can carry that outward, because the process is gone a line later.
+ *
+ * Which is the whole of what the code says. It does not say how many connections were left, or
+ * which: that is the line `#logFailedShutdown()` writes, and the code is the one bit of it a
+ * supervisor reads without a log.
+ */
+const CLEAN_SHUTDOWN_EXIT_CODE = 0
+const UNCLEAN_SHUTDOWN_EXIT_CODE = 1
+
 const FAILED_TEARDOWN_TAGS = [
   'JobDispatcher',
   'FailedTeardown',
@@ -614,19 +630,48 @@ export default class JobDispatcherProvider {
    * the wait is bounded as well as guarded, and between the two the exit is taken on both paths a
    * teardown has.
    *
+   * **And the two paths are told apart by the code it exits under**, which they were not. Both
+   * ended the process with 0, so a teardown that threw and a teardown abandoned at the deadline
+   * each reported themselves to `pm2` as the clean stop they were not. The code is now the one
+   * thing that says which happened to a supervisor that reads no log.
+   *
    * @returns {Promise<void>}
    * @public
    */
   async shutdownJobDispatchers () {
+    const exitCode = await this.generateShutdownExitCode()
+
+    this.processClerk.exit({
+      exitCode,
+    })
+  }
+
+  /**
+   * Generate the code the process ends under, by making the teardown and watching how it went.
+   *
+   * The teardown is made here rather than above so that what it did and what the process reports
+   * are one answer rather than two: a caller reading the code back has no second place to look for
+   * whether the line was written.
+   *
+   * A rejection is caught rather than carried out, for the reason the caller states — the exit is
+   * owed to whoever answered the signal, and an exception leaving here would take it away. What
+   * the rejection changes is the code.
+   *
+   * @returns {Promise<number>} The exit code.
+   * @public
+   */
+  async generateShutdownExitCode () {
     try {
       await this.teardownJobDispatchersWithinDeadline()
+
+      return CLEAN_SHUTDOWN_EXIT_CODE
     } catch (error) {
       this.logFailedShutdown({
         error,
       })
-    }
 
-    this.processClerk.exit()
+      return UNCLEAN_SHUTDOWN_EXIT_CODE
+    }
   }
 
   /**
