@@ -5,5 +5,9 @@
   "run-execution": "103",
   "media-fetch": "104",
   "run-delivery": "105",
-  "asset-media-extraction": "106"
+  "asset-media-extraction": "106",
+  "run-list": "107",
+  "run-cancel": "108",
+  "operator-cli": "109",
+  "retention": "110"
 }

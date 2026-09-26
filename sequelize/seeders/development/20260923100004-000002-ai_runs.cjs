@@ -225,6 +225,15 @@ const FAILURE_PARAMETERS_OF_RUN_10010011 = JSON.stringify({
   declaredValue: 20971521,
 })
 
+/*
+ * The one business object four runs below are grouped under.
+ *
+ * It is declared once rather than written out four times so that no row can drift off the group
+ * it is in: a filter that returned three of four would otherwise look like a defect in the read
+ * rather than like a typo in a fixture.
+ */
+const CORRELATION_ID_OF_ONE_BUSINESS_OBJECT = 'correlation-id-10700000'
+
 const aiRunSeeds = [
   {
     // repeat — answered with this run, and with `running` as its status
@@ -428,6 +437,103 @@ const aiRunSeeds = [
     accepted_at: new Date('2026-09-10T11:11:11.011Z'),
     started_at: new Date('2026-09-10T11:11:12.012Z'),
     finished_at: new Date('2026-09-10T11:11:13.013Z'),
+  },
+
+  /*
+   * Four runs of one business object, for the list of section 13.
+   *
+   * Every row above carries a correlation id of its own, which is what the idempotency cases
+   * those rows exist for needed. It leaves one thing unreadable: "filtering by correlation id
+   * returns every run for that object" cannot be told apart from "returns the one run that
+   * happens to carry it" when no two rows share an id. These four share one correlation id, so a
+   * filter that returned one of them, or that returned them in the wrong scope, is visible as a
+   * failure rather than as a pass.
+   *
+   * 10700004 is the fourth, and it belongs to another client. It is what makes the scope
+   * readable against the filter rather than beside it: a client asking after this correlation id
+   * is answered with three runs and not four, and a read that had applied the filter and
+   * forgotten the client would answer four. That is the first acceptance criterion and the
+   * eighth read as one case.
+   *
+   * The three statuses among the first three are deliberate too. A run still queued has finished
+   * no step and reports none; a run still going reports the last step it finished; a run that
+   * ended reports its last. One correlation id therefore holds all three shapes of the same row.
+   *
+   * They are accepted on 2026-09-14, four days after every row above. That is not decoration:
+   * `AiRunRateLimitInspector`'s own cases count this client's accepted runs inside windows that
+   * span 2026-09-10, and a run added inside one of those windows would change a count that file
+   * states as a literal. A different day keeps the two files from having to know about each
+   * other.
+   */
+  {
+    // ended, so its elapsed time is measured to its own finish rather than to the clock
+    id: 10700001,
+    api_client_id: 10000001,
+    ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
+    ai_run_status_id: AI_RUN_STATUS.SUCCEEDED.ID,
+    run_key: 'run-key-10700001',
+    request_key: 'request-key-correlated-10700001',
+    raw_request_body: '{"externalRef":"external-ref-10700001","subjectLabel":"Subject label of run 10700001","correlationId":"correlation-id-10700000","callbackUrl":"https://signing.client.development.invalid/callbacks/10700001"}',
+    external_ref: 'external-ref-10700001',
+    subject_label: 'Subject label of run 10700001',
+    correlation_id: CORRELATION_ID_OF_ONE_BUSINESS_OBJECT,
+    callback_url: 'https://signing.client.development.invalid/callbacks/10700001',
+    accepted_at: new Date('2026-09-14T01:00:01.001Z'),
+    started_at: new Date('2026-09-14T01:00:02.002Z'),
+    finished_at: new Date('2026-09-14T01:00:03.003Z'),
+  },
+  {
+    // still going and carrying no step yet, so it reports no last completed step although it is
+    // running — which is the other half of what run 10010001 reads as, and not the same state
+    id: 10700002,
+    api_client_id: 10000001,
+    ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
+    ai_run_status_id: AI_RUN_STATUS.RUNNING.ID,
+    run_key: 'run-key-10700002',
+    request_key: 'request-key-correlated-10700002',
+    raw_request_body: '{"externalRef":"external-ref-10700002","subjectLabel":"Subject label of run 10700002","correlationId":"correlation-id-10700000","callbackUrl":"https://signing.client.development.invalid/callbacks/10700002"}',
+    external_ref: 'external-ref-10700002',
+    subject_label: 'Subject label of run 10700002',
+    correlation_id: CORRELATION_ID_OF_ONE_BUSINESS_OBJECT,
+    callback_url: 'https://signing.client.development.invalid/callbacks/10700002',
+    accepted_at: new Date('2026-09-14T02:00:04.004Z'),
+    started_at: new Date('2026-09-14T02:00:05.005Z'),
+    finished_at: null,
+  },
+  {
+    // never picked up, so it has finished no step and reports none
+    id: 10700003,
+    api_client_id: 10000001,
+    ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
+    ai_run_status_id: AI_RUN_STATUS.QUEUED.ID,
+    run_key: 'run-key-10700003',
+    request_key: 'request-key-correlated-10700003',
+    raw_request_body: '{"externalRef":"external-ref-10700003","subjectLabel":"Subject label of run 10700003","correlationId":"correlation-id-10700000","callbackUrl":"https://signing.client.development.invalid/callbacks/10700003"}',
+    external_ref: 'external-ref-10700003',
+    subject_label: 'Subject label of run 10700003',
+    correlation_id: CORRELATION_ID_OF_ONE_BUSINESS_OBJECT,
+    callback_url: 'https://signing.client.development.invalid/callbacks/10700003',
+    accepted_at: new Date('2026-09-14T03:00:06.006Z'),
+    started_at: null,
+    finished_at: null,
+  },
+  {
+    // another client's run under the same correlation id, which is what the scope has to beat
+    id: 10700004,
+    api_client_id: 10000002,
+    ai_run_category_id: AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID,
+    ai_run_status_id: AI_RUN_STATUS.FAILED.ID,
+    run_key: 'run-key-10700004',
+    request_key: 'request-key-correlated-10700004',
+    raw_request_body: '{"externalRef":"external-ref-10700004","subjectLabel":"Subject label of run 10700004","correlationId":"correlation-id-10700000","callbackUrl":"https://rotating.client.development.invalid/callbacks/10700004"}',
+    external_ref: 'external-ref-10700004',
+    subject_label: 'Subject label of run 10700004',
+    correlation_id: CORRELATION_ID_OF_ONE_BUSINESS_OBJECT,
+    callback_url: 'https://rotating.client.development.invalid/callbacks/10700004',
+    failure_reason_code: 'PROVIDER_CALL_FAILED',
+    accepted_at: new Date('2026-09-14T04:00:07.007Z'),
+    started_at: new Date('2026-09-14T04:00:08.008Z'),
+    finished_at: new Date('2026-09-14T04:00:09.009Z'),
   },
 ]
 
