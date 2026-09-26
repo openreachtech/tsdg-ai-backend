@@ -105,7 +105,19 @@ const FOREIGN_WORKSPACE_MESSAGE = 'refused a workspace path this process does no
  * removed, and that is raised rather than swallowed, because it is a fetched file still sitting on
  * a disk after the run that fetched it ended.
  *
- * **What stays open, stated rather than claimed closed.** Three things.
+ * **What stays open, stated rather than claimed closed.** Four things.
+ *
+ * The claim check and the write are two steps, and between them is a window.
+ * `#confirmOwnWorkspaceDirectory()` answers for the path as `lstat` found it; the `writeFile` that
+ * follows resolves the path again. Somebody able to remove the directory in between can leave a
+ * symbolic link to a directory of their own in its place, and `wx` guards the final component
+ * only - so the file is created, under `0o600`, inside the directory they chose, and
+ * `#removeWorkspace()` then unlinks their link and leaves the bytes. That is the scenario the
+ * paragraph above says the check prevents, and the check on its own does not prevent it. What does
+ * is that the removal the attack has to open with cannot be made: `os.tmpdir()` answers a
+ * sticky-bit directory on POSIX - `/tmp`, mode `1777` - where only an entry's own owner may unlink
+ * it. So "the root is trusted" above is resting on that bit, said here rather than assumed, and a
+ * deployment pointing the root at a world-writable directory without it has taken the window back.
  *
  * The workspace lives for as long as the process lets it: a worker killed between the fetch and
  * the removal leaves the directory behind, and nothing here sweeps one left by a process that is

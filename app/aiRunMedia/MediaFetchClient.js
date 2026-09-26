@@ -90,6 +90,30 @@ const DEFAULT_MAXIMUM_REDIRECT_COUNT = 3
  */
 const DEFAULT_MAXIMUM_READ_BYTE_SIZE = AI_RUN_MEDIA_LIMIT.MAXIMUM_BYTE_SIZE
 
+/*
+ * How many pieces this client will assemble one file out of.
+ *
+ * The bound above is on the bytes, and the bytes are not what a body arriving in a hundred
+ * thousand frames costs. Each piece is an object of its own, costing far more than the byte it may
+ * carry, and each is a frame the event loop is woken for - so ten megabytes delivered one byte at
+ * a time is ten million objects and ten million wake-ups inside a bound that sees ten megabytes
+ * and is content.
+ *
+ * Sixty-five thousand five hundred and thirty-six pieces spread over the ten-megabyte cap is an
+ * average frame of a hundred and sixty bytes. A host serving a photograph sends kilobytes at a
+ * time, so this sits roughly an order of magnitude below the chattiest honest one and refuses only
+ * the body that is framed to be expensive.
+ */
+const DEFAULT_MAXIMUM_READ_CHUNK_COUNT = 65536
+
+/*
+ * The scheme a hop may not be moved off.
+ *
+ * A redirect arriving on this one may only go on over this one - see the class comment on why a
+ * downgrade to plaintext is refused, and on what a chain that began on `http:` is entitled to.
+ */
+const SECURE_URL_PROTOCOL = 'https:'
+
 const LOG_FILE_PATH = rootPath.to('logs/media-fetch-')
 
 /*
@@ -159,6 +183,30 @@ const mentsuLogger = MentsuLogger.create({
  * redirecting to another path on the same host is followed, as it should be; what the list bounds
  * is where a file may come from, which is the same boundary the first hop has.
  *
+ * **A redirect may not move the fetch from `https:` to `http:`.** An entry on the list is a bare
+ * hostname, so the key cannot say "this host over TLS only", and a listed host answering `302` to
+ * `http://` on a listed host would otherwise be followed - which hands the caller who controls the
+ * object's redirect metadata a way to move a photograph onto plaintext, where a network between
+ * here and the host reads it and writes over it. So a hop that arrived on `https:` may only go on
+ * over `https:`. A first URL that is already `http:` is untouched and its chain stays plaintext
+ * throughout: the key is what decides which hosts exist, and development fetches over plaintext by
+ * design. What the refusal costs is a deployment whose listed host really does redirect from TLS
+ * to plaintext - that one now fails under `MEDIA_FETCH_FAILED` with nothing in a log naming the
+ * scheme, for the same reason every other refusal here writes no line.
+ *
+ * **Every response this class decides not to read is disposed of before it is let go.** A `3xx`
+ * arrives with a body like any other response, and asking for the hop by hand is what made that
+ * body this class's: under `redirect: 'follow'` the client drained a redirect internally, and
+ * under `redirect: 'manual'` nobody does. A body neither read nor cancelled is a connection the
+ * client cannot release - one leaked per hop, held for as long as a worker daemon runs - and the
+ * body of a `3xx` is the caller's to make as large as it likes, because the object redirecting
+ * from is theirs. So it is cancelled on every branch that leaves a response behind: a hop that is
+ * followed, a chain out of hops, a hop the list refuses, a hop that would downgrade the transport,
+ * a status the server answered with, and a size declared past the bound. That is disposal and not
+ * tidiness - the file descriptor does not come back without it - and it is now a duty of every
+ * branch anybody adds to `#fetchMedium()` or `#sendFetchRequestHop()` after this, which nothing but
+ * this paragraph enforces.
+ *
  * **The host is the parsed URL's own `hostname`, never a piece of the text.** A URL may carry
  * credentials before its host (`https://files.client.example@somewhere.else/photo.jpg`), and the
  * host of that one is `somewhere.else`. Comparing text rather than the parsed hostname is how an
@@ -200,6 +248,23 @@ const mentsuLogger = MentsuLogger.create({
  * file too large, it stopped reading - and the caller that declared an honest size over the cap was
  * already refused with `MEDIA_LIMIT_EXCEEDED` before the fetch.
  *
+ * **The pieces are counted as well as the bytes, and the accumulator is appended to rather than
+ * rebuilt.** Assembling a body out of n pieces by building a fresh array of every piece so far
+ * costs n squared copies, and that is a cost neither bound above can see: a host framing its body
+ * one byte at a time spent the whole thirty-second budget on array copies before it had read a
+ * hundred kilobytes, and spent it synchronously, on the event loop the worker publishes its
+ * heartbeat from - which is a stalled job redelivered rather than a slow file. So the pieces are
+ * appended to the one array, which makes the read linear in them. The count is then bounded as
+ * well, because the byte bound does not bound it either: ten megabytes arriving in one-byte frames
+ * is ten million objects, each costing far more than the byte it carries, and a body framed that
+ * way is not one this service has any reason to accept.
+ *
+ * What the second bound costs is stated where it falls: `MEDIA_UNREADABLE` does not say which of
+ * the two bounds stopped the read, so an operator holding a refused file cannot tell a body too
+ * large from one too finely framed, and a host that genuinely frames small is refused with nothing
+ * naming the reason. Telling them apart would mean a reason code section 18 does not define, which
+ * is the spec's to add rather than this class's.
+ *
  * **What stays open, stated rather than claimed closed.** An entry is a hostname, so the allow-list
  * bounds *where* a file comes from and not which port, path or object on that host - a host on the
  * list serving something it should not is not a case this class can see, and that now includes a
@@ -208,6 +273,11 @@ const mentsuLogger = MentsuLogger.create({
  * it does not control has not been protected from that host - and a redirect to a *name* that
  * resolves that way is refused only if the name itself is off the list, never by what it resolves
  * to. Both are properties of the key's value, which is why the key is a deployment decision.
+ *
+ * The scheme is no longer one of them, and the paragraph above says exactly how far that goes: a
+ * chain is refused for being moved off `https:` and never for having begun off it, so a key
+ * listing a host reachable over plaintext still fetches over plaintext from end to end, and what
+ * made that choice is the key.
  *
  * The declared media type is the server's claim and is carried as one. Nothing here reads the first
  * bytes of the file to see whether they agree with it, so a body declared `image/jpeg` that is an
@@ -233,11 +303,13 @@ export default class MediaFetchClient {
     requestTimeoutMilliseconds,
     maximumRedirectCount,
     maximumReadByteSize,
+    maximumReadChunkCount,
   }) {
     this.allowedHosts = allowedHosts
     this.requestTimeoutMilliseconds = requestTimeoutMilliseconds
     this.maximumRedirectCount = maximumRedirectCount
     this.maximumReadByteSize = maximumReadByteSize
+    this.maximumReadChunkCount = maximumReadChunkCount
   }
 
   /**
@@ -254,6 +326,7 @@ export default class MediaFetchClient {
     requestTimeoutMilliseconds = DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
     maximumRedirectCount = DEFAULT_MAXIMUM_REDIRECT_COUNT,
     maximumReadByteSize = DEFAULT_MAXIMUM_READ_BYTE_SIZE,
+    maximumReadChunkCount = DEFAULT_MAXIMUM_READ_CHUNK_COUNT,
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
@@ -261,6 +334,7 @@ export default class MediaFetchClient {
         requestTimeoutMilliseconds,
         maximumRedirectCount,
         maximumReadByteSize,
+        maximumReadChunkCount,
       })
     )
   }
@@ -377,7 +451,8 @@ export default class MediaFetchClient {
         response,
       })
     ) {
-      return this.buildFailedFetchOutcome({
+      return this.abandonFetchedResponse({
+        response,
         failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_FETCH_FAILED,
       })
     }
@@ -387,7 +462,8 @@ export default class MediaFetchClient {
         response,
       })
     ) {
-      return this.buildFailedFetchOutcome({
+      return this.abandonFetchedResponse({
+        response,
         failureReasonCode: AI_RUN_FAILURE_REASON_CODE.MEDIA_UNREADABLE,
       })
     }
@@ -499,6 +575,12 @@ export default class MediaFetchClient {
    * rather than each hop's - twelve files redirecting three times each would otherwise be entitled
    * to twelve times the budget the run has.
    *
+   * **The response this answers with carries a body nobody has read, and disposing of it is the
+   * caller's.** Every response left behind on the way here has been cancelled already; the one
+   * handed back has not, and cannot be - reading it is the point of asking. A caller that answers
+   * away from it without reading it must cancel it, which is what `#fetchMedium()` does on each of
+   * its own refusals.
+   *
    * @param {{
    *   url: string
    * }} params - Parameters.
@@ -523,8 +605,16 @@ export default class MediaFetchClient {
    *
    * **This is where the allow-list is asked of a hop that is not the first.** The check runs before
    * the hop is sent, exactly as it does for the caller's own URL, so a host off the list is refused
-   * with nothing fetched from it. Two things end the chain with nothing: a hop the list refuses,
-   * and a chain that has used up its hops. Both are a file that could not be fetched.
+   * with nothing fetched from it. Three things end the chain with nothing: a hop the list refuses,
+   * a hop that would move the fetch off `https:`, and a chain that has used up its hops. All three
+   * are a file that could not be fetched.
+   *
+   * **The `3xx` is disposed of on every one of those branches and on the one that recurses.** Its
+   * body was never read, and a body neither read nor cancelled holds the connection it arrived on
+   * for good - see the class comment, which says why that is disposal rather than tidiness and why
+   * asking for `redirect: 'manual'` is what made it this method's to do. The only branch that does
+   * not cancel is the one answering the response itself, because that one hands the body on to a
+   * caller who will read it or abandon it in turn.
    *
    * It recurses rather than loops because there is no loop form this repository permits, and
    * because the hop count is what the recursion carries - three frames at most.
@@ -562,7 +652,20 @@ export default class MediaFetchClient {
     }
 
     if (remainingRedirectCount < 1) {
-      return null
+      return this.cancelUnreadResponseBody({
+        response,
+      })
+    }
+
+    if (
+      this.downgradesTransportSecurity({
+        url,
+        redirectedUrl,
+      })
+    ) {
+      return this.cancelUnreadResponseBody({
+        response,
+      })
     }
 
     if (
@@ -570,8 +673,14 @@ export default class MediaFetchClient {
         url: redirectedUrl,
       })
     ) {
-      return null
+      return this.cancelUnreadResponseBody({
+        response,
+      })
     }
+
+    await this.cancelUnreadResponseBody({
+      response,
+    })
 
     const nextRedirectCount = remainingRedirectCount - 1
 
@@ -668,6 +777,61 @@ export default class MediaFetchClient {
     } catch (error) {
       return null
     }
+  }
+
+  /**
+   * Check whether a redirect would move the fetch off the transport it arrived on.
+   *
+   * The allow-list is hostnames, so nothing in the key can say "this host over TLS only", and a
+   * listed host answering `302` to plaintext on a listed host would pass every other check made
+   * here. A hop that arrived over TLS may therefore only go on over TLS. A hop that arrived over
+   * plaintext is not held to anything, because a chain that began there was never protecting
+   * anything to begin with and that was the key's decision.
+   *
+   * @param {{
+   *   url: string
+   *   redirectedUrl: string
+   * }} params - Parameters.
+   * @returns {boolean} Whether the redirect would leave the transport weaker than it arrived.
+   * @public
+   */
+  downgradesTransportSecurity ({
+    url,
+    redirectedUrl,
+  }) {
+    const hopProtocol = this.extractUrlProtocol({
+      url,
+    })
+
+    if (hopProtocol !== SECURE_URL_PROTOCOL) {
+      return false
+    }
+
+    const redirectedProtocol = this.extractUrlProtocol({
+      url: redirectedUrl,
+    })
+
+    return redirectedProtocol !== SECURE_URL_PROTOCOL
+  }
+
+  /**
+   * Extract the scheme a URL names.
+   *
+   * @param {{
+   *   url: *
+   * }} params - Parameters.
+   * @returns {string | null} The scheme, with its colon, or null when the value is no URL.
+   * @public
+   */
+  extractUrlProtocol ({
+    url,
+  }) {
+    const parsedUrl = this.buildParsedUrl({
+      url,
+    })
+
+    return parsedUrl?.protocol
+      ?? null
   }
 
   /**
@@ -870,12 +1034,27 @@ export default class MediaFetchClient {
    * the chunks and the size read so far rather than holding either as state - a client is one
    * instance and a run reads twelve files through it.
    *
+   * **The array handed in is appended to, and is not rebuilt per chunk.** Spreading it into a new
+   * array each time reads as the tidier of the two and costs n squared copies in the number of
+   * chunks, which no bound on the bytes can see: a host framing its body one byte at a time spent
+   * fifteen seconds of processor time and the whole request budget assembling eighty-six
+   * kilobytes, synchronously, on the loop a worker's heartbeat shares. So the accumulator is one
+   * array from the first chunk to the last. What that asks of a caller is stated rather than
+   * assumed: the array passed in is written to, so nothing may hand this method an array it still
+   * means to read, and `#readResponseBytes()` passes a fresh one for exactly that reason.
+   *
+   * **The chunks are counted as well as measured.** Ten megabytes is a bound the byte count keeps;
+   * ten million one-byte frames is ten million objects and ten million wake-ups inside it. A body
+   * arriving in more pieces than the bound allows is abandoned exactly as one arriving in too many
+   * bytes is, and answers the same `MEDIA_UNREADABLE` - the class comment says what that costs an
+   * operator reading the code back.
+   *
    * @param {{
    *   reader: ReadableStreamDefaultReader<Uint8Array>
    *   chunks: Array<Buffer>
    *   readByteSize: number
    * }} params - Parameters.
-   * @returns {Promise<Buffer | null>} The bytes, or null when the body went past the bound.
+   * @returns {Promise<Buffer | null>} The bytes, or null when the body went past either bound.
    * @public
    */
   async readBoundedStreamBytes ({
@@ -897,14 +1076,17 @@ export default class MediaFetchClient {
       })
     }
 
-    const nextChunks = [
-      ...chunks,
-      Buffer.from(chunk.value),
-    ]
+    if (chunks.length >= this.maximumReadChunkCount) {
+      return this.cancelBoundedStreamRead({
+        reader,
+      })
+    }
+
+    chunks.push(Buffer.from(chunk.value))
 
     return this.readBoundedStreamBytes({
       reader,
-      chunks: nextChunks,
+      chunks,
       readByteSize: nextReadByteSize,
     })
   }
@@ -1000,6 +1182,75 @@ export default class MediaFetchClient {
   }
 
   /**
+   * Stop reading a response this client will not read, and answer the outcome it failed under.
+   *
+   * The two halves are one step and are written as one method because leaving them apart is what
+   * the audit found: a response answered away from without its body disposed of is a connection
+   * the client never gets back, and the branch that returns the outcome is the branch that knows
+   * the response is being let go.
+   *
+   * @param {{
+   *   response: Response | null
+   *   failureReasonCode: string
+   * }} params - Parameters.
+   * @returns {Promise<MediaFetchOutcome>} The outcome.
+   * @public
+   */
+  async abandonFetchedResponse ({
+    response,
+    failureReasonCode,
+  }) {
+    await this.cancelUnreadResponseBody({
+      response,
+    })
+
+    return this.buildFailedFetchOutcome({
+      failureReasonCode,
+    })
+  }
+
+  /**
+   * Release the connection a response arrived on, when its body was never read.
+   *
+   * **This is what returns the socket, and it is not housekeeping.** A body that was neither read
+   * to its end nor cancelled leaves the client unable to release the connection it came on, so a
+   * response answered away from is a file descriptor and a pool slot held for the life of the
+   * process. The class comment names the branches that leave one behind and says why the `3xx` of
+   * them is caller-controlled.
+   *
+   * It answers nothing readable, so a branch with nothing to answer returns it directly - the same
+   * shape `#cancelBoundedStreamRead()` has, and for the same reason: `no-restricted-syntax`
+   * refuses an `await` anywhere inside an `if` statement.
+   *
+   * A cancel that throws is answered rather than raised, and writes no line. There is one way it
+   * can: a body already read, already cancelled or already errored, and each of those is a body
+   * holding nothing - so the failure says the work was done, not that it failed.
+   *
+   * @param {{
+   *   response: Response | null
+   * }} params - Parameters.
+   * @returns {Promise<null>} Nothing readable.
+   * @public
+   */
+  async cancelUnreadResponseBody ({
+    response,
+  }) {
+    const bodyStream = response?.body
+
+    if (!bodyStream) {
+      return null
+    }
+
+    try {
+      await bodyStream.cancel()
+
+      return null
+    } catch (error) {
+      return null
+    }
+  }
+
+  /**
    * Build the outcome of a fetch that produced nothing.
    *
    * @param {{
@@ -1026,6 +1277,7 @@ export default class MediaFetchClient {
  *   requestTimeoutMilliseconds: number
  *   maximumRedirectCount: number
  *   maximumReadByteSize: number
+ *   maximumReadChunkCount: number
  * }} MediaFetchClientParams
  */
 

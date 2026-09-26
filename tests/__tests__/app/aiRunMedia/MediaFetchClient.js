@@ -1,4 +1,5 @@
 import http from 'node:http'
+import timersPromises from 'node:timers/promises'
 
 import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
 
@@ -19,11 +20,36 @@ import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
  * it by. What stands in for a response is a real `Response` - Node builds one - rather than a
  * hand-written double, so nothing in this file restates what a response is.
  *
- * Three describes use a real one instead, over loopback, and say so where they sit: a redirect
- * refused, a redirect followed, and a chain longer than the hops allowed. A stubbed fetch follows
- * nothing, so it could not have shown that `fetch` left to itself follows up to twenty hops and
- * answers with the last of them - which is the thing those three are about.
+ * Several describes use a real one instead, over loopback, and say so where they sit: a redirect
+ * refused, a redirect followed, a chain longer than the hops allowed, and the four that watch a
+ * connection be released. A stubbed fetch follows nothing, so it could not have shown that `fetch`
+ * left to itself follows up to twenty hops and answers with the last of them - and a stubbed one
+ * has no socket at all, which is the only thing the release describes can observe.
+ *
+ * Each of those closes its servers before it asserts, not after. A failing assertion ends the test
+ * body where it stands, so a `close()` written below the assertions is a listening handle left
+ * behind by exactly the run that failed - which is the run under `--detectOpenHandles`.
  */
+
+/*
+ * The body a `302` carries in the describes that watch a connection be released.
+ *
+ * The size is load-bearing. An empty `302` arrives complete, so the client can release its
+ * connection whether anybody cancelled the body or not, and a describe built on one would pass
+ * against the defect it exists to catch. A quarter of a megabyte does not fit the buffers between
+ * here and there, so the connection is only released by the cancel.
+ */
+const LEAKY_REDIRECT_BODY_BYTE_SIZE = 262144
+
+/*
+ * How long those describes wait for the server to see its socket go.
+ *
+ * The wait is bounded rather than open-ended so that a regression fails on the assertion, naming a
+ * socket still alive, instead of on a suite timeout naming nothing. With the cancel in place the
+ * wait ends in a millisecond or two and this figure is never reached; without it, nothing ever
+ * closes the socket and the whole of it is spent.
+ */
+const SOCKET_RELEASE_WAIT_MILLISECONDS = 2000
 
 describe('MediaFetchClient', () => {
   describe('constructor', () => {
@@ -38,6 +64,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 30000,
               maximumRedirectCount: 3,
               maximumReadByteSize: 10485760,
+              maximumReadChunkCount: 65536,
             },
             expected: [
               'files.client.example',
@@ -52,6 +79,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 12000,
               maximumRedirectCount: 1,
               maximumReadByteSize: 2048,
+              maximumReadChunkCount: 1024,
             },
             expected: [
               'storage.alpha.example',
@@ -81,6 +109,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 30000,
               maximumRedirectCount: 3,
               maximumReadByteSize: 10485760,
+              maximumReadChunkCount: 65536,
             },
             expected: 30000,
           },
@@ -92,6 +121,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 12000,
               maximumRedirectCount: 1,
               maximumReadByteSize: 2048,
+              maximumReadChunkCount: 1024,
             },
             expected: 12000,
           },
@@ -118,6 +148,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 30000,
               maximumRedirectCount: 3,
               maximumReadByteSize: 10485760,
+              maximumReadChunkCount: 65536,
             },
             expected: 3,
           },
@@ -129,6 +160,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 12000,
               maximumRedirectCount: 0,
               maximumReadByteSize: 2048,
+              maximumReadChunkCount: 1024,
             },
             expected: 0,
           },
@@ -155,6 +187,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 30000,
               maximumRedirectCount: 3,
               maximumReadByteSize: 10485760,
+              maximumReadChunkCount: 65536,
             },
             expected: 10485760,
           },
@@ -166,6 +199,7 @@ describe('MediaFetchClient', () => {
               requestTimeoutMilliseconds: 12000,
               maximumRedirectCount: 1,
               maximumReadByteSize: 2048,
+              maximumReadChunkCount: 1024,
             },
             expected: 2048,
           },
@@ -179,6 +213,45 @@ describe('MediaFetchClient', () => {
 
           expect(client)
             .toHaveProperty('maximumReadByteSize', expected)
+        })
+      })
+
+      describe('#maximumReadChunkCount', () => {
+        const cases = [
+          {
+            params: {
+              allowedHosts: [
+                'files.client.example',
+              ],
+              requestTimeoutMilliseconds: 30000,
+              maximumRedirectCount: 3,
+              maximumReadByteSize: 10485760,
+              maximumReadChunkCount: 65536,
+            },
+            expected: 65536,
+          },
+          {
+            params: {
+              allowedHosts: [
+                'storage.alpha.example',
+              ],
+              requestTimeoutMilliseconds: 12000,
+              maximumRedirectCount: 1,
+              maximumReadByteSize: 2048,
+              maximumReadChunkCount: 1024,
+            },
+            expected: 1024,
+          },
+        ]
+
+        test.each(cases)('maximumReadChunkCount: $params.maximumReadChunkCount', ({
+          params,
+          expected,
+        }) => {
+          const client = new MediaFetchClient(params)
+
+          expect(client)
+            .toHaveProperty('maximumReadChunkCount', expected)
         })
       })
     })
@@ -227,6 +300,7 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 30000,
             maximumRedirectCount: 3,
             maximumReadByteSize: 10485760,
+            maximumReadChunkCount: 65536,
           },
           expected: {
             allowedHosts: [
@@ -235,6 +309,7 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 30000,
             maximumRedirectCount: 3,
             maximumReadByteSize: 10485760,
+            maximumReadChunkCount: 65536,
           },
         },
         {
@@ -245,6 +320,7 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 12000,
             maximumRedirectCount: 1,
             maximumReadByteSize: 2048,
+            maximumReadChunkCount: 1024,
           },
           expected: {
             allowedHosts: [
@@ -253,6 +329,7 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 12000,
             maximumRedirectCount: 1,
             maximumReadByteSize: 2048,
+            maximumReadChunkCount: 1024,
           },
         },
       ]
@@ -284,6 +361,7 @@ describe('MediaFetchClient', () => {
           requestTimeoutMilliseconds: 30000,
           maximumRedirectCount: 3,
           maximumReadByteSize: 10485760,
+          maximumReadChunkCount: 65536,
         }
 
         SpyClass.create()
@@ -336,6 +414,25 @@ describe('MediaFetchClient', () => {
 
         expect(client)
           .toHaveProperty('maximumReadByteSize', 10485760)
+      })
+    })
+
+    describe('should use default maximumReadChunkCount value', () => {
+      /*
+       * The second of the two bounds on the read. The byte bound cannot see the cost of a body
+       * framed a byte at a time - ten megabytes arriving that way is ten million objects inside a
+       * bound that sees ten megabytes and is content - so the count is bounded too, and the figure
+       * is stated here because it is the one a deployment would have to argue with.
+       */
+      test('with the hosts stated', () => {
+        const client = MediaFetchClient.create({
+          allowedHosts: [
+            'files.client.example',
+          ],
+        })
+
+        expect(client)
+          .toHaveProperty('maximumReadChunkCount', 65536)
       })
     })
   })
@@ -1750,9 +1847,9 @@ describe('MediaFetchClient', () => {
         mockRedirectHost,
         expected,
       }) => {
-        const refusedHostListener = jest.fn()
+        const refusedHostRequestPaths = []
         const refusedHostServer = http.createServer((request, response) => {
-          refusedHostListener()
+          refusedHostRequestPaths.push(request.url)
 
           response.writeHead(200, {
             'content-type': 'image/jpeg',
@@ -1783,14 +1880,15 @@ describe('MediaFetchClient', () => {
           url: `http://127.0.0.1:${redirectingServer.address().port}/photos/front-elevation.jpg`,
         })
 
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
+        refusedHostServer.closeAllConnections()
+        refusedHostServer.close()
+
         expect(actual)
           .toEqual(expected)
-        expect(refusedHostListener)
-          .not
-          .toHaveBeenCalled()
-
-        redirectingServer.close()
-        refusedHostServer.close()
+        expect(refusedHostRequestPaths)
+          .toHaveLength(0)
       })
     })
   })
@@ -1872,11 +1970,13 @@ describe('MediaFetchClient', () => {
           url: `http://127.0.0.1:${redirectingServer.address().port}/photos/front-elevation.jpg`,
         })
 
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
+        objectServer.closeAllConnections()
+        objectServer.close()
+
         expect(actual)
           .toEqual(expected)
-
-        redirectingServer.close()
-        objectServer.close()
       })
     })
   })
@@ -1886,8 +1986,12 @@ describe('MediaFetchClient', () => {
   describe('#fetchMedium()', () => {
     /*
      * A host on the list redirecting to itself for ever is still a host on the list, so the
-     * allow-list cannot end this one - the hop count does. The number of requests the server saw
-     * is what says where it ended: the first fetch plus one per hop allowed.
+     * allow-list cannot end this one - the hop count does. The paths the server was asked for are
+     * what say where it ended: the first fetch plus one per hop allowed, in order.
+     *
+     * The requests are collected into an array rather than counted on a `jest.fn()`, so the
+     * assertion is `toHaveLength()` and `toEqual()` over the paths - which pins the order of the
+     * chain as well as its length, and stays inside the matchers this repository allows.
      */
     describe('should give up a chain longer than the hops allowed', () => {
       const cases = [
@@ -1899,7 +2003,9 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 30000,
             maximumRedirectCount: 0,
           },
-          expected: 1,
+          expected: [
+            '/photos/looping.jpg',
+          ],
         },
         {
           factoryParams: {
@@ -1909,7 +2015,11 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 30000,
             maximumRedirectCount: 2,
           },
-          expected: 3,
+          expected: [
+            '/photos/looping.jpg',
+            '/again',
+            '/again',
+          ],
         },
       ]
 
@@ -1917,9 +2027,9 @@ describe('MediaFetchClient', () => {
         factoryParams,
         expected,
       }) => {
-        const hopListener = jest.fn()
+        const hopRequestPaths = []
         const loopingServer = http.createServer((request, response) => {
-          hopListener()
+          hopRequestPaths.push(request.url)
 
           response.writeHead(302, {
             location: '/again',
@@ -1937,12 +2047,13 @@ describe('MediaFetchClient', () => {
           url: `http://127.0.0.1:${loopingServer.address().port}/photos/looping.jpg`,
         })
 
+        loopingServer.closeAllConnections()
+        loopingServer.close()
+
         expect(actual)
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
-        expect(hopListener)
-          .toHaveBeenCalledTimes(expected)
-
-        loopingServer.close()
+        expect(hopRequestPaths)
+          .toEqual(expected)
       })
     })
   })
@@ -2356,6 +2467,1265 @@ describe('MediaFetchClient', () => {
 
         expect(actual)
           .toBeNull()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The connection a followed redirect arrived on, released rather than leaked.
+     *
+     * This is the cost `redirect: 'manual'` carried in with it. Under `redirect: 'follow'` the
+     * client drained a redirect's body itself; asked for the hop by hand, it hands the `3xx` over
+     * body and all, and a body neither read nor cancelled is a connection the client cannot give
+     * back. A worker following one redirect per medium leaks one socket per medium, for as long as
+     * the daemon runs.
+     *
+     * The network is real here because a socket is the only thing that can show it, and the `302`
+     * carries a quarter of a megabyte because that is the shape of the defect: an empty `302`
+     * arrives complete and leaks nothing, while the body of a `302` is the caller's to make as
+     * large as it likes - the object redirecting from is theirs.
+     *
+     * What is watched is the first connection the redirecting server accepted, which is the one
+     * the unread `3xx` came in on. Measured against a client whose cancel was taken out again, it
+     * is never released at all; measured against this one, it is released in single-figure
+     * milliseconds.
+     */
+    describe('should release the connection a followed redirect arrived on', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseBody: 'front-elevation-bytes',
+          expected: {
+            bytes: Buffer.from('front-elevation-bytes'),
+            byteSize: 21,
+            mimeType: 'image/jpeg',
+            failureReasonCode: null,
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseBody: 'kitchen-counter-png',
+          expected: {
+            bytes: Buffer.from('kitchen-counter-png'),
+            byteSize: 19,
+            mimeType: 'image/jpeg',
+            failureReasonCode: null,
+          },
+        },
+      ]
+
+      test.each(cases)('mockResponseBody: $mockResponseBody', async ({
+        factoryParams,
+        mockResponseBody,
+        expected,
+      }) => {
+        const releasedSockets = []
+
+        const objectServer = http.createServer((request, response) => {
+          response.writeHead(200, {
+            'content-type': 'image/jpeg',
+          })
+          response.end(mockResponseBody)
+        })
+
+        objectServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        await new Promise(resolve => {
+          objectServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const redirectingServer = http.createServer((request, response) => {
+          const redirectedUrlText = `http://127.0.0.1:${objectServer.address().port}/object`
+
+          response.writeHead(302, {
+            location: redirectedUrlText,
+          })
+          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x61))
+        })
+
+        redirectingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const redirectSocketReleased = new Promise(resolve => {
+          redirectingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          redirectingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${redirectingServer.address().port}/photos/front-elevation.jpg`,
+        })
+
+        await Promise.race([
+          redirectSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
+        objectServer.closeAllConnections()
+        objectServer.close()
+
+        expect(actual)
+          .toEqual(expected)
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The same release on the branch that ends a chain instead of continuing it. A host on the
+     * list redirecting to itself for ever is refused by the hop count, and the `3xx` it was refused
+     * on still has to be disposed of - the audit named this branch beside the recursing one, and it
+     * leaked the same way.
+     *
+     * No hops are allowed at all, so the server sees one connection and the one it sees is the one
+     * carrying the `3xx` nobody read.
+     */
+    describe('should release the connection of a chain it gave up', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumRedirectCount: 0,
+          },
+          mockLocation: '/again',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumRedirectCount: 0,
+          },
+          mockLocation: '/objects/1234',
+        },
+      ]
+
+      test.each(cases)('mockLocation: $mockLocation', async ({
+        factoryParams,
+        mockLocation,
+      }) => {
+        const releasedSockets = []
+
+        const loopingServer = http.createServer((request, response) => {
+          response.writeHead(302, {
+            location: mockLocation,
+          })
+          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x62))
+        })
+
+        loopingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const loopingSocketReleased = new Promise(resolve => {
+          loopingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          loopingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${loopingServer.address().port}/photos/looping.jpg`,
+        })
+
+        await Promise.race([
+          loopingSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        loopingServer.closeAllConnections()
+        loopingServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The third `3xx` branch: a hop the allow-list refuses. Nothing is fetched from the host the
+     * `location` names - that is the first acceptance criterion and has its own describe above -
+     * and the response carrying that `location` is still this client's to dispose of.
+     */
+    describe('should release the connection of a redirect it refused', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockLocation: 'http://elsewhere.example/loot',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockLocation: 'http://storage.beta.example/moved.jpg',
+        },
+      ]
+
+      test.each(cases)('mockLocation: $mockLocation', async ({
+        factoryParams,
+        mockLocation,
+      }) => {
+        const releasedSockets = []
+
+        const redirectingServer = http.createServer((request, response) => {
+          response.writeHead(302, {
+            location: mockLocation,
+          })
+          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x63))
+        })
+
+        redirectingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const redirectSocketReleased = new Promise(resolve => {
+          redirectingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          redirectingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${redirectingServer.address().port}/photos/front-elevation.jpg`,
+        })
+
+        await Promise.race([
+          redirectSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The same defect one level up, and this one is no redirect at all: a status the server
+     * answered with is answered away from without its body being read either, and a `404` page of
+     * a quarter of a megabyte holds its connection exactly as an unread `302` does. The audit named
+     * the redirect branches; this is the branch above them, and closing only what was named would
+     * have closed the finding without closing the hole.
+     */
+    describe('should release the connection of a status it refused', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseStatus: 404,
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseStatus: 503,
+        },
+      ]
+
+      test.each(cases)('mockResponseStatus: $mockResponseStatus', async ({
+        factoryParams,
+        mockResponseStatus,
+      }) => {
+        const releasedSockets = []
+
+        const refusingServer = http.createServer((request, response) => {
+          response.writeHead(mockResponseStatus, {
+            'content-type': 'text/html',
+          })
+          response.end(Buffer.alloc(LEAKY_REDIRECT_BODY_BYTE_SIZE, 0x64))
+        })
+
+        refusingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const refusedSocketReleased = new Promise(resolve => {
+          refusingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          refusingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${refusingServer.address().port}/photos/missing.jpg`,
+        })
+
+        await Promise.race([
+          refusedSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        refusingServer.closeAllConnections()
+        refusingServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#cancelUnreadResponseBody()', () => {
+    /*
+     * What the disposal does, asked of the method that does it. A cancelled body reads back as
+     * used, which is the only thing a `Response` says about itself here - the socket is the
+     * connection's business and the describes above are where that is observed.
+     */
+    describe('should mark the body of a response it cancelled as used', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseBody: 'front-elevation-bytes',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseBody: 'kitchen-counter-png',
+        },
+      ]
+
+      test.each(cases)('mockResponseBody: $mockResponseBody', async ({
+        factoryParams,
+        mockResponseBody,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+        const response = new Response(mockResponseBody, {
+          status: 302,
+          headers: {
+            location: 'https://elsewhere.example/loot',
+          },
+        })
+
+        await client.cancelUnreadResponseBody({
+          response,
+        })
+
+        expect(response.bodyUsed)
+          .toBeTruthy()
+      })
+    })
+
+    describe('should answer nothing readable', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseBody: 'front-elevation-bytes',
+          label: 'a response carrying a body',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockResponseBody: null,
+          label: 'a response carrying none',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        factoryParams,
+        mockResponseBody,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.cancelUnreadResponseBody({
+          response: new Response(mockResponseBody, {
+            status: 302,
+          }),
+        })
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+
+    /*
+     * A request that produced no response at all - a connection refused, a host that does not
+     * resolve, a hop refused on the way - reaches this method as null, because the branches that
+     * dispose of a response do not first ask whether there is one.
+     */
+    describe('should answer nothing readable for a request that produced no response', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            response: null,
+          },
+          label: 'an empty allow-list',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 12000,
+          },
+          params: {
+            response: null,
+          },
+          label: 'an allow-list holding a host',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        factoryParams,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.cancelUnreadResponseBody(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#abandonFetchedResponse()', () => {
+    /*
+     * The two halves together: the outcome the caller reads, and the body disposed of on the way
+     * to it. Leaving them apart is what the audit found, so they are asserted together.
+     */
+    describe('should build the outcome of a response it let go', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            failureReasonCode: 'MEDIA_FETCH_FAILED',
+          },
+          mockResponseBody: 'a page that is not a photograph',
+          expected: {
+            bytes: null,
+            byteSize: null,
+            mimeType: null,
+            failureReasonCode: 'MEDIA_FETCH_FAILED',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            failureReasonCode: 'MEDIA_UNREADABLE',
+          },
+          mockResponseBody: 'more bytes than the bound will hold',
+          expected: {
+            bytes: null,
+            byteSize: null,
+            mimeType: null,
+            failureReasonCode: 'MEDIA_UNREADABLE',
+          },
+        },
+      ]
+
+      test.each(cases)('failureReasonCode: $params.failureReasonCode', async ({
+        factoryParams,
+        params,
+        mockResponseBody,
+        expected,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+        const response = new Response(mockResponseBody, {
+          status: 404,
+        })
+
+        const actual = await client.abandonFetchedResponse({
+          response,
+          failureReasonCode: params.failureReasonCode,
+        })
+
+        expect(actual)
+          .toEqual(expected)
+        expect(response.bodyUsed)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#downgradesTransportSecurity()', () => {
+    /*
+     * An allow-list entry is a bare hostname, so the key cannot say "this host over TLS only", and
+     * a listed host answering `302` to plaintext on a listed host passes every other check made
+     * here. That is the hop this refuses.
+     */
+    describe('should be truthy', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/front-elevation.jpg',
+            redirectedUrl: 'http://files.client.example/objects/1234',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+              'storage.beta.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/kitchen.png',
+            redirectedUrl: 'http://storage.beta.example/moved.jpg',
+          },
+        },
+      ]
+
+      test.each(cases)('redirectedUrl: $params.redirectedUrl', ({
+        factoryParams,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.downgradesTransportSecurity(params)
+
+        expect(actual)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * A chain that began on plaintext is held to nothing, and that is deliberate: it was
+     * protecting nothing to begin with, and which hosts exist over plaintext is the key's decision
+     * rather than this class's. The third case is the one a reader would want to see - plaintext
+     * going on to TLS is an upgrade and is not refused.
+     */
+    describe('should be falsy', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/front-elevation.jpg',
+            redirectedUrl: 'https://files.client.example/objects/1234',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'http://127.0.0.1/photos/front-elevation.jpg',
+            redirectedUrl: 'http://127.0.0.1/objects/1234',
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'http://files.client.example/photos/balcony.jpg',
+            redirectedUrl: 'https://files.client.example/objects/5678',
+          },
+        },
+      ]
+
+      test.each(cases)('redirectedUrl: $params.redirectedUrl', ({
+        factoryParams,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.downgradesTransportSecurity(params)
+
+        expect(actual)
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#extractUrlProtocol()', () => {
+    describe('should extract the scheme a URL names', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/front-elevation.jpg',
+          },
+          expected: 'https:',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'http://127.0.0.1:8080/photos/kitchen.png',
+          },
+          expected: 'http:',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'file:///etc/passwd',
+          },
+          expected: 'file:',
+        },
+      ]
+
+      test.each(cases)('url: $params.url', ({
+        factoryParams,
+        params,
+        expected,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.extractUrlProtocol(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    describe('should answer null for a value that is no URL', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'not a url at all',
+          },
+          label: 'text naming no URL',
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: '/objects/1234',
+          },
+          label: 'a path with nothing to resolve it against',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        factoryParams,
+        params,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = client.extractUrlProtocol(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * The downgrade refused end to end, and the hop it would have gone to never asked for.
+     *
+     * An allow-list entry cannot say "this host over TLS only", so a listed host answering `302`
+     * to plaintext on a listed host passed every check this class made before. The network is
+     * stubbed here rather than real, because the case needs a hop arriving over TLS and a loopback
+     * server has no certificate this suite could stand up. What is asserted is the URLs the fetch
+     * function was handed: the first and no other.
+     */
+    describe('should refuse a redirect that would move the fetch off https', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/front-elevation.jpg',
+          },
+          mockLocation: 'http://files.client.example/objects/1234',
+          expected: [
+            'https://files.client.example/photos/front-elevation.jpg',
+          ],
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/kitchen.png',
+          },
+          mockLocation: 'http://files.client.example/objects/5678',
+          expected: [
+            'https://files.client.example/photos/kitchen.png',
+          ],
+        },
+      ]
+
+      test.each(cases)('mockLocation: $mockLocation', async ({
+        factoryParams,
+        params,
+        mockLocation,
+        expected,
+      }) => {
+        const requestedUrls = []
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async requestedUrl => {
+            requestedUrls.push(requestedUrl)
+
+            return new Response(null, {
+              status: 302,
+              headers: {
+                location: mockLocation,
+              },
+            })
+          })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium(params)
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
+        expect(requestedUrls)
+          .toEqual(expected)
+      })
+    })
+
+    /*
+     * The control the refusal above would be meaningless without: the same chain staying on TLS is
+     * followed, so what refused the first one was the scheme and not the redirect.
+     */
+    describe('should follow a redirect that stays on https', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/front-elevation.jpg',
+          },
+          mockLocation: 'https://files.client.example/objects/1234',
+          expected: [
+            'https://files.client.example/photos/front-elevation.jpg',
+            'https://files.client.example/objects/1234',
+          ],
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              'files.client.example',
+            ],
+            requestTimeoutMilliseconds: 30000,
+          },
+          params: {
+            url: 'https://files.client.example/photos/kitchen.png',
+          },
+          mockLocation: 'https://files.client.example/objects/5678',
+          expected: [
+            'https://files.client.example/photos/kitchen.png',
+            'https://files.client.example/objects/5678',
+          ],
+        },
+      ]
+
+      test.each(cases)('mockLocation: $mockLocation', async ({
+        factoryParams,
+        params,
+        mockLocation,
+        expected,
+      }) => {
+        const requestedUrls = []
+
+        /*
+         * The two answers in the order the chain asks for them, rather than a ternary picking one
+         * by the URL it was handed. A conditional in a test body hides a branch, and here it hid
+         * the thing the case is actually about: that the first request is answered with the
+         * redirect and the second with the object. A queue states that, and a chain that asked a
+         * third time would be handed nothing rather than quietly re-answered.
+         */
+        const mockResponses = [
+          new Response(null, {
+            status: 302,
+            headers: {
+              location: mockLocation,
+            },
+          }),
+          new Response('front-elevation-bytes', {
+            status: 200,
+            headers: {
+              'content-type': 'image/jpeg',
+            },
+          }),
+        ]
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async requestedUrl => {
+            requestedUrls.push(requestedUrl)
+
+            return mockResponses.shift()
+          })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium(params)
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', null)
+        expect(requestedUrls)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#readBoundedStreamBytes()', () => {
+    /*
+     * The second bound on the read, and the reason there is one.
+     *
+     * The byte bound cannot see what a body costs to assemble. Ten megabytes arriving one byte at
+     * a time is ten million objects and ten million wake-ups inside a bound that sees ten
+     * megabytes and is content, and the accumulation used to be quadratic on top of that - a
+     * measured fifteen seconds of processor time and the whole request budget spent on eighty-six
+     * kilobytes, synchronously, on the loop a worker's heartbeat shares.
+     *
+     * The reader is stubbed rather than driven over a socket, and that is not a shortcut: a
+     * loopback server writing four hundred two-byte frames was measured arriving as a handful of
+     * chunks, because the kernel coalesces them, so a real socket cannot state the number of
+     * pieces a body arrives in. The reader is the parameter this method takes and the pieces are
+     * its cases.
+     */
+    describe('should refuse a body arriving in more pieces than the bound allows', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadChunkCount: 2,
+          },
+          mockChunks: [
+            {
+              done: false,
+              value: Uint8Array.from([0x61]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x62]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x63]),
+            },
+            {
+              done: true,
+            },
+          ],
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadChunkCount: 1,
+          },
+          mockChunks: [
+            {
+              done: false,
+              value: Uint8Array.from([0x64]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x65]),
+            },
+            {
+              done: true,
+            },
+          ],
+        },
+      ]
+
+      test.each(cases)('maximumReadChunkCount: $factoryParams.maximumReadChunkCount', async ({
+        factoryParams,
+        mockChunks,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.readBoundedStreamBytes({
+          reader: {
+            read: async () => mockChunks.shift(),
+            cancel: async () => null,
+          },
+          chunks: [],
+          readByteSize: 0,
+        })
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+
+    describe('should read a body arriving in as many pieces as the bound allows', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadChunkCount: 3,
+          },
+          mockChunks: [
+            {
+              done: false,
+              value: Uint8Array.from([0x61]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x62]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x63]),
+            },
+            {
+              done: true,
+            },
+          ],
+          expected: Buffer.from('abc'),
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadChunkCount: 65536,
+          },
+          mockChunks: [
+            {
+              done: false,
+              value: Uint8Array.from([0x64, 0x65]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x66]),
+            },
+            {
+              done: true,
+            },
+          ],
+          expected: Buffer.from('def'),
+        },
+      ]
+
+      test.each(cases)('maximumReadChunkCount: $factoryParams.maximumReadChunkCount', async ({
+        factoryParams,
+        mockChunks,
+        expected,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.readBoundedStreamBytes({
+          reader: {
+            read: async () => mockChunks.shift(),
+            cancel: async () => null,
+          },
+          chunks: [],
+          readByteSize: 0,
+        })
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#readBoundedStreamBytes()', () => {
+    /*
+     * The linear accumulation, asserted as the contract it is rather than as a stopwatch reading.
+     *
+     * Rebuilding the array per chunk and appending to it answer the same bytes, so no assertion on
+     * the return value can tell the two apart; what tells them apart is where the pieces end up.
+     * The quadratic form left the array it was handed empty, because every piece went into a fresh
+     * array it built beside it. So this asserts that the array handed in holds the pieces
+     * afterwards - which is exactly the property that makes the read linear in them, and which the
+     * method's own comment now states as something a caller must not be surprised by.
+     *
+     * A stopwatch was considered and not written. The honest form of it is a processor-time
+     * reading against a threshold, and a threshold that separates the two on one machine may not
+     * on a loaded runner; a test that could pass either way is worse than none. The measurement
+     * was taken outside the suite instead - twenty thousand pieces at thirty-two milliseconds
+     * against forty thousand at forty-seven, which is linear where quadratic would have been four
+     * times the one from the other.
+     */
+    describe('should append to the array it was given', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockChunks: [
+            {
+              done: false,
+              value: Uint8Array.from([0x61]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x62]),
+            },
+            {
+              done: true,
+            },
+          ],
+          expected: [
+            Buffer.from('a'),
+            Buffer.from('b'),
+          ],
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+          },
+          mockChunks: [
+            {
+              done: false,
+              value: Uint8Array.from([0x63, 0x64]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x65]),
+            },
+            {
+              done: false,
+              value: Uint8Array.from([0x66]),
+            },
+            {
+              done: true,
+            },
+          ],
+          expected: [
+            Buffer.from('cd'),
+            Buffer.from('e'),
+            Buffer.from('f'),
+          ],
+        },
+      ]
+
+      test.each(cases)('mockChunks[0].value: $mockChunks.0.value', async ({
+        factoryParams,
+        mockChunks,
+        expected,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+        const actual = []
+
+        await client.readBoundedStreamBytes({
+          reader: {
+            read: async () => mockChunks.shift(),
+            cancel: async () => null,
+          },
+          chunks: actual,
+          readByteSize: 0,
+        })
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#cancelBoundedStreamRead()', () => {
+    /*
+     * Cancelling the reader is what lets the connection go when a body is abandoned part-read, so
+     * the call is the point of the method and is asserted rather than assumed.
+     */
+    describe('should answer nothing readable', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 8,
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 1024,
+          },
+        },
+      ]
+
+      test.each(cases)('maximumReadByteSize: $factoryParams.maximumReadByteSize', async ({
+        factoryParams,
+      }) => {
+        const client = MediaFetchClient.create(factoryParams)
+        const canceledReaders = []
+
+        const actual = await client.cancelBoundedStreamRead({
+          reader: {
+            read: async () => ({
+              done: true,
+            }),
+            cancel: async () => {
+              canceledReaders.push('canceled')
+
+              return null
+            },
+          },
+        })
+
+        expect(actual)
+          .toBeNull()
+        expect(canceledReaders)
+          .toHaveLength(1)
       })
     })
   })

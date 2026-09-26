@@ -25,6 +25,21 @@ import AiRunKeyInspector from '../../../../app/aiRun/AiRunKeyInspector.js'
  *
  * The run ids are this feature's own (`10440001` upward), so a directory this file creates belongs
  * to this file and to nothing else.
+ *
+ * **What this file leaves on the disk, and why it is left.** A run of it leaves three directories
+ * and one file under the machine's own temporary directory, and nothing here removes them on the
+ * way out. That is a decision rather than an oversight.
+ *
+ * Repeat-safety does not depend on it: every describe that would trip over a leftover clears its
+ * own path in the arrange phase, which is what `wx` obliges - a write that never truncates fails
+ * on a file a previous run left, so starting from nothing is the arrange's job and is done there.
+ *
+ * What a removal after the assertions would add is a removal that does not run. A failing
+ * assertion ends the test body where it stands, so the only run whose leavings would survive is
+ * the run that failed - and that is the one run whose leavings are worth reading, because the
+ * directory and its mode are the evidence of what went wrong. The machine's temporary directory is
+ * the one place a host is expected to clear, and the paths are this feature's own run ids, so
+ * nothing here can collide with anything but itself.
  */
 
 const TEST_WORKSPACE_ROOT_PATH = path.join(os.tmpdir(), 'tsdg-ai-media-workspace-test')
@@ -45,8 +60,9 @@ const TEST_WORKSPACE_ROOT_PATH = path.join(os.tmpdir(), 'tsdg-ai-media-workspace
  * Where a platform has owner-group-other permissions the answer is the 0o600 that was asked for.
  * Windows expresses a read-only bit and nothing else, and reports 0o666 whatever was asked, so the
  * figure asserted there is the platform's own and says nothing about this service. The describe
- * that fails without the fix on every platform is the one below it - an existing file refused
- * rather than truncated and rewritten.
+ * that fails without the fix on every platform is `'should refuse a file already at the path'`,
+ * which sits above the mode describe rather than below it - an existing file refused rather than
+ * truncated and rewritten.
  */
 const PERMISSION_BITS = 0o777
 const EXPECTED_MEDIUM_FILE_MODE = process.platform === 'win32'

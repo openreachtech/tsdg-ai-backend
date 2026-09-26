@@ -16,14 +16,24 @@ import AiRunStatus from '../../../../sequelize/models/AiRunStatus.js'
  * is one this application really assembled out of five tables. A body built from stubbed rows
  * would prove that the assembly runs and nothing about whether the reads find the right rows.
  *
- * **Three columns the seeded runs leave null are exercised on a run entity written out here
- * instead** — `engine_label`, `result_body` and `failure_parameters`. `#run-contract`'s seeder
- * writes none of the three on any row, so the only way to read a non-null `result` or a failure
- * carrying parameters is to hand `#buildFoundAiRunResponse()` a run it did not read itself. That
- * is what its own describe does, and it is the practice
- * `AiRunFieldOutcomeRecorder#belongsToAiRun()` already follows for a reading no SQLite read can
- * produce. The child reads under it still run for real against a seeded run's rows. The gap in
- * the fixture is reported rather than papered over.
+ * **`engine.label` and `result` are read off a seeded row now**, and not off an entity written out
+ * here. Run 10010004 carries `engine_label` and `result_body`, so `#buildAiRunResponse()`'s own
+ * describe reads both end to end out of the table — which is the fourth acceptance criterion of
+ * section 12 read against what the database really holds. Run 10010003 carries neither, on
+ * purpose, so the answer for a succeeded run holding no engine label and no stored result is read
+ * off a row as well.
+ *
+ * **`failure.parameters` still has no row behind it, and that is the contract's answer rather than
+ * a gap.** `MEDIA_LIMIT_EXCEEDED` is the one reason code of the seven that carries parameters at
+ * all ([[Q103]]), and neither failed run carries that code — 10010005 failed under
+ * `MEDIA_UNREADABLE` and 10010009 under `PROVIDER_CALL_FAILED`, and the contract names no
+ * parameters for either. The parameters-carrying case is therefore read on a run written out in
+ * the case, as it was, and the shortfall is reported rather than papered over.
+ *
+ * **The describes that take a value or an entity as their argument still write one out**, because
+ * there is nothing for them to read: `#buildEngine()`, `#buildResult()`, `#parseResultBody()`,
+ * `#buildFailure()` and `#buildFoundAiRunResponse()` are each handed what they work on. A row
+ * reaches them only through `#buildAiRunResponse()`, which is where it is now read.
  */
 
 describe('AiRunResponseBuilder', () => {
@@ -272,6 +282,7 @@ describe('AiRunResponseBuilder', () => {
             id: 10010004,
             ApiClientId: 10000001,
             runKey: 'run-key-10010004',
+            engineLabel: 'asset-media-extraction-loop@stub',
             AiRunStatus: expect.objectContaining({
               name: 'succeeded',
             }),
@@ -289,6 +300,7 @@ describe('AiRunResponseBuilder', () => {
             id: 10010003,
             ApiClientId: 10000002,
             runKey: 'run-key-10010003',
+            engineLabel: null, // the succeeded run that carries none
             AiRunStatus: expect.objectContaining({
               name: 'succeeded',
             }),
@@ -1436,10 +1448,18 @@ describe('AiRunResponseBuilder', () => {
 describe('AiRunResponseBuilder', () => {
   describe('#buildFoundAiRunResponse()', () => {
     /*
-     * The three columns `#run-contract`'s seeder leaves null on every row — `engine_label`,
-     * `result_body` and `failure_parameters` — read here off a run entity written out in the case.
-     * The run ids are seeded ones, so the settled fields, the model calls and the steps underneath
-     * are all read for real; only the three columns are stated.
+     * This method is handed the run it answers for, so the run is written out in the case — that
+     * is its contract, and not a stand-in for a row it could have read. The run ids are seeded
+     * ones, so the settled fields, the model calls and the steps underneath are all read for real.
+     *
+     * The first case's `resultBody` is deliberately **not** the body run 10010004 really carries,
+     * which is longer and is asserted against the table in `#buildAiRunResponse()` below. Handing
+     * this method a body the row does not hold is what proves it answers out of the entity it was
+     * given rather than re-reading the run behind its back.
+     *
+     * `failureParameters` is still stated rather than read, because no seeded run carries a reason
+     * code the contract gives parameters to ([[Q103]]). That one is the fixture's gap, and it is
+     * reported rather than papered over.
      */
     describe('should answer a body carrying what the run itself holds', () => {
       const cases = [
@@ -1650,9 +1670,18 @@ describe('AiRunResponseBuilder', () => {
      * because two shapes for one answer is what the reconciliation path exists to avoid.
      *
      * Every value is the development seeders', joined across `ai_runs`, `ai_run_statuses`,
-     * `ai_run_categories`, `ai_run_field_outcomes` and `ai_model_calls`. `engine.label` and
-     * `result` read null on every case because no seeded run carries either column — the gap is
-     * the fixture's, and the non-null path is covered by the describe above.
+     * `ai_run_categories`, `ai_run_field_outcomes` and `ai_model_calls` — `engine.label` and
+     * `result` included. Run 10010004 carries both columns, so the first case reads the whole
+     * body, result and all, out of the table; run 10010003 carries neither, so the second reads
+     * what a succeeded run holding no engine label and no stored result answers with. The two are
+     * what make this criterion an assertion about the database rather than about a hand-written
+     * entity.
+     *
+     * The result of 10010004 is the one its own rows settled: the six paths of
+     * `ai_run_field_outcomes` that came out with a value, at the scores and agreement counts those
+     * rows carry, and the two that no majority settled under `missingFieldPaths`. Read it beside
+     * the seeder and a body that had drifted from the rows it claims to summarize would show up
+     * here.
      */
     describe('when the client owns the run', () => {
       const cases = [
@@ -1670,7 +1699,7 @@ describe('AiRunResponseBuilder', () => {
             correlationId: 'correlation-id-10010004',
             statusName: 'succeeded',
             engine: {
-              label: null,
+              label: 'asset-media-extraction-loop@stub',
               confidenceMethodVersion: 'confidence-v1.0.0',
             },
             usage: {
@@ -1678,11 +1707,105 @@ describe('AiRunResponseBuilder', () => {
               inputTokenCount: 14406,
               outputTokenCount: 966,
             },
-            result: null,
+            result: {
+              fields: [
+                {
+                  path: 'attributes.floorArea',
+                  value: '86.5',
+                  fieldStateName: 'extracted',
+                  suggestionConfidence: 1,
+                  reason: 'The floor area is printed on the plan itself.',
+                  sourceMediaKeys: [
+                    'media-key-floor-plan',
+                  ],
+                  agreement: {
+                    agreedReadingCount: 3,
+                    totalReadingCount: 3,
+                  },
+                },
+                {
+                  path: 'attributes.bedroomCount',
+                  value: '3',
+                  fieldStateName: 'extracted',
+                  suggestionConfidence: 0.84,
+                  reason: 'Three rooms are marked as bedrooms on the plan.',
+                  sourceMediaKeys: [
+                    'media-key-floor-plan',
+                    'media-key-living-room',
+                  ],
+                  agreement: {
+                    agreedReadingCount: 2,
+                    totalReadingCount: 3,
+                  },
+                },
+                {
+                  path: 'attributes.facadeWidth',
+                  value: '4.2',
+                  fieldStateName: 'derived',
+                  suggestionConfidence: 0.65,
+                  reason: 'Estimated from the front of the building against the doorway beside it.',
+                  sourceMediaKeys: [
+                    'media-key-front-elevation',
+                  ],
+                  agreement: {
+                    agreedReadingCount: 4,
+                    totalReadingCount: 5,
+                  },
+                },
+                {
+                  path: 'attributes.roadWidth',
+                  value: '7.5',
+                  fieldStateName: 'derived',
+                  suggestionConfidence: 0.51,
+                  reason: 'Estimated from the two parked cars across the road in front.',
+                  sourceMediaKeys: [
+                    'media-key-front-elevation',
+                    'media-key-balcony-view',
+                  ],
+                  agreement: {
+                    agreedReadingCount: 2,
+                    totalReadingCount: 3,
+                  },
+                },
+                {
+                  path: 'attributes.legalStatusSlug',
+                  value: 'legal-status-full-title',
+                  fieldStateName: 'suggested',
+                  suggestionConfidence: 0.33,
+                  reason: 'Taken from what this asset category usually holds, with no document photographed.',
+                  sourceMediaKeys: [],
+                  agreement: {
+                    agreedReadingCount: 3,
+                    totalReadingCount: 5,
+                  },
+                },
+                {
+                  path: 'attributes.furnishingSlug',
+                  value: 'furnishing-fully-fitted',
+                  fieldStateName: 'suggested',
+                  suggestionConfidence: 0.0125,
+                  reason: 'Taken from the asset category alone, and agreed on by the barest majority.',
+                  sourceMediaKeys: [],
+                  agreement: {
+                    agreedReadingCount: 2,
+                    totalReadingCount: 3,
+                  },
+                },
+              ],
+              missingFieldPaths: [
+                'attributes.balconyDirectionSlug',
+                'attributes.buildYear',
+              ],
+              unreadableMediaKeys: [],
+              mediaSignature: 'media-signature-10010004',
+            },
             failure: null,
           },
         },
         {
+          // the other run that succeeded, carrying neither column — so the null side of both
+          // fields is read off a row as well, and on a succeeded run rather than only on one that
+          // never reached a worker
           input: {
             runKey: 'run-key-10010003',
             apiClientId: 10000002,

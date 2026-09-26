@@ -15,14 +15,19 @@ import AiRunResponseBuilder from '../../../../../../../app/aiRun/AiRunResponseBu
  * `AiRunResponseBuilder`. Stubbing the builder would have proved that the renderer calls something
  * and nothing about what a client reads.
  *
- * **Three columns no seeded run carries are why some fields read null on every case** —
- * `engine_label`, `result_body` and `failure_parameters`. `#run-contract`'s seeder writes none of
- * the three on any row, so `engine.label` is null throughout, `result` is null even on the
- * succeeded runs, and the failed run's `failure.parameters` is null. The non-null paths are
- * covered against a run entity written out by hand in
- * `tests/__tests__/app/aiRun/AiRunResponseBuilder.js`, where the builder's own describes live. The
- * gap belongs to the fixture and is reported rather than papered over: it is not weakened here by
- * asserting something looser than what the rows really answer.
+ * **Run 10010004 carries `engine_label` and `result_body`**, so the body this route answers for it
+ * is asserted whole — engine label, the six fields its run settled, the two it did not, and the
+ * media signature echoed back. That is the fourth acceptance criterion of section 12 read against
+ * what the table really holds, and not against a run written out by hand. The other succeeded run,
+ * 10010003, carries neither column on purpose, so what a client reads for a run holding no engine
+ * label and no stored result is read off a row too.
+ *
+ * **`failure.parameters` still reads null on the failed run, and that is the contract's answer.**
+ * `MEDIA_LIMIT_EXCEEDED` is the one reason code of the seven that carries parameters at all
+ * ([[Q103]]), and 10010005 failed under `MEDIA_UNREADABLE`, which the contract gives none. The
+ * parameters-carrying case is covered against a run entity written out in
+ * `tests/__tests__/app/aiRun/AiRunResponseBuilder.js`, and the shortfall is reported rather than
+ * papered over: nothing here is weakened to assert something looser than what the rows answer.
  *
  * **The client is a plain object.** `AppRestfulApiContext` resolves a client from a signed request,
  * which a renderer test has no request to present; the renderer reads one field off it, and that
@@ -289,6 +294,11 @@ describe('AiRunGetRenderer', () => {
      * route that answered one of them would leave the other four met for the first time by
      * whoever wired against it.
      *
+     * The succeeded run is the whole of that body: its engine label, and the result its own rows
+     * settled — the six paths `ai_run_field_outcomes` scored for it, at the scores and agreement
+     * counts those rows carry, the two no majority settled, and the media signature echoed back.
+     * Both columns are the seeder's, so nothing in the shape below is stated here.
+     *
      * The sixth criterion is the failed run: a reason code and its parameters, and no result. The
      * seventh is the canceled run: two model calls and the tokens they spent before the stop,
      * rather than nothing.
@@ -396,7 +406,7 @@ describe('AiRunGetRenderer', () => {
               correlationId: 'correlation-id-10010004',
               statusName: 'succeeded',
               engine: {
-                label: null,
+                label: 'asset-media-extraction-loop@stub',
                 confidenceMethodVersion: 'confidence-v1.0.0',
               },
               usage: {
@@ -404,7 +414,98 @@ describe('AiRunGetRenderer', () => {
                 inputTokenCount: 14406, // 4801 + 4802 + 4803
                 outputTokenCount: 966, // 311 + 322 + 333
               },
-              result: null,
+              result: {
+                fields: [
+                  {
+                    path: 'attributes.floorArea',
+                    value: '86.5',
+                    fieldStateName: 'extracted',
+                    suggestionConfidence: 1,
+                    reason: 'The floor area is printed on the plan itself.',
+                    sourceMediaKeys: [
+                      'media-key-floor-plan',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 3,
+                      totalReadingCount: 3,
+                    },
+                  },
+                  {
+                    path: 'attributes.bedroomCount',
+                    value: '3',
+                    fieldStateName: 'extracted',
+                    suggestionConfidence: 0.84,
+                    reason: 'Three rooms are marked as bedrooms on the plan.',
+                    sourceMediaKeys: [
+                      'media-key-floor-plan',
+                      'media-key-living-room',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 2,
+                      totalReadingCount: 3,
+                    },
+                  },
+                  {
+                    path: 'attributes.facadeWidth',
+                    value: '4.2',
+                    fieldStateName: 'derived',
+                    suggestionConfidence: 0.65,
+                    reason: 'Estimated from the front of the building against the doorway beside it.',
+                    sourceMediaKeys: [
+                      'media-key-front-elevation',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 4,
+                      totalReadingCount: 5,
+                    },
+                  },
+                  {
+                    path: 'attributes.roadWidth',
+                    value: '7.5',
+                    fieldStateName: 'derived',
+                    suggestionConfidence: 0.51,
+                    reason: 'Estimated from the two parked cars across the road in front.',
+                    sourceMediaKeys: [
+                      'media-key-front-elevation',
+                      'media-key-balcony-view',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 2,
+                      totalReadingCount: 3,
+                    },
+                  },
+                  {
+                    path: 'attributes.legalStatusSlug',
+                    value: 'legal-status-full-title',
+                    fieldStateName: 'suggested',
+                    suggestionConfidence: 0.33,
+                    reason: 'Taken from what this asset category usually holds, with no document photographed.',
+                    sourceMediaKeys: [],
+                    agreement: {
+                      agreedReadingCount: 3,
+                      totalReadingCount: 5,
+                    },
+                  },
+                  {
+                    path: 'attributes.furnishingSlug',
+                    value: 'furnishing-fully-fitted',
+                    fieldStateName: 'suggested',
+                    suggestionConfidence: 0.0125,
+                    reason: 'Taken from the asset category alone, and agreed on by the barest majority.',
+                    sourceMediaKeys: [],
+                    agreement: {
+                      agreedReadingCount: 2,
+                      totalReadingCount: 3,
+                    },
+                  },
+                ],
+                missingFieldPaths: [
+                  'attributes.balconyDirectionSlug',
+                  'attributes.buildYear',
+                ],
+                unreadableMediaKeys: [],
+                mediaSignature: 'media-signature-10010004',
+              },
               failure: null,
             },
             error: null,
@@ -537,7 +638,7 @@ describe('AiRunGetRenderer', () => {
               correlationId: 'correlation-id-10010004',
               statusName: 'succeeded',
               engine: {
-                label: null,
+                label: 'asset-media-extraction-loop@stub',
                 confidenceMethodVersion: 'confidence-v1.0.0',
               },
               usage: {
@@ -545,7 +646,98 @@ describe('AiRunGetRenderer', () => {
                 inputTokenCount: 14406, // 4801 + 4802 + 4803
                 outputTokenCount: 966, // 311 + 322 + 333
               },
-              result: null,
+              result: {
+                fields: [
+                  {
+                    path: 'attributes.floorArea',
+                    value: '86.5',
+                    fieldStateName: 'extracted',
+                    suggestionConfidence: 1,
+                    reason: 'The floor area is printed on the plan itself.',
+                    sourceMediaKeys: [
+                      'media-key-floor-plan',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 3,
+                      totalReadingCount: 3,
+                    },
+                  },
+                  {
+                    path: 'attributes.bedroomCount',
+                    value: '3',
+                    fieldStateName: 'extracted',
+                    suggestionConfidence: 0.84,
+                    reason: 'Three rooms are marked as bedrooms on the plan.',
+                    sourceMediaKeys: [
+                      'media-key-floor-plan',
+                      'media-key-living-room',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 2,
+                      totalReadingCount: 3,
+                    },
+                  },
+                  {
+                    path: 'attributes.facadeWidth',
+                    value: '4.2',
+                    fieldStateName: 'derived',
+                    suggestionConfidence: 0.65,
+                    reason: 'Estimated from the front of the building against the doorway beside it.',
+                    sourceMediaKeys: [
+                      'media-key-front-elevation',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 4,
+                      totalReadingCount: 5,
+                    },
+                  },
+                  {
+                    path: 'attributes.roadWidth',
+                    value: '7.5',
+                    fieldStateName: 'derived',
+                    suggestionConfidence: 0.51,
+                    reason: 'Estimated from the two parked cars across the road in front.',
+                    sourceMediaKeys: [
+                      'media-key-front-elevation',
+                      'media-key-balcony-view',
+                    ],
+                    agreement: {
+                      agreedReadingCount: 2,
+                      totalReadingCount: 3,
+                    },
+                  },
+                  {
+                    path: 'attributes.legalStatusSlug',
+                    value: 'legal-status-full-title',
+                    fieldStateName: 'suggested',
+                    suggestionConfidence: 0.33,
+                    reason: 'Taken from what this asset category usually holds, with no document photographed.',
+                    sourceMediaKeys: [],
+                    agreement: {
+                      agreedReadingCount: 3,
+                      totalReadingCount: 5,
+                    },
+                  },
+                  {
+                    path: 'attributes.furnishingSlug',
+                    value: 'furnishing-fully-fitted',
+                    fieldStateName: 'suggested',
+                    suggestionConfidence: 0.0125,
+                    reason: 'Taken from the asset category alone, and agreed on by the barest majority.',
+                    sourceMediaKeys: [],
+                    agreement: {
+                      agreedReadingCount: 2,
+                      totalReadingCount: 3,
+                    },
+                  },
+                ],
+                missingFieldPaths: [
+                  'attributes.balconyDirectionSlug',
+                  'attributes.buildYear',
+                ],
+                unreadableMediaKeys: [],
+                mediaSignature: 'media-signature-10010004',
+              },
               failure: null,
               steps: [
                 {
@@ -899,6 +1091,10 @@ describe('AiRunGetRenderer', () => {
      * The pair is what makes the ninth criterion an assertion rather than a claim: one case's
      * answer carries the run and the other's carries the refusal, and the only thing that differs
      * between the two calls is which client asked.
+     *
+     * 10010003 is also the succeeded run the seeder leaves carrying no engine label and no result
+     * body, so the answer a client reads for a run holding neither is read off a row here rather
+     * than off a run written out by hand.
      */
     describe('when the same run key is read by two clients', () => {
       const cases = [

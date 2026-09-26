@@ -120,10 +120,10 @@ export default class AiRunKeyInspector {
   /**
    * Check whether a number names a row at all.
    *
-   * **The two spellings have to agree.** Before this, text was held to the pattern — a positive
-   * integer with no leading zero — while a number was taken whole, so `'-1'` named no row and `-1`
-   * named one, and which answer a caller got depended on whether its key had crossed a queue or a
-   * query string.
+   * **The two spellings are held to the same alphabet rule.** Before this, text was held to the
+   * pattern — a positive integer with no leading zero — while a number was taken whole, so `'-1'`
+   * named no row and `-1` named one, and which answer a caller got depended on whether its key had
+   * crossed a queue or a query string.
    *
    * **A number is held to the pattern by being spelled out**, rather than by a length bound
    * restated here. The two are not the same rule: `1e21` is a whole number whose spelling is
@@ -131,6 +131,16 @@ export default class AiRunKeyInspector {
    * the one pattern is what lets a caller building a path out of a key rely on its being digits.
    * Zero, a negative and a leading zero are refused by that same pattern, which is why no second
    * comparison is made here.
+   *
+   * **The bijection test is `#namesRowExactly()`'s alone, and that asymmetry is deliberate.** This
+   * method answers yes to `9007199254740993`; the text `'9007199254740993'` is answered no, for
+   * spelling itself back as `9007199254740992`. It is the same key admitted one way and refused
+   * the other, and the reason is that there is nothing left here to refuse: a number above 2^53
+   * lost its identity at the `JSON.parse` — or at the literal — that made it, before this class
+   * ever saw it, so the two keys that would have collided arrived as one value and the second of
+   * them no longer exists to be told apart. What the text branch prevents is two *texts* reading
+   * back as one number, which is a collision that does still survive to reach it. A caller handing
+   * over numbers above 2^53 has already spent that guarantee somewhere this class cannot see.
    *
    * @param {{
    *   key: number
