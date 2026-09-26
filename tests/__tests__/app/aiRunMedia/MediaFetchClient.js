@@ -21,25 +21,53 @@ import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
  * hand-written double, so nothing in this file restates what a response is.
  *
  * Several describes use a real one instead, over loopback, and say so where they sit: a redirect
- * refused, a redirect followed, a chain longer than the hops allowed, and the six that watch a
+ * refused, a redirect followed, a chain longer than the hops allowed, and the seven that watch a
  * connection be released. A stubbed fetch follows nothing, so it could not have shown that `fetch`
  * left to itself follows up to twenty hops and answers with the last of them - and a stubbed one
  * has no socket at all, which is the only thing the release describes can observe.
  *
- * **The six release describes hold on to the `Response` they were handed, and that is not
- * tidiness.** Undici releases a connection on the cancel this class makes, and also, separately,
- * when the unread `Response` is finalized - which is garbage collection, and lands wherever it
- * lands. Measured against a client whose cancel had been taken out again, that second path fired
- * at 20 ms on one run and not at all within five seconds on four others, so a describe that let
- * the `Response` go would pass against the very defect it exists to catch on roughly one run in
- * five. Each of the six therefore wraps `fetchClient` around the real `globalThis.fetch` - a
- * pass-through, so the socket, the body and the headers all stay real - purely to keep a reference
- * to every `Response` alive for the length of the test. What is left to release the socket is
- * then the cancel and nothing else.
+ * **The seven release describes hold on to the `Response` they were handed, and that is not
+ * tidiness.** Undici releases a connection when the unread `Response` is finalized - which is
+ * garbage collection, and lands wherever it lands. Measured against a client whose cancel had been
+ * taken out again, that path fired at 20 ms on one run and not at all within five seconds on four
+ * others, so a describe that let the `Response` go would pass against the very defect it exists to
+ * catch on roughly one run in five. Each of the seven therefore wraps `fetchClient` around the real
+ * `globalThis.fetch` - a pass-through, so the socket, the body and the headers all stay real -
+ * purely to keep a reference to every `Response` alive for the length of the test.
  *
- * That last sentence is a claim about undici and not about this class, so a seventh describe sits
- * beside the six and does nothing but check it: it takes the cancel out on purpose and asserts the
- * socket is not released. Its red is the signal that the six have stopped discriminating.
+ * **What holding the `Response` leaves is not the cancel alone, and a previous round of this file
+ * said it was.** With the body unread, the `Response` held and no cancel anywhere, three things
+ * release that socket and only the first of them belongs to this class:
+ *
+ *   1. the cancel, which releases it promptly - measured at 7-40 ms across the shapes checked
+ *      this round, and at 2-17 ms by the rounds that wrote the describes before them;
+ *   2. the request's own `AbortSignal.timeout`, which destroys the connection when it fires
+ *      whether or not the fetch resolved - measured at 205 ms for a 200 ms signal, 511 ms for a
+ *      500 ms one, 1012 ms for a 1000 ms one, and not at all inside 2000 ms for a 30000 ms one;
+ *   3. the server's own keep-alive, which closes an idle connection on its own - measured at
+ *      6032 ms against Node's default `keepAliveTimeout`.
+ *
+ * The second and the third are what make a release describe discriminate for a reason that is not
+ * this class's, and a comment saying "keep them parked beyond the wait" is the kind of sentence
+ * four audit rounds have found stale. So each of the two is shut out by something the test does
+ * rather than by something it says. The server's keep-alive is pinned to
+ * `SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS`, far above the wait, so the margin is this
+ * file's rather than Node's. The abort signal is captured off the options the pass-through was
+ * handed and asserted **not** to have fired - so a later author who lowers a describe's
+ * `requestTimeoutMilliseconds` under the wait gets a red assertion naming the signal, where before
+ * the describe went quietly green with the disposal removed. Measured: with the cancel sabotaged
+ * and the timeout at 1000 ms the socket is released at 1014 ms and the captured signal reads
+ * `aborted: true`; with the timeout at 30000 ms it reads `aborted: false` and nothing is released.
+ *
+ * What that leaves is the cancel's own promptness, which is asserted only as "inside the wait" and
+ * not as a number - a cancel that took 1900 ms would still pass. Nothing measured comes near it:
+ * the slowest release this round was 40 ms. Pinning a millisecond figure would be a timing
+ * assertion on a shared build host, which is the trade made here knowingly.
+ *
+ * An eighth describe sits beside the seven and does nothing but check the claim they all rest on -
+ * that undici releases nothing of its own inside the wait while the `Response` is held. It takes
+ * the cancel out on purpose and asserts the socket is not released. Its red is the signal that the
+ * seven have stopped discriminating.
  *
  * Each of those closes its servers before it asserts, not after. A failing assertion ends the test
  * body where it stands, so a `close()` written below the assertions is a listening handle left
@@ -52,7 +80,10 @@ import MediaFetchClient from '../../../../app/aiRunMedia/MediaFetchClient.js'
  * The size is load-bearing. An empty body arrives complete, so the client can release its
  * connection whether anybody cancelled it or not, and a describe built on one would pass against
  * the defect it exists to catch. A quarter of a megabyte does not fit the buffers between here and
- * there, so the connection is only released by the cancel.
+ * there, so the body stays undelivered and the connection stays held - and the cancel is then the
+ * only thing that releases it *inside the wait*, the abort signal and the server's keep-alive
+ * having been shut out by the two measures the head comment sets out. Without that qualifier the
+ * sentence would be the one round five found false.
  *
  * It is no longer only a `3xx` body: the describe that watches a declared size be refused serves
  * the same quarter megabyte behind an honest `content-length`, which is why the name says response
@@ -68,9 +99,73 @@ const LEAKY_RESPONSE_BODY_BYTE_SIZE = 262144
  * wait ends in single-figure milliseconds and this figure is never reached; without it - and with
  * the `Response` held, so undici's own finalizer cannot stand in for the cancel - nothing closes
  * the socket and the whole of it is spent. Measured across five runs of each of the two describes
- * this round added: 2-17 ms with the cancel, and nothing at all inside five seconds without it.
+ * an earlier round added: 2-17 ms with the cancel, and nothing at all inside five seconds without
+ * it.
+ *
+ * **This figure has to sit below every path that releases the socket without the cancel, and
+ * there are two of them.** Neither is undici's finalizer, which the held `Response` already keeps
+ * out. They are the request's own `AbortSignal.timeout` - measured destroying the connection at
+ * 205 ms, 511 ms and 1012 ms for 200 ms, 500 ms and 1000 ms signals, to the millisecond, whether
+ * or not the fetch resolved - and the server's own keep-alive, measured closing an idle connection
+ * at 6032 ms against Node's default. A wait above either would mean the describe could not tell
+ * the cancel from that path, and that is the whole of the coupling:
+ *
+ *   2000 ms  <  SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+ *   2000 ms  <  every release describe's own `requestTimeoutMilliseconds`
+ *
+ * The first of those is pinned by the constant below rather than left to Node. The second cannot
+ * be pinned here - it is a `factoryParams` field, and this file already carries describes at 12000
+ * and at 1 - so it is asserted instead: each release describe captures the signal off the options
+ * its pass-through was handed and asserts it has not fired. Lowering a timeout under this wait
+ * therefore turns the assertion red rather than turning the describe into one that passes with the
+ * disposal removed.
+ *
+ * **Two margins above it, one enforced and one not.** Jest's per-test limit was its 5000 ms
+ * default against a body that always spends this 2000 ms, leaving roughly 3000 ms of head-room -
+ * and a runner stall past that turned the canary red for a reason that has nothing to do with
+ * undici, whose red is documented to mean something else entirely. `jest.config.js` now sets
+ * `testTimeout: 15000`, so that margin is a setting rather than a hope; raising it could not
+ * break a passing test, and the file says why. The margin still only stated is the wait against
+ * the cancel's own promptness, 7-40 ms measured this round, which is where the whole of the
+ * separation lives - a cancel that took 1900 ms would pass, and nothing here would say so.
  */
 const SOCKET_RELEASE_WAIT_MILLISECONDS = 2000
+
+/*
+ * How long the servers in those describes hold an idle connection open before closing it on their
+ * own.
+ *
+ * Node's default `server.keepAliveTimeout` is five seconds, and measured against it a held,
+ * uncancelled `Response` had its socket closed by the server at 6032 ms - a release the describes
+ * above do not own and would have credited to the cancel had the wait ever reached it. Pinned to
+ * a minute, nothing was released inside a 9000 ms wait, so the path is out of the experiment
+ * rather than merely parked beyond it. The figure is deliberately far larger than the wait: it is
+ * not a margin to be tuned, it is a path being switched off.
+ */
+const SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS = 60000
+
+/*
+ * The body the describe that watches a body abandoned mid-read is served.
+ *
+ * Three things about it are load-bearing, and none of them is the number itself.
+ *
+ * It is served with **no `content-length`**, so the declared-size refusal cannot reach it and the
+ * read is the only thing that can stop it. That is the branch this body exists to drive - the
+ * seventh disposal site, in `#readBoundedStreamBytes()`, which the six describes before it never
+ * touched because every one of them refuses before a byte of body is read.
+ *
+ * It is **never ended**: the handler writes and does not call `response.end()`. A body that
+ * arrives complete lets the client release its connection whether anybody cancelled or not, which
+ * is the same reason the constant above is a quarter of a megabyte rather than empty. Here the
+ * write stalls in backpressure with the socket open, so the only thing that closes it inside the
+ * wait is the cancel.
+ *
+ * It is **thirteen megabytes**, which is past the ten-megabyte per-file cap, so the shape is the
+ * production one rather than a contrivance: any object over the cap served with chunked transfer
+ * encoding reaches this branch, and that needs no dishonest host - only one that does not know the
+ * length up front, which is what chunked encoding is for.
+ */
+const CHUNKED_RESPONSE_BODY_BYTE_SIZE = 13631488
 
 describe('MediaFetchClient', () => {
   describe('constructor', () => {
@@ -2501,8 +2596,12 @@ describe('MediaFetchClient', () => {
      * This is the cost `redirect: 'manual'` carried in with it. Under `redirect: 'follow'` the
      * client drained a redirect's body itself; asked for the hop by hand, it hands the `3xx` over
      * body and all, and a body neither read nor cancelled is a connection the client cannot give
-     * back. A worker following one redirect per medium leaks one socket per medium, for as long as
-     * the daemon runs.
+     * back. A worker following one redirect per medium leaks one socket per medium, until the
+     * request's own abort signal destroys it - measured at 1025 ms for a 1000 ms signal and
+     * 1511 ms for a 1500 ms one, so thirty seconds at the default, not the life of the daemon.
+     * Twelve media per run times the run concurrency times thirty seconds of held descriptors is
+     * still a real exhaustion window, which is what this describe is worth; it is not an unbounded
+     * one, which an earlier round of this comment claimed.
      *
      * The network is real here because a socket is the only thing that can show it, and the `302`
      * carries a quarter of a megabyte because that is the shape of the defect: an empty `302`
@@ -2562,6 +2661,8 @@ describe('MediaFetchClient', () => {
           response.end(mockResponseBody)
         })
 
+        objectServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+
         objectServer.on('connection', socket => {
           socket.on('error', () => null)
         })
@@ -2578,6 +2679,8 @@ describe('MediaFetchClient', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61))
         })
+
+        redirectingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         redirectingServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -2597,9 +2700,12 @@ describe('MediaFetchClient', () => {
         })
 
         const fetchedResponses = []
+        const requestSignals = []
 
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, fetchOptions)
 
             fetchedResponses.push(response)
@@ -2629,6 +2735,8 @@ describe('MediaFetchClient', () => {
           .toEqual(expected)
         expect(fetchedResponses)
           .toHaveLength(2)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2684,6 +2792,8 @@ describe('MediaFetchClient', () => {
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x62))
         })
 
+        loopingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+
         loopingServer.on('connection', socket => {
           socket.on('error', () => null)
         })
@@ -2702,9 +2812,12 @@ describe('MediaFetchClient', () => {
         })
 
         const fetchedResponses = []
+        const requestSignals = []
 
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, fetchOptions)
 
             fetchedResponses.push(response)
@@ -2732,6 +2845,8 @@ describe('MediaFetchClient', () => {
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2781,6 +2896,8 @@ describe('MediaFetchClient', () => {
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x63))
         })
 
+        redirectingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+
         redirectingServer.on('connection', socket => {
           socket.on('error', () => null)
         })
@@ -2799,9 +2916,12 @@ describe('MediaFetchClient', () => {
         })
 
         const fetchedResponses = []
+        const requestSignals = []
 
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, fetchOptions)
 
             fetchedResponses.push(response)
@@ -2829,6 +2949,8 @@ describe('MediaFetchClient', () => {
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2880,6 +3002,8 @@ describe('MediaFetchClient', () => {
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x64))
         })
 
+        refusingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+
         refusingServer.on('connection', socket => {
           socket.on('error', () => null)
         })
@@ -2898,9 +3022,12 @@ describe('MediaFetchClient', () => {
         })
 
         const fetchedResponses = []
+        const requestSignals = []
 
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, fetchOptions)
 
             fetchedResponses.push(response)
@@ -2928,6 +3055,8 @@ describe('MediaFetchClient', () => {
           .toHaveProperty('failureReasonCode', 'MEDIA_FETCH_FAILED')
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -2993,6 +3122,7 @@ describe('MediaFetchClient', () => {
         const releasedSockets = []
         const requestedUrls = []
         const fetchedResponses = []
+        const requestSignals = []
 
         const downgradingServer = http.createServer((request, response) => {
           const downgradingPort = downgradingServer.address().port
@@ -3004,6 +3134,8 @@ describe('MediaFetchClient', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x65))
         })
+
+        downgradingServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         downgradingServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -3025,6 +3157,7 @@ describe('MediaFetchClient', () => {
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
             requestedUrls.push(requestedUrl)
+            requestSignals.push(fetchOptions.signal)
 
             const plainUrl = requestedUrl.replace(/^https:/u, 'http:')
 
@@ -3057,6 +3190,8 @@ describe('MediaFetchClient', () => {
           .toHaveLength(1)
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -3116,6 +3251,7 @@ describe('MediaFetchClient', () => {
       }) => {
         const releasedSockets = []
         const fetchedResponses = []
+        const requestSignals = []
 
         const oversizeServer = http.createServer((request, response) => {
           response.writeHead(200, {
@@ -3124,6 +3260,8 @@ describe('MediaFetchClient', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x66))
         })
+
+        oversizeServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         oversizeServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -3144,6 +3282,8 @@ describe('MediaFetchClient', () => {
 
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, fetchOptions)
 
             fetchedResponses.push(response)
@@ -3171,6 +3311,8 @@ describe('MediaFetchClient', () => {
           .toHaveProperty('failureReasonCode', 'MEDIA_UNREADABLE')
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(1)
       })
@@ -3181,24 +3323,187 @@ describe('MediaFetchClient', () => {
 describe('MediaFetchClient', () => {
   describe('#fetchMedium()', () => {
     /*
-     * A canary on undici rather than on this class, and the only thing standing between the six
+     * The seventh disposal branch, and the one that had no describe at all until now.
+     *
+     * The class comment used to enumerate six disposal branches, say all six were watched over a
+     * socket, and frame a seventh as something a later author might add. The seventh already
+     * existed. `#cancelBoundedStreamRead()` is reached from `#readBoundedStreamBytes()` when a
+     * body runs past `maximumReadByteSize` or `maximumReadChunkCount`, its own comment says
+     * "Cancelling the reader is what releases the socket", and nothing in this file asserted that
+     * over a socket: its own describes drive it with stub readers, and `#readResponseBytes()`'s
+     * bound describes build a synthetic `new Response(text)` that has no socket behind it at all.
+     *
+     * Measured with the one line taken out - `client.cancelBoundedStreamRead = async () => null` -
+     * against the shape below: the outcome stays `MEDIA_UNREADABLE` and `releasedSockets` goes
+     * from one to zero, on four runs of each of the two cases. With the cancel in place the socket
+     * comes back at 14-40 ms. Nothing else in this file would have caught that removal either -
+     * the two `#cancelBoundedStreamRead()` describes drive it directly and assert it answers null,
+     * which an emptied method still does, and the bound describes assert the same null - so the
+     * branch had no guard at all, which is exactly the condition the six describes above exist to
+     * prevent.
+     *
+     * **It is the most reachable of the seven in production, not the least.** The six above need a
+     * redirecting host, a refusing status or a host that declares an honest length past the cap.
+     * This one needs only a body that does not fit the bound and a host that does not know its
+     * length up front - which is every object over the ten-megabyte cap served with chunked
+     * transfer encoding.
+     *
+     * The two cases drive the two bounds that reach the method, and which of them fires was
+     * measured rather than assumed. The first is stopped by the byte bound on its very first
+     * frame - `#cancelBoundedStreamRead()` is reached with nothing yet accumulated. The second is
+     * stopped by the chunk-count bound on the third frame, with two chunks held and 130906 bytes
+     * read, far under its own ten-megabyte byte bound, so it is the count that refuses it and not
+     * the size.
+     *
+     * **That second sentence rests on how undici frames a stalled 13 MB write, which is not this
+     * project's to fix.** Were a later undici to hand the body over in one or two much larger
+     * frames, the byte bound would refuse the second case before the count bound did. The describe
+     * would still pass - same method, same `MEDIA_UNREADABLE`, same released socket - and only the
+     * "which bound fired" sentence would be stale, which is why it is written as a measurement
+     * with a date's worth of authority rather than as a property of the code. What the case
+     * guarantees whatever the framing is that `#cancelBoundedStreamRead()` is reached and the
+     * socket comes back.
+     *
+     * Both answer `MEDIA_UNREADABLE`, which is what the class comment says costs an operator the
+     * ability to tell them apart.
+     */
+    describe('should release the connection of a body it stopped reading', () => {
+      const cases = [
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 1024,
+            maximumReadChunkCount: 65536,
+          },
+        },
+        {
+          factoryParams: {
+            allowedHosts: [
+              '127.0.0.1',
+            ],
+            requestTimeoutMilliseconds: 30000,
+            maximumReadByteSize: 10485760,
+            maximumReadChunkCount: 2,
+          },
+        },
+      ]
+
+      test.each(cases)('maximumReadByteSize: $factoryParams.maximumReadByteSize', async ({
+        factoryParams,
+      }) => {
+        const releasedSockets = []
+        const fetchedResponses = []
+        const requestSignals = []
+
+        const chunkedServer = http.createServer((request, response) => {
+          response.writeHead(200, {
+            'content-type': 'image/jpeg',
+          })
+          response.write(Buffer.alloc(CHUNKED_RESPONSE_BODY_BYTE_SIZE, 0x68))
+        })
+
+        chunkedServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
+
+        chunkedServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const chunkedSocketReleased = new Promise(resolve => {
+          chunkedServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          chunkedServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
+            const response = await globalThis.fetch(requestedUrl, fetchOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
+        const client = MediaFetchClient.create(factoryParams)
+
+        const actual = await client.fetchMedium({
+          url: `http://127.0.0.1:${chunkedServer.address().port}/photos/chunked.jpg`,
+        })
+
+        await Promise.race([
+          chunkedSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        chunkedServer.closeAllConnections()
+        chunkedServer.close()
+
+        expect(actual)
+          .toHaveProperty('failureReasonCode', 'MEDIA_UNREADABLE')
+        expect(fetchedResponses)
+          .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('MediaFetchClient', () => {
+  describe('#fetchMedium()', () => {
+    /*
+     * A canary on undici rather than on this class, and the only thing standing between the seven
      * release describes above and their going quietly green-either-way.
      *
-     * Every one of those six rests on a property of a package this project did not write: while
-     * the unread `Response` is strongly referenced, undici releases the connection on the cancel
-     * and on nothing else. Measured today it holds - across fifteen runs of three shapes, a client
-     * whose cancel had been taken out never released the socket inside five seconds, while the
-     * same shapes with the `Response` let go released at 20 ms once and at 3107 ms once, which is
-     * the finalizer this reference is here to keep out. If a later undici releases on a timer
-     * instead, or keeps a strong reference of its own, all six above would pass with the cancel
-     * removed and nothing in this file would say so.
+     * Every one of those seven rests on a property of a package this project did not write: while
+     * the unread `Response` is strongly referenced, undici releases the connection of its own
+     * accord at no point inside the wait. **That is narrower than the sentence an earlier round of
+     * this file wrote here, which said undici released on the cancel and on nothing else, and that
+     * sentence was false.** Two further paths release the socket without any cancel, and both
+     * belong to the shape of the test rather than to undici: the request's own
+     * `AbortSignal.timeout`, measured destroying the connection at 1012 ms for a 1000 ms signal,
+     * and the server's keep-alive, measured at 6032 ms against Node's default. Neither is left to
+     * a margin any more - the server's is pinned by
+     * `SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS` and the signal is asserted not to have
+     * fired - so what is left for this canary to watch really is undici alone.
+     *
+     * Measured today it holds - across fifteen runs of three shapes, a client whose cancel had
+     * been taken out never released the socket inside five seconds, while the same shapes with the
+     * `Response` let go released at 20 ms once and at 3107 ms once, which is the finalizer this
+     * reference is here to keep out. If a later undici releases on a timer instead, or keeps a
+     * strong reference of its own, all seven above would pass with the cancel removed and nothing
+     * in this file would say so.
      *
      * So this one takes the cancel out on purpose and asserts the socket is **not** released. It
-     * is the one describe here whose red is good news: red means the six above have stopped
+     * is the one describe here whose red is good news: red means the seven above have stopped
      * discriminating and their shape needs rewriting, not that this class regressed.
      *
+     * **Its red has one other cause, and it is not undici.** This body always spends the whole
+     * 2000 ms wait, and `jest.config.js` declares no `testTimeout`, so jest's own 5000 ms default
+     * is what bounds it - roughly 3000 ms of head-room. A runner stall past that reads as a false
+     * alarm about undici, which is how a test gets skipped. Before believing the alarm, check the
+     * failure: a timeout names jest, a real regression names `releasedSockets`.
+     *
      * The cancel is removed by overriding the method on the instance, which is sabotage rather
-     * than a stub. It is written nowhere else in this file, and should not be.
+     * than a stub. It is written nowhere else in this file, and should not be. The seventh
+     * describe disposes through `#cancelBoundedStreamRead()` rather than through this method, so
+     * the canary does not cover that method's own removal; what it covers is the undici property
+     * all seven rest on, which is one property and not seven.
      */
     describe('should not release the connection when the cancel is taken out', () => {
       const cases = [
@@ -3227,6 +3532,7 @@ describe('MediaFetchClient', () => {
       }) => {
         const releasedSockets = []
         const fetchedResponses = []
+        const requestSignals = []
 
         const oversizeServer = http.createServer((request, response) => {
           response.writeHead(200, {
@@ -3235,6 +3541,8 @@ describe('MediaFetchClient', () => {
           })
           response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x67))
         })
+
+        oversizeServer.keepAliveTimeout = SOCKET_RELEASE_SERVER_KEEP_ALIVE_MILLISECONDS
 
         oversizeServer.on('connection', socket => {
           socket.on('error', () => null)
@@ -3255,6 +3563,8 @@ describe('MediaFetchClient', () => {
 
         jest.spyOn(MediaFetchClient, 'fetchClient', 'get')
           .mockReturnValue(async (requestedUrl, fetchOptions) => {
+            requestSignals.push(fetchOptions.signal)
+
             const response = await globalThis.fetch(requestedUrl, fetchOptions)
 
             fetchedResponses.push(response)
@@ -3284,6 +3594,8 @@ describe('MediaFetchClient', () => {
           .toHaveProperty('failureReasonCode', 'MEDIA_UNREADABLE')
         expect(fetchedResponses)
           .toHaveLength(1)
+        expect(requestSignals[0].aborted)
+          .toBeFalsy()
         expect(releasedSockets)
           .toHaveLength(0)
       })
@@ -4171,12 +4483,20 @@ describe('MediaFetchClient', () => {
     /*
      * A cancel that raises, answered rather than raised.
      *
-     * Per the Streams specification, `cancel()` on a stream that is already errored rejects with
-     * the error the stream stored - so a host resetting the connection in the same tick the bound
-     * is hit reaches this. Before the guard, that rejection left this method, was caught by
-     * `#readResponseBytes()` and written as a log line, which is the one thing the class comment
-     * says a refusal never does. This describe is the method's own answer; the one below it is
-     * where the line is asserted absent, and that one is the discriminating half.
+     * A cancel rejects on more than one occasion, and an earlier round of this file named only the
+     * harmless ones. Measured against Node's own `ReadableStream`: an already-errored stream
+     * rejects with the error it stored, a stream **locked by a reader** rejects with
+     * `TypeError: Invalid state: ReadableStream is locked`, and a readable stream **still holding
+     * bytes** rejects with whatever its underlying source's own cancel algorithm threw. An
+     * already-cancelled stream and one already read to its end both resolve. So the rejecting
+     * cases include at least two in which nothing was released - and for the locked one, measured,
+     * the underlying source's cancel was not called at all.
+     *
+     * A host resetting the connection in the same tick the bound is hit reaches this. Before the
+     * guard, that rejection left this method, was caught by `#readResponseBytes()` and written as
+     * a log line, which is the one thing the class comment says a refusal never does. This
+     * describe is the method's own answer; the one below it is where the line is asserted absent,
+     * and that one is the discriminating half.
      */
     describe('should answer nothing readable when the cancel raised', () => {
       const cases = [
@@ -4194,7 +4514,7 @@ describe('MediaFetchClient', () => {
             requestTimeoutMilliseconds: 30000,
             maximumReadByteSize: 1024,
           },
-          mockCancelFailureMessage: 'the stream is already errored',
+          mockCancelFailureMessage: 'the reader holds the stream',
         },
       ]
 
@@ -4232,9 +4552,13 @@ describe('MediaFetchClient', () => {
      * `#readResponseBytes()`'s own catch. What the audit found was the line that catch wrote, so
      * the only way to see the difference is to watch the logger.
      *
-     * The body is a real `ReadableStream` whose `cancel()` raises - which is what the Streams
-     * specification says an already-errored stream does - driven one chunk past the byte bound.
-     * Against the unguarded method the same case answers null and writes
+     * The body is a real `ReadableStream` whose `cancel()` raises, driven one chunk past the byte
+     * bound. **It is worth being exact about which rejecting case this is, because an earlier
+     * round of this file called it an already-errored stream and it is not one.** At the moment of
+     * the cancel this stream is readable and still holding its enqueued chunk, and what rejects is
+     * its underlying source's own cancel algorithm - the case the class's swallow is least
+     * entitled to treat as "the work was already done", and the reason that method's comment now
+     * says so. Against the unguarded method the same case answers null and writes
      * `MediaFetchClient MEDIA_UNREADABLE: TypeError`; against this one it answers null and writes
      * nothing. So the null is not the discriminator and the empty log is.
      *

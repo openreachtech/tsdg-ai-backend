@@ -20,16 +20,25 @@ import AiRunCallbackUrlInspector from '../../../../app/aiRunCallback/AiRunCallba
  * The URLs of those describes are the development clients' registered prefixes, under the reserved
  * `.invalid` domain — so a request escaping the mock reaches nothing.
  *
- * **Six describes use a real network instead, over loopback, and say so where they sit.** A
- * stubbed `fetch` follows nothing, so it could not have shown the thing those six are about: left
+ * **Ten describes use a real network instead, over loopback, and say so where they sit.** A
+ * stubbed `fetch` follows nothing, so it could not have shown the thing those ten are about: left
  * to itself `fetch` follows up to twenty hops, re-posting this body and its signature to every one
  * of them, and answers with the last. Nor has a stubbed `fetch` a socket, which is the only thing
- * the two release describes can observe. Measured against the options shape this file was written
- * for — the four keys with no `redirect` among them — a `307` naming a second loopback server had
- * the whole body and a valid `x-ort-signature` delivered there, and the `200` that server answered
- * recorded as the attempt's status.
+ * the three release describes can observe. Measured against the options shape this file was
+ * written for — the four keys with no `redirect` among them — a `307` naming a second loopback
+ * server had the whole body and a valid `x-ort-signature` delivered there, and the `200` that
+ * server answered recorded as the attempt's status.
  *
- * **The two release describes hold on to the `Response` they were handed, and that is not
+ * The ten are: the four that judge a hop — an origin outside the prefix, a path outside it, a
+ * scheme that climbs, and one inside the prefix that is followed — the two that bound a chain,
+ * no hop allowed and the default three, the one that refuses a `Location` naming nowhere, and
+ * the three that watch a connection be released.
+ *
+ * **The counts in this paragraph are the thing this file has been wrong about before.** A fix
+ * added a describe and left the number as it was; the round after it read the number rather than
+ * the file. If a describe here is added or taken away, both sentences above change with it.
+ *
+ * **The three release describes hold on to the `Response` they were handed, and that is not
  * tidiness.** Undici releases a connection on the cancel this class makes, and also, separately,
  * when the unread `Response` is finalized — which is garbage collection, and lands wherever it
  * lands. Each therefore wraps `fetchClient` around the real `globalThis.fetch` — a pass-through,
@@ -41,7 +50,7 @@ import AiRunCallbackUrlInspector from '../../../../app/aiRunCallback/AiRunCallba
  * That last sentence is a claim about undici rather than about this class, and the canary that
  * guards it is not written twice: `tests/__tests__/app/aiRunMedia/MediaFetchClient.js` holds one —
  * a describe that takes the cancel out on purpose and asserts the socket is **not** released.
- * Its red is the signal for these two describes as much as for its own six, because both rest on
+ * Its red is the signal for these three describes as much as for its own, because both rest on
  * the same property of the same package.
  *
  * Each describe using a server closes it before it asserts, not after. A failing assertion ends
@@ -326,6 +335,105 @@ describe('AiRunCallbackSender', () => {
 
         expect(actual)
           .toBe(AiRunCallbackSender) // same reference
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#isUsableCallbackUrlInspector()', () => {
+    /*
+     * What the sender asks of a call before it posts anything: that there is something to put a
+     * hop to. It is a duck-typed question rather than an `instanceof` one, so a subclass answers
+     * and so does a stand-in — which is what lets the describes below hand over an inspector of
+     * their own.
+     */
+    describe('should answer that a hop can be put to it', () => {
+      const cases = [
+        {
+          label: 'an inspector built from a registered prefix',
+          input: {
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://signing.client.development.invalid/callbacks/',
+            }),
+          },
+        },
+        {
+          // an inspector that refuses everything is still an inspector: it answers, with a no
+          label: 'an inspector whose prefix is not a URL',
+          input: {
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'not a URL at all',
+            }),
+          },
+        },
+        {
+          label: 'a stand-in carrying the one method',
+          input: {
+            aiRunCallbackUrlInspector: {
+              isDeliverableCallbackUrl: () => true,
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const sender = AiRunCallbackSender.create()
+
+        const actual = sender.isUsableCallbackUrlInspector(input)
+
+        expect(actual)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * The shapes a caller that never passed the argument arrives in. The first is the one that was
+     * live: `#attemptTerminalCallback()` builds the inspector and hands it down, and the line that
+     * does it was a line nothing held — so the argument arrived absent, and only a client
+     * answering `307` ever noticed.
+     */
+    describe('should answer that a hop cannot be put to it', () => {
+      const cases = [
+        {
+          label: 'nothing passed at all',
+          input: {
+            // aiRunCallbackUrlInspector: undefined
+          },
+        },
+        {
+          label: 'null passed',
+          input: {
+            aiRunCallbackUrlInspector: null,
+          },
+        },
+        {
+          label: 'an object carrying no such method',
+          input: {
+            aiRunCallbackUrlInspector: {},
+          },
+        },
+        {
+          label: 'the method present but not callable',
+          input: {
+            aiRunCallbackUrlInspector: {
+              isDeliverableCallbackUrl: 'yes',
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const sender = AiRunCallbackSender.create()
+
+        const actual = sender.isUsableCallbackUrlInspector(input)
+
+        expect(actual)
+          .toBeFalsy()
       })
     })
   })
@@ -683,6 +791,9 @@ describe('AiRunCallbackSender', () => {
       })
     })
 
+    /*
+     * No `location` header at all.
+     */
     describe('should be null when the redirect names nowhere to go', () => {
       const cases = [
         {
@@ -706,6 +817,57 @@ describe('AiRunCallbackSender', () => {
         const sender = AiRunCallbackSender.create()
         const response = new Response('moved nowhere', {
           status: mockResponseStatus,
+        })
+
+        const actual = sender.extractRedirectedUrl({
+          response,
+          callbackUrl: input.callbackUrl,
+        })
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+
+    /*
+     * A `location` header that is present and carries no text. It reads as the same fact as the
+     * header being absent, and it did not behave like it: `new URL('', hopUrl)` answers the hop
+     * itself, which is inside the client's own prefix, so it passed the inspector and was posted
+     * to again until the hop count ran out — four POSTs of one signed body where the client had
+     * named nowhere. Measured at four requests before this guard, one after.
+     *
+     * Every blank spelling arrives here as `''`: the Headers layer strips leading and trailing
+     * whitespace from a value, so `'   '` and a tab are `''` by the time `.get()` answers, and
+     * writing them as separate cases here would be one case written twice. They are exercised
+     * where they are still distinct — on `#isBlankRedirectLocation()`, which takes the text as
+     * given, and over a socket in the describe that sends them on the wire.
+     */
+    describe('should be null when the location carries no text', () => {
+      const cases = [
+        {
+          input: {
+            callbackUrl: 'https://signing.client.development.invalid/callbacks/10010004',
+          },
+          mockResponseStatus: 307,
+        },
+        {
+          input: {
+            callbackUrl: 'https://rotating.client.development.invalid/callbacks/10010003',
+          },
+          mockResponseStatus: 308,
+        },
+      ]
+
+      test.each(cases)('callbackUrl: $input.callbackUrl', ({
+        input,
+        mockResponseStatus,
+      }) => {
+        const sender = AiRunCallbackSender.create()
+        const response = new Response('moved nowhere', {
+          status: mockResponseStatus,
+          headers: {
+            location: '',
+          },
         })
 
         const actual = sender.extractRedirectedUrl({
@@ -753,6 +915,97 @@ describe('AiRunCallbackSender', () => {
 
         expect(actual)
           .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#isBlankRedirectLocation()', () => {
+    /*
+     * The spellings of "nowhere" a header can arrive in. Over a socket the Headers layer will have
+     * trimmed most of them to `''` already; this method is what makes the answer the same either
+     * way, so that the guard does not depend on which layer did the trimming.
+     */
+    describe('should answer that the location names nowhere', () => {
+      const cases = [
+        {
+          label: 'empty text',
+          input: {
+            location: '',
+          },
+        },
+        {
+          label: 'spaces',
+          input: {
+            location: '   ',
+          },
+        },
+        {
+          label: 'a tab',
+          input: {
+            location: '\t',
+          },
+        },
+        {
+          label: 'a line break',
+          input: {
+            location: '\n',
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const sender = AiRunCallbackSender.create()
+
+        const actual = sender.isBlankRedirectLocation(input)
+
+        expect(actual)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * A location naming somewhere is not this method's to refuse, whatever it names — an origin
+     * outside the prefix included, which the inspector answers for and this does not. The
+     * whitespace-padded case is the one that says the trim decides emptiness rather than trimming
+     * the value that is then used.
+     */
+    describe('should answer that the location names somewhere', () => {
+      const cases = [
+        {
+          input: {
+            location: '/callbacks/10010004/moved',
+          },
+        },
+        {
+          input: {
+            location: '  /callbacks/10010004/padded  ',
+          },
+        },
+        {
+          input: {
+            location: 'https://elsewhere.client.development.invalid/loot',
+          },
+        },
+        {
+          input: {
+            location: '#fragment-of-the-same-path',
+          },
+        },
+      ]
+
+      test.each(cases)('location: $input.location', ({
+        input,
+      }) => {
+        const sender = AiRunCallbackSender.create()
+
+        const actual = sender.isBlankRedirectLocation(input)
+
+        expect(actual)
+          .toBeFalsy()
       })
     })
   })
@@ -970,6 +1223,180 @@ describe('AiRunCallbackSender', () => {
 
         expect(actual)
           .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#answerAiRunCallbackHop()', () => {
+    /*
+     * The branch that refuses a hop, driven directly rather than through a chain: the response is
+     * answered as the `3xx` it was, and its body is disposed of on the way out. Something did
+     * answer here — it answered `307` — so null would say the wrong thing, and null is kept for
+     * the case where nothing was on the other end.
+     *
+     * The inspector is a stand-in refusing everything, because what is under test is what this
+     * method does with a no rather than how the no was arrived at. Whether the real inspector says
+     * no to the right URLs is `AiRunCallbackUrlInspector`'s own file, and whether this method is
+     * reached with the real one is the chain describes below.
+     */
+    describe('should answer a refused hop as the status it was refused on', () => {
+      const cases = [
+        {
+          input: {
+            callbackUrl: 'https://signing.client.development.invalid/callbacks/10010004',
+            requestOptions: {
+              method: 'POST',
+              headers: {
+                'x-ort-run-key': 'run-key-10010004',
+              },
+              body: '{"runKey":"run-key-10010004"}',
+              signal: AbortSignal.timeout(10000),
+              redirect: 'manual',
+            },
+            runKey: 'run-key-10010004',
+            aiRunCallbackUrlInspector: {
+              isDeliverableCallbackUrl: () => false,
+            },
+            remainingRedirectCount: 3,
+          },
+          mockResponseStatus: 307,
+          expected: {
+            httpStatusCode: 307,
+          },
+        },
+        {
+          input: {
+            callbackUrl: 'https://rotating.client.development.invalid/callbacks/10010003',
+            requestOptions: {
+              method: 'POST',
+              headers: {
+                'x-ort-run-key': 'run-key-10010003',
+              },
+              body: '{"runKey":"run-key-10010003"}',
+              signal: AbortSignal.timeout(10000),
+              redirect: 'manual',
+            },
+            runKey: 'run-key-10010003',
+            aiRunCallbackUrlInspector: {
+              isDeliverableCallbackUrl: () => false,
+            },
+            remainingRedirectCount: 1,
+          },
+          mockResponseStatus: 302,
+          expected: {
+            httpStatusCode: 302,
+          },
+        },
+      ]
+
+      test.each(cases)('callbackUrl: $input.callbackUrl', async ({
+        input,
+        mockResponseStatus,
+        expected,
+      }) => {
+        const fetchFunction = jest.fn()
+
+        jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
+          .mockReturnValue(fetchFunction)
+
+        const sender = AiRunCallbackSender.create()
+        const response = new Response('moved', {
+          status: mockResponseStatus,
+          headers: {
+            location: 'https://elsewhere.client.development.invalid/loot',
+          },
+        })
+
+        const actual = await sender.answerAiRunCallbackHop({
+          response,
+          callbackUrl: input.callbackUrl,
+          requestOptions: input.requestOptions,
+          runKey: input.runKey,
+          aiRunCallbackUrlInspector: input.aiRunCallbackUrlInspector,
+          remainingRedirectCount: input.remainingRedirectCount,
+        })
+
+        expect(actual)
+          .toEqual(expected)
+        expect(response.bodyUsed)
+          .toBeTruthy()
+        expect(fetchFunction)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#sendAiRunCallback()', () => {
+    /*
+     * A call carrying nothing to put a hop to is refused, and refused before anything is posted.
+     *
+     * This is the hole round 2 found, and the shape of the fix is the argument: the sender could
+     * have answered the case as a `3xx` instead, and that would have filed a caller's forgotten
+     * argument as a client's own redirect — a row an operator reads as "they redirected us", a
+     * retry spent, and nothing anywhere naming the real fault. Raising says whose mistake it is.
+     *
+     * **What makes raising safe is when it happens.** Measured on the code before this fix, with
+     * no inspector and a `307` carrying a quarter of a megabyte: `TypeError` out of the middle of
+     * the redirect walk, the `3xx` held with `bodyUsed` false, its socket still open 1.5 seconds
+     * later, and the raise passing `AiRunTerminalCallbackDeliverer#attemptTerminalCallback()`
+     * before the row was written — so an attempt that really went out left none. Measured after:
+     * nothing posted at all, which is what `fetchFunction` asserts here.
+     *
+     * The second case is the same refusal for an argument that is present and cannot answer, which
+     * is the shape a stand-in built wrong arrives in.
+     */
+    describe('should refuse a call carrying nothing to put a hop to', () => {
+      const cases = [
+        {
+          input: {
+            callbackUrl: 'https://signing.client.development.invalid/callbacks/10010004',
+            headerHash: {
+              'x-ort-run-key': 'run-key-10010004',
+            },
+            rawBody: '{"runKey":"run-key-10010004"}',
+            runKey: 'run-key-10010004',
+            // aiRunCallbackUrlInspector: undefined
+          },
+          expected: 'AiRunCallbackSender#sendAiRunCallback() refused a callback handed no URL inspector: runKey run-key-10010004',
+        },
+        {
+          input: {
+            callbackUrl: 'https://rotating.client.development.invalid/callbacks/10010003',
+            headerHash: {
+              'x-ort-run-key': 'run-key-10010003',
+            },
+            rawBody: '{"runKey":"run-key-10010003"}',
+            runKey: 'run-key-10010003',
+            aiRunCallbackUrlInspector: {},
+          },
+          expected: 'AiRunCallbackSender#sendAiRunCallback() refused a callback handed no URL inspector: runKey run-key-10010003',
+        },
+      ]
+
+      test.each(cases)('runKey: $input.runKey', async ({
+        input,
+        expected,
+      }) => {
+        const fetchFunction = jest.fn()
+
+        jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
+          .mockReturnValue(fetchFunction)
+
+        const sender = AiRunCallbackSender.create()
+
+        const actual = () => sender.sendAiRunCallback(input)
+
+        await expect(actual)
+          .rejects
+          .toThrow(expected)
+        expect(fetchFunction)
+          .not
+          .toHaveBeenCalled()
       })
     })
   })
@@ -1447,44 +1874,51 @@ describe('AiRunCallbackSender', () => {
   describe('#sendAiRunCallback()', () => {
     /*
      * This class carries no scheme guard of its own, unlike its sibling in `app/aiRunMedia/`, and
-     * this describe is the whole of what holds that decision up.
+     * this describe and the one below it are the whole of what holds that decision up.
      *
      * The reason there is none: `AiRunCallbackUrlInspector` compares the whole normalized `href`,
      * so the scheme is inside what it compares, and a hop that changed scheme is already a URL
      * outside the prefix. A guard here could never fire — and a guard that cannot fire is a
      * docblock pretending to be code.
      *
-     * The reason this describe exists: that argument is a dependency on another class's
+     * The reason these describes exist: that argument is a dependency on another class's
      * strictness, and nothing mechanical held it. Loosen the inspector to compare a host, a
-     * case-folded form or anything short of the full `href`, leave this class alone, and both the
-     * downgrade and the climb re-open with no test anywhere going red. Now one does, and it goes
-     * red **here**, where the dependency lives rather than where it is honoured.
+     * case-folded form or anything short of the full `href`, leave this class alone, and the
+     * climb and the downgrade re-open with no test anywhere going red. Now they do, and they go
+     * red **here**, where the dependency lives rather than where it is honoured. Confirmed by
+     * swapping in a loosened inspector that compares host and path and ignores the scheme: the
+     * sender connects, the plaintext server fails the handshake, and the outcome reads
+     * `{ httpStatusCode: null }` against the `307` expected.
      *
-     * No certificate is needed and none is stood up: the point is that the second URL is never
-     * connected to. If the inspector were loosened the sender would try, the plaintext server
-     * would fail the handshake, and the outcome would be a null status instead of the `307` —
-     * which is what these cases assert.
+     * **This describe holds the climb only — a plaintext prefix sent up to `https:`.** The
+     * downgrade is the direction the class comment names first and it is not here, because the
+     * first hop would have to be served over TLS and no certificate is stood up in this suite. It
+     * is covered instead in the describe below, where the network is stubbed and no handshake is
+     * needed. Two directions, two describes; what this file must not do again is carry two cases
+     * of one direction under labels that claim both.
+     *
+     * No certificate is needed here either: the point is that the second URL is never connected
+     * to. The two cases differ in the path the `307` names, both inside the registered prefix, so
+     * that the scheme is the only thing left to refuse them on.
      */
-    describe('should not post to a redirect that changes the scheme', () => {
+    describe('should not post to a redirect that climbs to https', () => {
       const cases = [
         {
-          label: 'https, where the prefix is plaintext',
-          mockRedirectProtocol: 'https',
+          mockRedirectPath: '/callbacks/10010004',
           expected: {
             httpStatusCode: 307,
           },
         },
         {
-          label: 'https on a path the prefix holds',
-          mockRedirectProtocol: 'https',
+          mockRedirectPath: '/callbacks/10010004/moved',
           expected: {
             httpStatusCode: 307,
           },
         },
       ]
 
-      test.each(cases)('label: $label', async ({
-        mockRedirectProtocol,
+      test.each(cases)('mockRedirectPath: $mockRedirectPath', async ({
+        mockRedirectPath,
         expected,
       }) => {
         const requestPaths = []
@@ -1493,7 +1927,7 @@ describe('AiRunCallbackSender', () => {
           requestPaths.push(request.url)
 
           response.writeHead(307, {
-            location: `${mockRedirectProtocol}://127.0.0.1:${redirectingServer.address().port}/callbacks/10010004`,
+            location: `https://127.0.0.1:${redirectingServer.address().port}${mockRedirectPath}`,
           })
           response.end('moved')
         })
@@ -1526,6 +1960,96 @@ describe('AiRunCallbackSender', () => {
           .toEqual(expected)
         expect(requestPaths)
           .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#sendAiRunCallback()', () => {
+    /*
+     * The other direction of the scheme decision, and the one the class comment names first: a
+     * client whose registered prefix is `https://…` answering `307` to the plaintext form of its
+     * own path. That is the downgrade a redirect-following client would take without noticing, and
+     * it carries the run's whole result and a valid signature over the wire in clear.
+     *
+     * **The network is stubbed here, and that is the point rather than a compromise.** Driving
+     * this over loopback would need the *first* hop served over TLS, which needs a certificate
+     * this suite does not stand up — which is why the direction had no case at all until now, and
+     * why the describe above carried two cases of the climb under labels that claimed both. What a
+     * stub cannot show is that `fetch` does not follow on its own; the climb describe shows that
+     * over a real socket, and this one asks the remaining question: given a `307` to `http:` under
+     * an `https:` prefix, does a second request go out? Loosen `AiRunCallbackUrlInspector` to
+     * anything short of the whole `href` and one does.
+     *
+     * The call count is the assertion that matters, for the same reason it does above: an outcome
+     * of `307` would also be answered by a chain that posted the body to the plaintext URL and was
+     * refused there.
+     */
+    describe('should not post to a redirect that steps down to plaintext', () => {
+      const cases = [
+        {
+          input: {
+            callbackUrl: 'https://signing.client.development.invalid/callbacks/10010004',
+            headerHash: {
+              'x-ort-signature': 'faf7cdd737d6605567349f1f2ba060338772e196f6901304c6258940674db19b',
+              'x-ort-run-key': 'run-key-10010004',
+            },
+            rawBody: '{"runKey":"run-key-10010004","result":{"exterior.wallMaterial":"brick"}}',
+            runKey: 'run-key-10010004',
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://signing.client.development.invalid/callbacks/',
+            }),
+          },
+          mockRedirectLocation: 'http://signing.client.development.invalid/callbacks/10010004',
+          expected: {
+            httpStatusCode: 307,
+          },
+        },
+        {
+          input: {
+            callbackUrl: 'https://rotating.client.development.invalid/callbacks/10010003',
+            headerHash: {
+              'x-ort-signature': 'ce3bf8dff4e9f13604ee3d0f564f9d47a497724bea96e3bfc20a66e4bbb8e33d',
+              'x-ort-run-key': 'run-key-10010003',
+            },
+            rawBody: '{"runKey":"run-key-10010003","result":{"exterior.wallMaterial":"tile"}}',
+            runKey: 'run-key-10010003',
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://rotating.client.development.invalid/callbacks/',
+            }),
+          },
+          mockRedirectLocation: 'http://rotating.client.development.invalid/callbacks/10010003/moved',
+          expected: {
+            httpStatusCode: 307,
+          },
+        },
+      ]
+
+      test.each(cases)('mockRedirectLocation: $mockRedirectLocation', async ({
+        input,
+        mockRedirectLocation,
+        expected,
+      }) => {
+        const fetchFunction = jest.fn()
+          .mockResolvedValue(new Response('moved', {
+            status: 307,
+            headers: {
+              location: mockRedirectLocation,
+            },
+          }))
+
+        jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
+          .mockReturnValue(fetchFunction)
+
+        const sender = AiRunCallbackSender.create()
+
+        const actual = await sender.sendAiRunCallback(input)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(fetchFunction)
+          .toHaveBeenCalledTimes(1)
       })
     })
   })
@@ -1653,8 +2177,13 @@ describe('AiRunCallbackSender', () => {
      * A client's endpoint redirecting to itself for ever is refused by the hop count, and the
      * `3xx` it was refused on is what the attempt is recorded as. No hops are allowed at all here,
      * so the server sees exactly one request — which is the assertion that says the bound is a
-     * bound rather than a number carried around. The describe above spends two hops under the
-     * default of three, so the pair of them says the count is both honored and finite.
+     * bound rather than a number carried around.
+     *
+     * Three describes divide that between them: this one, at zero, says the count is honored at
+     * its floor; the one above spends two of the default three, so the count is spent rather than
+     * merely held; and the one below runs a chain past the default, so the boundary itself is
+     * driven rather than read off `.create()`'s default. Before the third of them, nothing but
+     * `toHaveProperty('maximumRedirectCount', 3)` stood behind the comments naming three.
      *
      * Both locations stay inside the registered prefix, so nothing but the count could have
      * refused them.
@@ -1720,6 +2249,183 @@ describe('AiRunCallbackSender', () => {
 
         loopingServer.closeAllConnections()
         loopingServer.close()
+
+        expect(actual)
+          .toEqual(expected)
+        expect(requestPaths)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#sendAiRunCallback()', () => {
+    /*
+     * The default hop count, driven to its boundary instead of read off the factory.
+     *
+     * Nothing carried the default before this: the describe above runs at zero and the follow
+     * describe spends two of three, so the sentences in the class and in this file that say "at
+     * most three times by default" rested on one `toHaveProperty` assertion about a number. Here
+     * the sender is built with no factory params at all, and the chain is what says what the
+     * number does.
+     *
+     * The server answers every request with a `308` naming the path it was asked for plus one more
+     * segment, so every hop is a URL the client's prefix holds and none of them repeats — the
+     * count is the only thing that can end it. Measured: four requests, the first plus the three
+     * hops allowed, and the outcome the `308` the fourth answered.
+     *
+     * **Four requests is also the ceiling on what one attempt costs.** Each of them re-posts the
+     * whole signed body, so a run's seven attempts are twenty-eight posts of one result at worst.
+     * That is the amplification this count bounds, and this describe is where the bound is a
+     * number a change would have to break.
+     */
+    describe('should spend the default hops and no more', () => {
+      const cases = [
+        {
+          input: {
+            callbackPath: '/callbacks/10010004',
+            runKey: 'run-key-10010004',
+          },
+          expected: {
+            httpStatusCode: 308,
+          },
+        },
+        {
+          input: {
+            callbackPath: '/callbacks/10010003',
+            runKey: 'run-key-10010003',
+          },
+          expected: {
+            httpStatusCode: 308,
+          },
+        },
+      ]
+
+      test.each(cases)('callbackPath: $input.callbackPath', async ({
+        input,
+        expected,
+      }) => {
+        const requestPaths = []
+
+        const movingServer = http.createServer((request, response) => {
+          requestPaths.push(request.url)
+
+          response.writeHead(308, {
+            location: `${request.url}/again`,
+          })
+          response.end('moved again')
+        })
+
+        await new Promise(resolve => {
+          movingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const callbackUrlPrefix = `http://127.0.0.1:${movingServer.address().port}/callbacks/`
+
+        const sender = AiRunCallbackSender.create()
+
+        const actual = await sender.sendAiRunCallback({
+          callbackUrl: `http://127.0.0.1:${movingServer.address().port}${input.callbackPath}`,
+          headerHash: {
+            'x-ort-signature': 'faf7cdd737d6605567349f1f2ba060338772e196f6901304c6258940674db19b',
+            'x-ort-run-key': input.runKey,
+          },
+          rawBody: '{"result":{"exterior.wallMaterial":"brick"}}',
+          runKey: input.runKey,
+          aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+            callbackUrlPrefix,
+          }),
+        })
+
+        movingServer.closeAllConnections()
+        movingServer.close()
+
+        expect(actual)
+          .toEqual(expected)
+        expect(requestPaths)
+          .toHaveLength(4)
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#sendAiRunCallback()', () => {
+    /*
+     * A `307` whose `Location` names nowhere is answered as the `307` it was, and costs one
+     * request rather than four.
+     *
+     * The network is real because the header is the thing under test and the Headers layer is
+     * part of how it arrives: an empty value and a whitespace-only value are both `''` by the time
+     * `.get()` answers, and that is only true of a value that came off a socket the way these did.
+     *
+     * Measured before the guard, over exactly this shape: `location: ''` and `location: '   '`
+     * each spent the whole hop count — four POSTs of one signed body, every one of them to the
+     * path the request had just been made to, because `new URL('', hopUrl)` answers the hop itself
+     * and the hop is inside the client's own prefix. The client named no destination and the code
+     * read one out of it.
+     *
+     * What this does **not** cover is a `Location` that names the same path outright, or a
+     * fragment of it: those name somewhere, they are followed, and the hop count is the only thing
+     * that ends them — measured at four requests, which is the describe above.
+     */
+    describe('should not follow a redirect whose location names nowhere', () => {
+      const cases = [
+        {
+          label: 'an empty location header',
+          mockRedirectLocation: '',
+          expected: {
+            httpStatusCode: 307,
+          },
+        },
+        {
+          label: 'a location header holding only spaces',
+          mockRedirectLocation: '   ',
+          expected: {
+            httpStatusCode: 307,
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        mockRedirectLocation,
+        expected,
+      }) => {
+        const requestPaths = []
+
+        const redirectingServer = http.createServer((request, response) => {
+          requestPaths.push(request.url)
+
+          response.writeHead(307, {
+            location: mockRedirectLocation,
+          })
+          response.end('moved nowhere')
+        })
+
+        await new Promise(resolve => {
+          redirectingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        const callbackUrlPrefix = `http://127.0.0.1:${redirectingServer.address().port}/callbacks/`
+
+        const sender = AiRunCallbackSender.create()
+
+        const actual = await sender.sendAiRunCallback({
+          callbackUrl: `${callbackUrlPrefix}10010004`,
+          headerHash: {
+            'x-ort-signature': 'faf7cdd737d6605567349f1f2ba060338772e196f6901304c6258940674db19b',
+            'x-ort-run-key': 'run-key-10010004',
+          },
+          rawBody: '{"runKey":"run-key-10010004","result":{"exterior.wallMaterial":"brick"}}',
+          runKey: 'run-key-10010004',
+          aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+            callbackUrlPrefix,
+          }),
+        })
+
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
 
         expect(actual)
           .toEqual(expected)
@@ -1961,6 +2667,126 @@ describe('AiRunCallbackSender', () => {
           .toHaveLength(1)
         expect(secondServiceRequests)
           .toHaveLength(0)
+        expect(releasedSockets)
+          .toHaveLength(1)
+      })
+    })
+  })
+})
+
+describe('AiRunCallbackSender', () => {
+  describe('#sendAiRunCallback()', () => {
+    /*
+     * The third release, on the way out of an exception rather than a return.
+     *
+     * This is what round 2's finding cost before it was closed: the sender put a hop to the
+     * inspector without checking there was one, so a caller that never passed the argument raised
+     * a `TypeError` from inside the redirect walk — past the disposal, and past the row
+     * `AiRunTerminalCallbackDeliverer` writes for an attempt that really went out. Measured on
+     * that code, over this shape: `heldResponses: 1`, `bodyUsed: [false]`, and the socket still
+     * open 1.5 seconds later.
+     *
+     * The missing argument itself is refused earlier now, before anything is posted, so what this
+     * describe drives is what is left: an inspector the caller did hand over, which raises when it
+     * is asked. That is the general case — anything raised while a response is in hand — and the
+     * `try` in `#sendAiRunCallbackHop()` is what it is held by. Take that `try` out and the
+     * exception still travels, which is why the released socket rather than the exception is the
+     * assertion that discriminates.
+     *
+     * **The exception is re-raised, not turned into an outcome.** An inspector that raises is a
+     * fault of the caller's or of its own; answering it as a `3xx` would file it as the client's
+     * redirect, which is the one thing a refusal must not be mistaken for.
+     *
+     * The failure is caught into a value rather than asserted with `rejects.toThrow()` because the
+     * server has to be closed before any assertion runs — a failing assertion ends the body where
+     * it stands — and the socket cannot be waited for until the call has settled.
+     */
+    describe('should release the connection held when deciding a hop raised', () => {
+      const cases = [
+        {
+          mockInspectorFailure: new Error('the inspector of the caller raised'),
+          expected: 'the inspector of the caller raised',
+        },
+        {
+          mockInspectorFailure: new TypeError('isDeliverableCallbackUrl is not a function'),
+          expected: 'isDeliverableCallbackUrl is not a function',
+        },
+      ]
+
+      test.each(cases)('mockInspectorFailure.message: $mockInspectorFailure.message', async ({
+        mockInspectorFailure,
+        expected,
+      }) => {
+        const releasedSockets = []
+        const fetchedResponses = []
+
+        const redirectingServer = http.createServer((request, response) => {
+          response.writeHead(307, {
+            location: '/callbacks/10010004/moved',
+            'content-length': String(LEAKY_RESPONSE_BODY_BYTE_SIZE),
+          })
+          response.end(Buffer.alloc(LEAKY_RESPONSE_BODY_BYTE_SIZE, 0x61))
+        })
+
+        redirectingServer.on('connection', socket => {
+          socket.on('error', () => null)
+        })
+
+        const redirectSocketReleased = new Promise(resolve => {
+          redirectingServer.once('connection', socket => {
+            socket.on('close', () => {
+              releasedSockets.push(socket)
+              resolve(socket)
+            })
+          })
+        })
+
+        await new Promise(resolve => {
+          redirectingServer.listen(0, '127.0.0.1', resolve)
+        })
+
+        jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
+          .mockReturnValue(async (requestedUrl, requestOptions) => {
+            const response = await globalThis.fetch(requestedUrl, requestOptions)
+
+            fetchedResponses.push(response)
+
+            return response
+          })
+
+        const callbackUrlPrefix = `http://127.0.0.1:${redirectingServer.address().port}/callbacks/`
+
+        const sender = AiRunCallbackSender.create()
+
+        const actual = await sender.sendAiRunCallback({
+          callbackUrl: `${callbackUrlPrefix}10010004`,
+          headerHash: {
+            'x-ort-run-key': 'run-key-10010004',
+          },
+          rawBody: '{"runKey":"run-key-10010004"}',
+          runKey: 'run-key-10010004',
+          aiRunCallbackUrlInspector: {
+            isDeliverableCallbackUrl: () => {
+              throw mockInspectorFailure
+            },
+          },
+        })
+          .catch(hopDecisionFailure => hopDecisionFailure)
+
+        await Promise.race([
+          redirectSocketReleased,
+          timersPromises.setTimeout(SOCKET_RELEASE_WAIT_MILLISECONDS, null, {
+            ref: false,
+          }),
+        ])
+
+        redirectingServer.closeAllConnections()
+        redirectingServer.close()
+
+        expect(actual)
+          .toHaveProperty('message', expected)
+        expect(fetchedResponses)
+          .toHaveLength(1)
         expect(releasedSockets)
           .toHaveLength(1)
       })

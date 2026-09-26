@@ -82,8 +82,12 @@ const TEST_WORKSPACE_ROOT_PATH = path.join(
  * back off a file it created.
  *
  * Where a platform has owner-group-other permissions the answer is the 0o600 that was asked for.
- * Windows expresses a read-only bit and nothing else, and reports 0o666 whatever was asked, so the
- * figure asserted there is the platform's own and says nothing about this service. The describe
+ * Windows expresses a read-only bit and nothing else: measured on this platform, a file created
+ * asking 0o600 reads back 0o666, and one asking 0o400 reads back 0o444 - so what survives the
+ * round trip is the owner-write bit alone, and the two other triads are invented from it. The
+ * figure asserted there is therefore the platform's own and says nothing about this service. It is
+ * 0o666 because this class asks for a mode that carries owner-write; it is not, as an earlier
+ * round of this comment had it, what Windows answers whatever was asked. The describe
  * that fails without the fix on every platform is `'should refuse a file already at the path'`,
  * which sits above the mode describe rather than below it - an existing file refused rather than
  * truncated and rewritten.

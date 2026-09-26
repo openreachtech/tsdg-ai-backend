@@ -783,3 +783,160 @@ describe('AiRunTerminalCallbackDeliverer', () => {
     })
   })
 })
+
+describe('AiRunTerminalCallbackDeliverer', () => {
+  describe('#deliverTerminalCallback()', () => {
+    /*
+     * The inspector `#attemptTerminalCallback()` builds really does travel to the sender, and this
+     * describe is what says so — from the outside, by driving a redirect, rather than by handing
+     * the sender an inspector the test made itself.
+     *
+     * That distinction is the whole reason it exists. Every other test of the send supplied the
+     * inspector in its own `input`, and the one describe that went through this method answered
+     * `200` on the first hop, where an inspector is never asked for. So the line in
+     * `#attemptTerminalCallback()` that passes it down could be deleted with the whole suite still
+     * green, while production raised on the first client that answered `307` — and raised past
+     * `#saveTerminalCallbackDelivery()`, so the attempt that had really gone out left no row.
+     * Delete that line now and this describe is red twice over: the sender refuses a call carrying
+     * no inspector, so `#deliverTerminalCallback()` raises instead of answering, and no row is
+     * written for it to find.
+     *
+     * The client is the seeded signing client and the prefix is its own registered one, read from
+     * the row rather than written here — which is the other half of what is being held: the hops
+     * of this run are judged against *this* run's client.
+     *
+     * Both redirects are refused, and the attempt is the `3xx` it was refused on: something
+     * answered, and a null status is kept for the case where nothing did. The row carries that
+     * `307`, so a client redirecting its callback somewhere this service will not follow is
+     * recorded as an attempt and retried — which is what the class comment says it costs.
+     */
+    describe('should judge a redirect by the registered prefix of the client the run belongs to', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10530043,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10530043',
+              requestKey: 'request-key-10530043',
+              requestBodyHash: 'request-body-hash-10530043',
+              externalRef: 'external-ref-10530043',
+              subjectLabel: 'Subject label of run 10530043',
+              correlationId: 'correlation-id-10530043',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10530043',
+              acceptedAt: new Date('2026-09-26T05:00:01.001Z'),
+              startedAt: new Date('2026-09-26T05:00:02.002Z'),
+              finishedAt: new Date('2026-09-26T05:00:03.003Z'),
+            },
+            deliverParams: {
+              aiRunId: 10530043,
+              attemptIndex: 1,
+            },
+            findParams: {
+              aiRunId: 10530043,
+              callbackDeliveryCategoryName: 'terminal',
+            },
+          },
+          mockRedirectLocation: 'https://elsewhere.client.development.invalid/internal/metadata',
+          expected: {
+            outcome: {
+              hasAttempted: true,
+              hasDelivered: false,
+              httpStatusCode: 307,
+              refusalReasonCode: null,
+            },
+            deliveries: [
+              expect.objectContaining({
+                AiRunId: 10530043,
+                AiRunCallbackDeliveryCategoryId: 1,
+                attemptIndex: 1,
+                httpStatusCode: 307,
+              }),
+            ],
+          },
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10530044,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+              runKey: 'run-key-10530044',
+              requestKey: 'request-key-10530044',
+              requestBodyHash: 'request-body-hash-10530044',
+              externalRef: 'external-ref-10530044',
+              subjectLabel: 'Subject label of run 10530044',
+              correlationId: 'correlation-id-10530044',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10530044',
+              failureReasonCode: 'MEDIA_FETCH_FAILED',
+              acceptedAt: new Date('2026-09-26T06:00:01.001Z'),
+              startedAt: new Date('2026-09-26T06:00:02.002Z'),
+              finishedAt: new Date('2026-09-26T06:00:03.003Z'),
+            },
+            deliverParams: {
+              aiRunId: 10530044,
+              attemptIndex: 2,
+            },
+            findParams: {
+              aiRunId: 10530044,
+              callbackDeliveryCategoryName: 'terminal',
+            },
+          },
+          mockRedirectLocation: 'https://signing.client.development.invalid/internal/metadata',
+          expected: {
+            outcome: {
+              hasAttempted: true,
+              hasDelivered: false,
+              httpStatusCode: 307,
+              refusalReasonCode: null,
+            },
+            deliveries: [
+              expect.objectContaining({
+                AiRunId: 10530044,
+                AiRunCallbackDeliveryCategoryId: 1,
+                attemptIndex: 2,
+                httpStatusCode: 307,
+              }),
+            ],
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.deliverParams.aiRunId', async ({
+        input,
+        mockRedirectLocation,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const fetchFunction = jest.fn()
+          .mockResolvedValue(new Response('moved', {
+            status: 307,
+            headers: {
+              location: mockRedirectLocation,
+            },
+          }))
+
+        jest.spyOn(AiRunCallbackSender, 'fetchClient', 'get')
+          .mockReturnValue(fetchFunction)
+
+        const deliverer = AiRunTerminalCallbackDeliverer.create()
+        const recorder = AiRunCallbackDeliveryRecorder.create()
+
+        const actual = await deliverer.deliverTerminalCallback(input.deliverParams)
+
+        const actualDeliveries = await recorder.findAiRunCallbackDeliveries(input.findParams)
+
+        expect(actual)
+          .toEqual(expected.outcome)
+        expect(actualDeliveries)
+          .toEqual(expected.deliveries)
+        expect(fetchFunction)
+          .toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+})

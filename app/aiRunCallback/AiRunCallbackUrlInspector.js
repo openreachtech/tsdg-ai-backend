@@ -42,7 +42,14 @@ const DELIVERABLE_URL_PROTOCOLS = [
  * **A URL a redirect names is put through this class too, and it is asked the same question.**
  * This class is handed one URL at a time and knows nothing of chains; `AiRunCallbackSender` is
  * what asks it of the URL a `3xx` named, before anything is posted there, so a hop is held to
- * exactly the rule the first URL was held to and to no stricter one. Two things that caller leans
+ * exactly the rule the first URL was held to and to no stricter one.
+ *
+ * **"The same rule" is the caller's to keep, not this class's.** An instance answers for the one
+ * prefix it was created from and has no way to tell whose prefix that is, so what makes a hop's
+ * rule the first URL's rule is that `AiRunTerminalCallbackDeliverer` builds both instances from
+ * the same `api_clients.callback_url_prefix` — it builds two, one to judge the first URL and one
+ * to travel with the request. Build the second from another client's column and both would answer
+ * correctly, for the wrong client, with nothing here or in the sender to notice. Two things that caller leans
  * on follow from the comparison being made over the whole normalized `href`, and neither is a
  * rule written here: the scheme is part of what is compared, so no hop can move a callback from
  * `https:` to `http:` or back, and the host is part of it, so no hop can leave the origin the

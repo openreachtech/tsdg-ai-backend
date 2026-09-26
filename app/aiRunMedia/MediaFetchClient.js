@@ -212,20 +212,38 @@ const mentsuLogger = MentsuLogger.create({
  * **Every response this class decides not to read is disposed of before it is let go.** A `3xx`
  * arrives with a body like any other response, and asking for the hop by hand is what made that
  * body this class's: under `redirect: 'follow'` the client drained a redirect internally, and
- * under `redirect: 'manual'` nobody does. A body neither read nor cancelled is a connection the
- * client cannot release - one leaked per hop, held for as long as a worker daemon runs - and the
- * body of a `3xx` is the caller's to make as large as it likes, because the object redirecting
- * from is theirs. So it is cancelled on every branch that leaves a response behind: a hop that is
- * followed, a chain out of hops, a hop the list refuses, a hop that would downgrade the transport,
- * a status the server answered with, and a size declared past the bound. That is disposal and not
- * tidiness - the file descriptor does not come back without it - and it is a duty of every branch
- * anybody adds to `#fetchMedium()` or `#sendFetchRequestHop()` after this.
+ * under `redirect: 'manual'` nobody does. A body neither read nor canceled is a connection the
+ * client cannot release - one leaked per hop - and the body of a `3xx` is the caller's to make as
+ * large as it likes, because the object redirecting from is theirs. So it is canceled on every
+ * branch that leaves a response behind. There are seven of them: a hop that is followed, a chain
+ * out of hops, a hop the list refuses, a hop that would downgrade the transport, a status the
+ * server answered with, a size declared past the bound, and a body this service stopped reading at
+ * either of the two bounds below. The first six dispose through `#cancelUnreadResponseBody()`; the
+ * seventh is `#readBoundedStreamBytes()`'s, and disposes through `#cancelBoundedStreamRead()`.
+ * That is disposal and not tidiness - the file descriptor does not come back without it - and it
+ * is a duty of every branch anybody adds to `#fetchMedium()`, `#sendFetchRequestHop()` or
+ * `#readBoundedStreamBytes()` after this.
  *
- * All six of those branches have a describe of their own that drives the branch over a loopback
+ * **How long one of those leaks lasts, stated as the bound rather than as a fright.** An earlier
+ * round of this comment said a leaked connection was held for as long as a worker daemon runs, and
+ * that is false. The request carries an `AbortSignal.timeout`, and when it fires it destroys the
+ * connection whether or not the fetch resolved - measured at 205 ms, 511 ms and 1012 ms for
+ * signals of 200 ms, 500 ms and 1000 ms, and measured destroying a leaked `3xx`'s connection at
+ * 1025 ms for a 1000 ms signal. So a leak is bounded by `requestTimeoutMilliseconds` from the
+ * start of that request - thirty seconds at the default, and often less, because the host's own
+ * keep-alive may close an idle connection first (measured at 6032 ms against a Node server's
+ * default). The disposal is still worth its code: twelve media per run, times the number of runs
+ * a worker has in flight, times thirty seconds of held descriptors and pool slots, is a real
+ * exhaustion window, and the cancel shortens it to milliseconds - 7 to 40 ms measured across the
+ * shapes checked this round. What it is not is unbounded.
+ *
+ * All seven of those branches have a describe of their own that drives the branch over a loopback
  * socket and watches the server's connection close, so taking the cancel out of any one of them
- * is red rather than green. What has no guard is a *seventh*: a branch added later that answers
- * away from a response without cancelling it leaks exactly as these six did, and nothing but this
- * paragraph will say so until somebody writes its describe.
+ * is red rather than green. What has no guard is an *eighth*: a branch added later that answers
+ * away from a response without cancelling it leaks exactly as these seven did, and nothing but
+ * this paragraph will say so until somebody writes its describe. The seventh was in exactly that
+ * position while this paragraph claimed there were six - so the enumeration above is the thing to
+ * check against the code, not to trust.
  *
  * **The host is the parsed URL's own `hostname`, never a piece of the text.** A URL may carry
  * credentials before its host (`https://files.client.example@somewhere.else/photo.jpg`), and the
@@ -308,6 +326,11 @@ const mentsuLogger = MentsuLogger.create({
  * files this service refuses - a decision for the spec rather than for this class - and this says
  * plainly that it has not been made.
  *
+ * A disposal that failed is the third of these, and the newest. Both cancel sites swallow a
+ * rejecting cancel, and two of the cases that reject leave the socket unreleased, so this class
+ * cannot tell a returned connection from a held one and says nothing either way. What bounds it
+ * is the abort signal rather than anything here.
+ *
  * **A refusal writes no line, and what says so is the rule rather than a list.** There are two
  * call sites of `#logFailedMediaFetch()` in this class and both sit inside a `catch`: one in
  * `#sendSingleFetchRequest()`, for a request that raised, and one in `#readResponseBytes()`, for a
@@ -321,6 +344,12 @@ const mentsuLogger = MentsuLogger.create({
  * and a body of zero bytes. None of them is an exception with a class to name, and the failure
  * reason the caller records is the evidence they leave; a line telling one of them from another
  * would need something about the URL in it to be worth reading, and the media URLs are content.
+ *
+ * **One thing is silent that the rule above would not predict, and it is not a refusal.** Both
+ * cancel sites swallow a rejecting cancel, so a disposal that raised writes no line either -
+ * despite raising, which is the one condition the rule says makes a branch loud. What that costs
+ * is set out at `#cancelBoundedStreamRead()`: a cancel that failed to release the socket cannot be
+ * told from one that succeeded, and the connection then waits for the request's abort signal.
  */
 export default class MediaFetchClient {
   /**
@@ -606,7 +635,7 @@ export default class MediaFetchClient {
    * to twelve times the budget the run has.
    *
    * **The response this answers with carries a body nobody has read, and disposing of it is the
-   * caller's.** Every response left behind on the way here has been cancelled already; the one
+   * caller's.** Every response left behind on the way here has been canceled already; the one
    * handed back has not, and cannot be - reading it is the point of asking. A caller that answers
    * away from it must leave the body disposed of, and cancelling it is one of the two ways to do
    * that - having read it out is the other.
@@ -614,7 +643,7 @@ export default class MediaFetchClient {
    * `#fetchMedium()` uses both, and which of the two is not the same on all three of its own
    * refusals. The status refusal and the declared-size refusal cancel, through
    * `#abandonFetchedResponse()`. The third reads first: by the time `#hasReadableBytes()` answers
-   * no, `#readResponseBytes()` has already read the body to its end, cancelled its reader at a
+   * no, `#readResponseBytes()` has already read the body to its end, canceled its reader at a
    * bound, left it errored by a read that raised, or found no body there to dispose of - so that
    * branch cancels nothing and has nothing left to cancel. A fourth refusal added between the
    * fetch and the read would have neither behind it and would have to cancel for itself.
@@ -650,7 +679,7 @@ export default class MediaFetchClient {
    * could not be fetched, and only the three decided here leave a `3xx` to dispose of.
    *
    * **The `3xx` is disposed of on every one of those branches and on the one that recurses.** Its
-   * body was never read, and a body neither read nor cancelled holds the connection it arrived on
+   * body was never read, and a body neither read nor canceled holds the connection it arrived on
    * for good - see the class comment, which says why that is disposal rather than tidiness and why
    * asking for `redirect: 'manual'` is what made it this method's to do. The only branch that does
    * not cancel is the one answering the response itself, because that one hands the body on to a
@@ -1034,7 +1063,7 @@ export default class MediaFetchClient {
    * **The body is streamed rather than buffered whole, and that is the point of the method.**
    * `response.arrayBuffer()` reads whatever the host sends before anything can judge its size, so
    * a host that answers with far more than it declared was held in memory in full. Here the
-   * chunks are taken one at a time and the read is abandoned - the reader cancelled, so the
+   * chunks are taken one at a time and the read is abandoned - the reader canceled, so the
    * connection is not left draining - the moment what has been read goes past the bound.
    *
    * @param {{
@@ -1093,6 +1122,13 @@ export default class MediaFetchClient {
    * bytes is, and answers the same `MEDIA_UNREADABLE` - the class comment says what that costs an
    * operator reading the code back.
    *
+   * **This method is the seventh disposal site, and a branch added here carries the same duty the
+   * six in `#fetchMedium()` and `#sendFetchRequestHop()` do.** Both of its bounds hand the reader
+   * to `#cancelBoundedStreamRead()` rather than simply answering null, because answering away from
+   * a half-read body leaves the connection held exactly as answering away from an unread one does.
+   * Measured over a loopback socket with a chunked body and that one call removed: the outcome is
+   * still `MEDIA_UNREADABLE` and the server's socket is never released.
+   *
    * @param {{
    *   reader: ReadableStreamDefaultReader<Uint8Array>
    *   chunks: Array<Buffer>
@@ -1143,21 +1179,41 @@ export default class MediaFetchClient {
    * one, so its message about a condition is narrower than what it matches.
    *
    * Cancelling the reader is what releases the socket. Without it the rest of an over-long body
-   * keeps arriving into a stream nobody reads, which is the cost this bound exists to avoid.
+   * keeps arriving into a stream nobody reads, which is the cost this bound exists to avoid. That
+   * sentence is no longer only a claim: a describe drives this branch over a loopback socket with
+   * a chunked body and watches the server's connection close, and with this call removed the
+   * socket is never released while the whole suite stays green - which is what it was doing until
+   * that describe was written.
    *
    * **A cancel that raises is answered rather than raised, which the sibling
-   * `#cancelUnreadResponseBody()` already did and this did not.** Per the Streams specification,
-   * `cancel()` on a stream that is already errored rejects with the error the stream stored - so a
-   * host resetting the connection in the same tick the bound is hit raises here, and, left to
-   * propagate, that rejection was
+   * `#cancelUnreadResponseBody()` already did and this did not.** A host resetting the connection
+   * in the same tick the bound is hit raises here, and, left to propagate, that rejection was
    * caught by `#readResponseBytes()` and written as a log line, which is the one thing the class
    * comment says a refusal never does. The two disposal sites now agree, so the shape a later
    * branch copies is the same whichever of them it copies.
    *
-   * What swallowing gives up is one line naming the class of the error a rejecting cancel carried.
-   * It is worth little: a cancel rejects only on a body already read, already cancelled or already
-   * errored, each of which is a body holding nothing, so the failure says the work was done rather
-   * than that it failed. The outcome is `MEDIA_UNREADABLE` either way.
+   * **What a rejecting cancel actually means, measured rather than assumed.** An earlier round of
+   * this comment said a cancel rejects only on a body already read, already canceled or already
+   * errored - each a body holding nothing - and used that to call the swallow free. It is not the
+   * enumeration. Measured against Node's own `ReadableStream`: an already-canceled stream and one
+   * already read to its end both **resolve**; an already-errored one rejects with the error it
+   * stored; a stream **locked by a reader** rejects with `TypeError: Invalid state:
+   * ReadableStream is locked`, and its underlying source's cancel is not called at all; and a
+   * stream that is **readable and still holding bytes** rejects with whatever its underlying
+   * source's own cancel algorithm threw. The last two are not bodies holding nothing, and in
+   * neither is the work known to have been done.
+   *
+   * So what the swallow gives up is larger than one log line, and is stated plainly here rather
+   * than argued away: a cancel that failed to release the socket is now indistinguishable from one
+   * that succeeded. The outcome is `MEDIA_UNREADABLE` either way, no line is written, and an
+   * operator has no way to see that the connection was not returned - it waits for the request's
+   * abort signal instead, which the class comment bounds at `requestTimeoutMilliseconds`.
+   *
+   * The swallow stays all the same, because the alternative is worse in this exact place. Raising
+   * would put the rejection back into `#readResponseBytes()`'s catch, which writes a log line on a
+   * refusal - the one thing the class comment says a refusal never does, and the defect a previous
+   * round fixed by adding this guard. What would replace the swallow honestly is a disposal
+   * failure the caller could see, and that needs a reason code section 18 does not define.
    *
    * @param {{
    *   reader: ReadableStreamDefaultReader<Uint8Array>
@@ -1275,18 +1331,23 @@ export default class MediaFetchClient {
    * Release the connection a response arrived on, when its body was never read.
    *
    * **This is what returns the socket, and it is not housekeeping.** A body that was neither read
-   * to its end nor cancelled leaves the client unable to release the connection it came on, so a
-   * response answered away from is a file descriptor and a pool slot held for the life of the
-   * process. The class comment names the branches that leave one behind and says why the `3xx` of
-   * them is caller-controlled.
+   * to its end nor canceled leaves the client unable to release the connection it came on, so a
+   * response answered away from is a file descriptor and a pool slot held until the request's own
+   * abort signal destroys the connection - `requestTimeoutMilliseconds`, thirty seconds at the
+   * default, rather than the life of the process an earlier round of this comment claimed. The
+   * class comment carries the measurements behind that bound, names the branches that leave a
+   * response behind, and says why the `3xx` of them is caller-controlled.
    *
    * It answers nothing readable, so a branch with nothing to answer returns it directly - the same
    * shape `#cancelBoundedStreamRead()` has, and for the same reason: `no-restricted-syntax`
    * refuses an `await` anywhere inside an `if` statement.
    *
-   * A cancel that throws is answered rather than raised, and writes no line. There is one way it
-   * can: a body already read, already cancelled or already errored, and each of those is a body
-   * holding nothing - so the failure says the work was done, not that it failed.
+   * A cancel that throws is answered rather than raised, and writes no line. There is more than
+   * one way it can, and `#cancelBoundedStreamRead()` carries the measured enumeration and what the
+   * swallow gives up; the short of it is that a stream locked by a reader, and a readable one
+   * whose underlying source's cancel algorithm rejects, both reject without the socket having been
+   * released - so a failure here does **not** reliably mean the work was already done, and this
+   * method cannot tell the two apart.
    *
    * @param {{
    *   response: Response | null

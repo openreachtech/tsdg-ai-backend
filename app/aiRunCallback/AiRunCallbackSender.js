@@ -61,6 +61,17 @@ const LOG_FILE_PATH = rootPath.to('logs/ai-run-callback-')
  */
 const UNNAMED_ERROR_NAME = 'Error'
 
+/*
+ * What a caller handing over no inspector is refused with.
+ *
+ * Every hop after the first is put to the object the caller hands over, and a call carrying none
+ * has not asked the question this class exists to ask. There is no outcome it could be answered
+ * with: a refusal would write a `3xx` into the attempt's row, and an operator reading that row
+ * would see a client redirecting a callback it never redirected. So it is raised, and raised
+ * before anything is posted.
+ */
+const ABSENT_URL_INSPECTOR_MESSAGE = 'refused a callback handed no URL inspector'
+
 const FAILED_AI_RUN_CALLBACK_TAGS = [
   'AiRunCallback',
   'FailedSend',
@@ -158,9 +169,24 @@ const mentsuLogger = MentsuLogger.create({
  * the full attempt count and never told why, and nothing separates that row from one written for a
  * client that simply answered `307` and named nowhere to go.
  *
- * **A failure is answered, never thrown.** Every way the call can fail — a connection refused, a
+ * **A failed request is answered, never thrown — and a caller that handed over no inspector is
+ * refused before anything is posted.** Every way the *request* can fail — a connection refused, a
  * host that does not resolve, a timeout — is the null this returns, so the caller writes one
- * branch and meets no exception raised inside `fetch`.
+ * branch and meets no exception raised inside `fetch`. The one thing raised is the caller's own
+ * mistake: `#sendAiRunCallback()` refuses a call carrying nothing that can answer for a hop, and
+ * refuses it on its first line, before the options are built and before a socket is opened.
+ *
+ * **That order is the whole of why raising is allowed at all here.** Nothing has been posted, so
+ * there is no response being held and no attempt for `ai_run_callback_deliveries` to have lost a
+ * row for — the raise happens where there is nothing yet to record. Answering the case as a
+ * refusal instead would be quieter and worse: it would hand back a `3xx` no client sent, spend a
+ * retry, and leave a caller's missing argument looking exactly like a client's own redirect.
+ *
+ * **An exception leaves no response behind either.** Once a response is in hand, every way out of
+ * `#sendAiRunCallbackHop()` goes through `#cancelUnreadResponseBody()` — the two refusals, the
+ * response that is answered, the hop that recurses, and an exception raised by anything the hop
+ * calls, an inspector of the caller's own among them. The exception travels on unchanged; what
+ * does not travel with it is the socket.
  *
  * **What the line written on a failure carries, and what it does not.** The durable record of an
  * attempt is the row, not the line: the row says an attempt was made and that nothing answered.
@@ -174,17 +200,20 @@ const mentsuLogger = MentsuLogger.create({
  * delivery record says whether the callback arrived and not what came back, so nothing here reads
  * one: a body read would be a client's payload held in this process for no purpose the record has
  * a column for. Not reading a body and disposing of it are different things, though — a body
- * neither read nor cancelled is a connection undici cannot release, one per attempt and one per
+ * neither read nor canceled is a connection undici cannot release, one per attempt and one per
  * hop, held for as long as the worker daemon runs, and the size of it is the client's endpoint's
  * to choose. So every response this class answers away from goes through
- * `#abandonCallbackResponse()`, and the one hop that continues cancels before it recurses. That is
- * disposal and not tidiness: the file descriptor does not come back without it.
+ * `#abandonCallbackResponse()`, the one hop that continues cancels before it recurses, and
+ * `#sendAiRunCallbackHop()` cancels for an exception on its way out. That is disposal and not
+ * tidiness: the file descriptor does not come back without it.
  *
- * Two describes drive that over loopback sockets and watch the server's connection close — the
- * response a callback was answered with, and the `3xx` of a redirect that was refused — so taking
- * the cancel out of either is red rather than green. What has no guard is a branch added later that
- * answers away from a response without going through that method; nothing but this paragraph will
- * say so until somebody writes its describe.
+ * Three describes drive that over loopback sockets and watch the server's connection close — the
+ * response a callback was answered with, the `3xx` of a redirect that was refused, and the `3xx`
+ * held when deciding the hop raised — so taking the cancel out of any of the three is red rather
+ * than green. What still has no guard is a branch added later that *returns* away from a response
+ * without going through `#abandonCallbackResponse()`; an exception is covered wherever it is
+ * raised, a forgetful return is not, and nothing but this paragraph will say so until somebody
+ * writes its describe.
  *
  * **What stays open, stated rather than claimed closed.** The first URL is the caller's to have
  * asked about, not this class's: `AiRunTerminalCallbackDeliverer` asks the inspector before it
@@ -283,13 +312,22 @@ export default class AiRunCallbackSender {
    * Post one terminal callback, and answer what came of it.
    *
    * The inspector arrives on the call rather than on the instance, because it answers for one
-   * client's registered prefix and one sender serves every client. It is the caller's own — the
-   * same object that judged the first URL — so a hop is held to exactly the rule the first URL was
-   * held to, and this class never builds one of its own.
+   * client's registered prefix and one sender serves every client. This class never builds one of
+   * its own: what a hop is held to is whatever the caller handed over.
+   *
+   * **It is the caller's, and it is not necessarily the object that judged the first URL.** The
+   * one caller in this repository builds two of them — `AiRunTerminalCallbackDeliverer` asks one
+   * before it builds anything and lets it go, then builds a second for the request to carry — so
+   * what makes a hop's rule the first URL's rule is that both were built from the same
+   * `api_clients.callback_url_prefix`, and nothing here reads that column to check it. Hand over
+   * an inspector built for another client and every hop after the first is held to that other
+   * client's prefix: a refusal of a URL the client did register, or a follow of one it did not.
+   * The one thing checked here is that there is something to ask at all.
    *
    * @param {SendAiRunCallbackParams} params - Parameters.
    * @returns {Promise<AiRunCallbackSendOutcome>} The status the far side answered with, or null
    * when the request never completed.
+   * @throws {Error} When the call carries nothing that can be asked about a hop.
    * @public
    */
   async sendAiRunCallback ({
@@ -299,6 +337,14 @@ export default class AiRunCallbackSender {
     runKey,
     aiRunCallbackUrlInspector,
   }) {
+    if (
+      !this.isUsableCallbackUrlInspector({
+        aiRunCallbackUrlInspector,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#sendAiRunCallback() ${ABSENT_URL_INSPECTOR_MESSAGE}: runKey ${runKey}`)
+    }
+
     const requestOptions = this.buildRequestOptions({
       headerHash,
       rawBody,
@@ -311,6 +357,27 @@ export default class AiRunCallbackSender {
       aiRunCallbackUrlInspector,
       remainingRedirectCount: this.maximumRedirectCount,
     })
+  }
+
+  /**
+   * Check whether a call carries something that can be asked about a hop.
+   *
+   * What is asked is that the one method this class calls is there to call, and not that the
+   * object is of any particular class — a subclass answers, and so does a test's stand-in. What it
+   * catches is the call carrying nothing at all, which is the shape of a caller that never passed
+   * the argument: harmless while the client answers `200` on the first hop, and a raise in the
+   * middle of a chain on the day one answers `307`.
+   *
+   * @param {{
+   *   aiRunCallbackUrlInspector: *
+   * }} params - Parameters.
+   * @returns {boolean} Whether it can be asked about a hop.
+   * @public
+   */
+  isUsableCallbackUrlInspector ({
+    aiRunCallbackUrlInspector,
+  }) {
+    return typeof aiRunCallbackUrlInspector?.isDeliverableCallbackUrl === 'function'
   }
 
   /**
@@ -358,24 +425,32 @@ export default class AiRunCallbackSender {
   /**
    * Post one hop of a callback, and answer either what it came back with or what the next hop did.
    *
-   * **This is where the client's prefix is asked of a hop that is not the first.** The check runs
-   * before the hop is posted, so a URL outside the prefix is never sent the body: no connection,
-   * no signature, nothing in anybody's access log. Two things decided here end the chain with the
-   * `3xx` they were decided on: a hop the inspector refuses, and a chain that has used up its
-   * hops. A third ends it without this method deciding anything — a request that failed, which
-   * `#sendSingleAiRunCallbackRequest()` has already answered null for.
+   * **This method owns the response, and nothing leaves it holding one.** What it does itself is
+   * post the hop and dispose of what came back; what the hop *comes to* is
+   * `#answerAiRunCallbackHop()`'s, called inside a `try` so that the disposal is reached by an
+   * exception as well as by a return. That is the fourth way out, and it was found missing: an
+   * inspector the caller never passed raised a `TypeError` from inside the walk, past the
+   * disposal, leaving a `3xx` whose body was never canceled and whose socket was still open
+   * 1.5 seconds later. `#sendAiRunCallback()` now refuses that call before anything is posted, so
+   * this `try` is what covers whatever raises next — an inspector of the caller's own that throws,
+   * or a branch added here later.
    *
-   * **Every branch leaving a response behind disposes of its body.** The two refusals and the
-   * response that is answered all go through `#abandonCallbackResponse()`, and the one branch that
-   * recurses cancels before it does. A body neither read nor cancelled is a connection undici
-   * cannot release — see the class comment, which says why that is disposal rather than tidiness.
+   * **The exception is disposed of and re-raised, never swallowed.** Turning it into an outcome
+   * would file a caller's or a client's fault as an ordinary `3xx` attempt, which is the one thing
+   * a refusal must not be mistaken for.
    *
    * It recurses rather than loops because there is no loop form this repository permits, and
    * because the hop count is what the recursion carries — three frames at most.
    *
+   * `return await` inside the `try` is load-bearing rather than noise, the same way it is in
+   * `BaseAiRunJobWorker#executeJob()`: a bare `return` hands the promise back before it settles,
+   * so the `catch` would never see the rejection and the response would be left holding its
+   * socket — which is the whole of what this `try` is here for.
+   *
    * @param {SendAiRunCallbackHopParams} params - Parameters.
    * @returns {Promise<AiRunCallbackSendOutcome>} The status the chain ended on, or null when the
    * request never completed.
+   * @throws {*} Whatever deciding the hop raised, with the response disposed of on the way out.
    * @public
    */
   async sendAiRunCallbackHop ({
@@ -395,6 +470,55 @@ export default class AiRunCallbackSender {
       return this.buildIncompleteOutcome()
     }
 
+    try {
+      return await this.answerAiRunCallbackHop({
+        response,
+        callbackUrl,
+        requestOptions,
+        runKey,
+        aiRunCallbackUrlInspector,
+        remainingRedirectCount,
+      })
+    } catch (hopDecisionFailure) {
+      await this.cancelUnreadResponseBody({
+        response,
+      })
+
+      throw hopDecisionFailure
+    }
+  }
+
+  /**
+   * Answer what one hop's response comes to, following it where it names a URL that may be posted
+   * to.
+   *
+   * **This is where the client's prefix is asked of a hop that is not the first.** The check runs
+   * before the hop is posted, so a URL outside the prefix is never sent the body: no connection,
+   * no signature, nothing in anybody's access log. Two things decided here end the chain with the
+   * `3xx` they were decided on: a hop the inspector refuses, and a chain that has used up its
+   * hops. A third ends it without this method deciding anything — a request that failed, which
+   * `#sendSingleAiRunCallbackRequest()` has already answered null for, one frame above.
+   *
+   * **Every branch leaving a response behind disposes of its body.** The two refusals and the
+   * response that is answered all go through `#abandonCallbackResponse()`, and the one branch that
+   * recurses cancels before it does. A body neither read nor canceled is a connection undici
+   * cannot release — see the class comment, which says why that is disposal rather than tidiness.
+   * A branch added here that raises instead of returning is covered too, by the caller's `try`,
+   * which is the one thing this method does not have to remember.
+   *
+   * @param {AnswerAiRunCallbackHopParams} params - Parameters.
+   * @returns {Promise<AiRunCallbackSendOutcome>} The status the chain ended on, or null when a
+   * later request never completed.
+   * @public
+   */
+  async answerAiRunCallbackHop ({
+    response,
+    callbackUrl,
+    requestOptions,
+    runKey,
+    aiRunCallbackUrlInspector,
+    remainingRedirectCount,
+  }) {
     const redirectedUrl = this.extractRedirectedUrl({
       response,
       callbackUrl,
@@ -531,6 +655,23 @@ export default class AiRunCallbackSender {
    * resolved against the URL of the hop it arrived on, which is also what makes the URL the
    * inspector is then asked about the URL the body would really be posted to.
    *
+   * **A `location` carrying no text names nowhere, and nowhere is what it is answered as.** A
+   * header that is absent and a header that is empty say the same thing about where the client
+   * moved the callback to, and the resolution step does not agree: `new URL('', hopUrl)` answers
+   * the hop itself, which is inside the client's own prefix, so it passes the inspector and is
+   * posted to again. Measured before this guard, over loopback: a `307` carrying `location: ''`
+   * or `location: '   '` spent the whole hop count, four POSTs of one signed body to one path,
+   * where the client had named no destination at all. Whitespace is trimmed before the comparison
+   * because `new URL` strips it too — what is refused here is every text the resolution would
+   * have read as empty.
+   *
+   * **What is *not* refused here is a location naming the same resource again.** A `307` to the
+   * path it arrived on, or to a fragment of that path, does name somewhere — the same somewhere —
+   * and is followed until the hop count stops it, measured at four requests under the default of
+   * three. The count is the answer to every cycle, a two-URL one included, and adding a
+   * same-URL rule here would take the only thing the count is tested against and leave the
+   * two-URL cycle to it anyway.
+   *
    * @param {{
    *   response: Response
    *   callbackUrl: string
@@ -552,10 +693,33 @@ export default class AiRunCallbackSender {
       return null
     }
 
+    if (
+      this.isBlankRedirectLocation({
+        location,
+      })
+    ) {
+      return null
+    }
+
     return this.buildResolvedUrlText({
       location,
       callbackUrl,
     })
+  }
+
+  /**
+   * Check whether a location names nowhere at all.
+   *
+   * @param {{
+   *   location: string
+   * }} params - Parameters.
+   * @returns {boolean} Whether it names nowhere.
+   * @public
+   */
+  isBlankRedirectLocation ({
+    location,
+  }) {
+    return location.trim() === ''
   }
 
   /**
@@ -614,14 +778,24 @@ export default class AiRunCallbackSender {
    * Release the connection a response arrived on, when its body was never read.
    *
    * **This is what returns the socket, and it is not housekeeping.** A body that was neither read
-   * to its end nor cancelled leaves undici unable to release the connection it came on, so a
+   * to its end nor canceled leaves undici unable to release the connection it came on, so a
    * response answered away from is a file descriptor and a pool slot held for the life of the
    * process — one per attempt, and the size of what is left unread is the client's endpoint's own
    * choice.
    *
-   * A cancel that throws is answered rather than raised, and writes no line. There is one way it
-   * can: a body already read, already cancelled or already errored, and each of those is a body
-   * holding nothing — so the failure says the work was done, not that it failed.
+   * A cancel that throws is answered rather than raised, and writes no line. The ways it can are
+   * more than one, and they do not all mean the same thing. A body already read, already canceled
+   * or already errored rejects holding nothing — there the failure says the work was done, not
+   * that it failed. A body whose stream is **locked to a reader** rejects as well, and that one is
+   * the opposite: measured, `bodyUsed` is still false afterwards, so the data is still there and
+   * the connection is still held, and nothing here can release it because the lock belongs to
+   * whoever took the reader.
+   *
+   * That second case is not reachable from this class as it stands — no body is ever read, so no
+   * reader is ever acquired, and the only cancel is this one. It is written down because the
+   * sentence it replaces said there was one way and named three states that all hold nothing,
+   * which reads as a guarantee that a rejecting cancel has cost nothing. A branch that read a body
+   * would make the locked case reachable and that guarantee silently false.
    *
    * @param {{
    *   response: Response
@@ -677,6 +851,12 @@ export default class AiRunCallbackSender {
  *   aiRunCallbackUrlInspector: import('./AiRunCallbackUrlInspector.js').default
  *   remainingRedirectCount: number
  * }} SendAiRunCallbackHopParams
+ */
+
+/**
+ * @typedef {SendAiRunCallbackHopParams & {
+ *   response: Response
+ * }} AnswerAiRunCallbackHopParams
  */
 
 /**

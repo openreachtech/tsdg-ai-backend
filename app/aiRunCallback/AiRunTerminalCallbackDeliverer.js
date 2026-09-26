@@ -565,6 +565,22 @@ export default class AiRunTerminalCallbackDeliverer {
    * two parses of one prefix, and it is what keeps each method's step to itself — the alternative
    * was threading an object through a method that has no use for it.
    *
+   * **Both are built from the same `api_clients.callback_url_prefix`, and that is the whole of
+   * why a hop is held to the first URL's rule.** It is a fact about these three lines and not
+   * about either class: the sender checks that it was handed an inspector, never which client's
+   * prefix that inspector answers for. Build the second one from another client's column and the
+   * hops of this callback would be judged against that client's prefix, with nothing anywhere to
+   * notice.
+   *
+   * **Leaving the inspector off the call raises, and raises before anything is posted.** That was
+   * a real hole rather than a hypothetical one: the sender used to ask the inspector without
+   * checking there was one, so a client answering `200` cost nothing and a client answering `307`
+   * raised a `TypeError` from inside the redirect walk — past this method's
+   * `#saveTerminalCallbackDelivery()`, so an attempt that really went out left no row behind. The
+   * sender now refuses the call on its first line, where nothing has been sent and there is no
+   * attempt to record. The line below is held by a test that drives a redirect through this
+   * method rather than by one that supplies the inspector itself, so deleting it is red.
+   *
    * @param {{
    *   aiRun: *
    *   apiClient: *
@@ -755,6 +771,12 @@ export default class AiRunTerminalCallbackDeliverer {
    *
    * The row is written whatever came back, including nothing: a request that never completed is an
    * attempt that was made, and the null status is the column's own case.
+   *
+   * **What "whatever came back" cannot cover is something raised instead of answered**, which
+   * would leave this method unreached and an attempt unrecorded. The send has one raise and it is
+   * `AiRunCallbackSender`'s refusal of a call carrying no URL inspector — raised before its first
+   * request, so there is no attempt behind it to have lost. Every way a request itself can fail is
+   * answered as a null status and arrives here.
    *
    * @param {SaveAiRunTerminalCallbackDeliveryParams} params - Parameters.
    * @returns {Promise<*>} The saved delivery record.
