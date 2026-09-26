@@ -18,9 +18,10 @@
  * outbound one, and two literals free to drift apart would let a client be verified under one
  * spelling and called back under another, with nothing anywhere saying so.
  *
- * `server/restfulapi/contexts/AppRestfulApiContext.js` still declares its own three literals, and
- * should be changed to read them from here. That file belongs to `#run-contract` and is not this
- * feature's to edit, so the change is reported rather than made.
+ * `server/restfulapi/contexts/AppRestfulApiContext.js` reads the inbound three from here, through
+ * the ESM wrapper at `app/constants/signedRequestHeaderConstants.js`, and declares no literal of
+ * its own. So each name is spelled once in this repository, and a reader comparing the inbound
+ * side with the outbound one is comparing a constant with itself.
  *
  * Every name is lower case because a header name is case-insensitive on the wire and Node's own
  * `Headers` lower-cases what it is given — so the lower-case spelling is the one a reader will

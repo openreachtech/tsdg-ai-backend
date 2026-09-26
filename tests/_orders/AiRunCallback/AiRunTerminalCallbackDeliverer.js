@@ -2,6 +2,8 @@ import AiRunCallbackDeliveryRecorder from '../../../app/aiRunCallback/AiRunCallb
 import AiRunCallbackSender from '../../../app/aiRunCallback/AiRunCallbackSender.js'
 import AiRunTerminalCallbackDeliverer from '../../../app/aiRunCallback/AiRunTerminalCallbackDeliverer.js'
 
+import ApiClientSecretCipher from '../../../app/apiClient/ApiClientSecretCipher.js'
+
 import AiRun from '../../../sequelize/models/AiRun.js'
 
 /*
@@ -10,7 +12,8 @@ import AiRun from '../../../sequelize/models/AiRun.js'
  * `tests/__tests__/app/aiRunCallback/AiRunTerminalCallbackDeliverer.js`.
  *
  * Every run these attempts hang off is created here, in `#run-delivery`'s own id block — 10530021
- * upward — and none is borrowed. `ai_run_callback_deliveries` is UNIQUE on
+ * upward, and 10530041 upward for what this file has added since the worker's block began at
+ * 10530031 — and none is borrowed. `ai_run_callback_deliveries` is UNIQUE on
  * `(AiRunId, AiRunCallbackDeliveryCategoryId, attempt_index)`, and the development seeder already
  * hangs attempts off six of the seeded runs, so writing onto one of those would be this file and
  * that fixture competing for the same triple. The runs belong to the seeded signing client
@@ -75,6 +78,7 @@ describe('AiRunTerminalCallbackDeliverer', () => {
               },
               body: '{"runKey":"run-key-10530021","runCategoryName":"asset-media-extraction","externalRef":"external-ref-10530021","subjectLabel":"Subject label of run 10530021","correlationId":"correlation-id-10530021","statusName":"succeeded","engine":{"label":null,"confidenceMethodVersion":null},"usage":{"modelCallCount":0,"inputTokenCount":0,"outputTokenCount":0},"result":null,"failure":null}',
               signal: expect.any(AbortSignal),
+              redirect: 'manual',
             },
           ],
         },
@@ -121,6 +125,7 @@ describe('AiRunTerminalCallbackDeliverer', () => {
               },
               body: '{"runKey":"run-key-10530022","runCategoryName":"asset-media-extraction","externalRef":"external-ref-10530022","subjectLabel":"Subject label of run 10530022","correlationId":"correlation-id-10530022","statusName":"failed","engine":{"label":null,"confidenceMethodVersion":null},"usage":{"modelCallCount":0,"inputTokenCount":0,"outputTokenCount":0},"result":null,"failure":{"reasonCode":"MEDIA_LIMIT_EXCEEDED","parameters":{"limitName":"mediaCount","limitValue":12,"declaredValue":13}}}',
               signal: expect.any(AbortSignal),
+              redirect: 'manual',
             },
           ],
         },
@@ -363,6 +368,115 @@ describe('AiRunTerminalCallbackDeliverer', () => {
         expect(actual)
           .toEqual(expected)
         expect(fetchFunction)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('AiRunTerminalCallbackDeliverer', () => {
+  describe('#deliverTerminalCallback()', () => {
+    /*
+     * What "not called at all" means inside the process, and the sentence the class comment makes
+     * about it.
+     *
+     * One read answers for the client, and it asks for the prefix and the secret envelope
+     * together, because the prefix is what the judgement needs and the same row carries both — so
+     * a run whose URL is refused did have its client's envelope in this process for the length of
+     * a comparison. What it never had is the secret: the envelope is ciphertext, the key that
+     * opens it lives in the environment, and the one place that applies it is reached only after
+     * the URL has passed. The cipher is injected here and watched rather than stubbed, so what is
+     * asserted is that it was never asked.
+     */
+    describe('should not open the secret envelope when the URL is not the registered one', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10530041,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10530041',
+              requestKey: 'request-key-10530041',
+              requestBodyHash: 'request-body-hash-10530041',
+              externalRef: 'external-ref-10530041',
+              subjectLabel: 'Subject label of run 10530041',
+              correlationId: 'correlation-id-10530041',
+              callbackUrl: 'https://elsewhere.client.development.invalid/callbacks/10530041',
+              acceptedAt: new Date('2026-09-25T14:00:01.001Z'),
+              startedAt: new Date('2026-09-25T14:00:02.002Z'),
+              finishedAt: new Date('2026-09-25T14:00:03.003Z'),
+            },
+            deliverParams: {
+              aiRunId: 10530041,
+              attemptIndex: 1,
+            },
+          },
+          expected: {
+            hasAttempted: false,
+            hasDelivered: false,
+            httpStatusCode: null,
+            refusalReasonCode: 'unregistered-callback-url',
+          },
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10530042,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+              runKey: 'run-key-10530042',
+              requestKey: 'request-key-10530042',
+              requestBodyHash: 'request-body-hash-10530042',
+              externalRef: 'external-ref-10530042',
+              subjectLabel: 'Subject label of run 10530042',
+              correlationId: 'correlation-id-10530042',
+              // normalizes to https://signing.client.development.invalid/elsewhere
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/../../elsewhere',
+              failureReasonCode: 'MEDIA_FETCH_FAILED',
+              acceptedAt: new Date('2026-09-25T15:00:01.001Z'),
+              startedAt: new Date('2026-09-25T15:00:02.002Z'),
+              finishedAt: new Date('2026-09-25T15:00:03.003Z'),
+            },
+            deliverParams: {
+              aiRunId: 10530042,
+              attemptIndex: 1,
+            },
+          },
+          expected: {
+            hasAttempted: false,
+            hasDelivered: false,
+            httpStatusCode: null,
+            refusalReasonCode: 'unregistered-callback-url',
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.deliverParams.aiRunId', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const apiClientSecretCipher = ApiClientSecretCipher.create()
+
+        const decryptSecretSpy = jest.spyOn(apiClientSecretCipher, 'decryptSecret')
+
+        jest.spyOn(AiRunTerminalCallbackDeliverer.mentsuLogger, 'error')
+          .mockReturnValue(null)
+
+        const deliverer = AiRunTerminalCallbackDeliverer.create({
+          apiClientSecretCipher,
+        })
+
+        const actual = await deliverer.deliverTerminalCallback(input.deliverParams)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(decryptSecretSpy)
           .not
           .toHaveBeenCalled()
       })

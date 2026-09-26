@@ -9,6 +9,7 @@ import AiRunCallbackUrlInspector from './AiRunCallbackUrlInspector.js'
 
 import AiRunResponseBuilder from '../aiRun/AiRunResponseBuilder.js'
 
+import ApiClientAuthenticationLogger from '../apiClient/ApiClientAuthenticationLogger.js'
 import ApiClientSecretCipher from '../apiClient/ApiClientSecretCipher.js'
 
 import AI_RUN_CALLBACK_DELIVERY_CATEGORY_CONSTANT_HASH from '../constants/aiRunCallbackDeliveryCategoryConstants.js'
@@ -64,8 +65,15 @@ const AI_RUN_CALLBACK_REFUSAL_REASON = {
 /*
  * The status codes that count as delivered.
  *
- * Any `2xx`. A redirect is not a delivery — nothing followed it, and a client answering a callback
- * with a `301` has not accepted the body — so the range stops where redirects begin.
+ * Any `2xx`. A redirect is not a delivery: a client answering a callback with a `301` has not
+ * accepted the body, so the range stops where redirects begin.
+ *
+ * A `3xx` does reach here, and it did not before. `AiRunCallbackSender` sends
+ * `redirect: 'manual'` and follows a hop by hand only while this client's own inspector answers
+ * for it, and what it answers for a chain it refused or ran out of is the `3xx` of the hop it
+ * would not follow. So a `3xx` on a row means a redirect that went unfollowed — either because
+ * the client named somewhere it never registered, or because the chain was longer than three hops
+ * — and the retry that follows is the same retry any other undelivered status gets.
  */
 const DELIVERED_STATUS_CODE_MINIMUM = 200
 const DELIVERED_STATUS_CODE_LIMIT = 300
@@ -100,8 +108,24 @@ const mentsuLogger = MentsuLogger.create({
  * **The URL is judged before anything is built.** Section 12's second acceptance criterion is that
  * a callback URL not matching the client's registered prefix is not called at all, and "at all" is
  * read strictly here: the run's body is not assembled, nothing is signed, and the client's secret
- * is never reached for. Refusing after building would be the same behavior on the wire and a
+ * envelope is never opened. Refusing after building would be the same behavior on the wire and a
  * different behavior inside the process.
+ *
+ * **The envelope itself is read before the URL is judged, and that is said rather than glossed.**
+ * One read answers for the client, and it asks for `callbackUrlPrefix` and `secretCiphertext`
+ * together, because the prefix is what the judgement needs and the same row carries both. So a run
+ * whose URL is refused had its client's envelope in this process for the length of a comparison,
+ * and dropped it. What it never had is the secret: an envelope is ciphertext, the key that opens
+ * it lives in the environment, and `#extractClientSecret()` — the one place that applies it — is
+ * reached from `#buildCallbackHeaderHash()` alone, which `#attemptTerminalCallback()` calls once
+ * the URL has passed. A describe asserts that the cipher is not asked on a refusal, so the
+ * sentence above is checked rather than claimed.
+ *
+ * Splitting the read in two — the prefix first, the envelope only after the URL passes — was the
+ * other way to make that sentence true, and it was not taken: it would buy one fewer ciphertext in
+ * memory at the cost of a second query, a second not-found branch, and a refusal reason
+ * indistinguishable from the first one's, which is a worse trade for an operator reading the log
+ * than for an attacker reading the process.
  *
  * **A refused URL records no attempt.** `ai_run_callback_deliveries` holds one row per attempt at
  * posting, carrying the instant it was attempted at and the status the far side gave; a row for
@@ -202,12 +226,62 @@ export default class AiRunTerminalCallbackDeliverer {
   }
 
   /**
+   * get: the logger an unusable secret encryption key is named through.
+   *
+   * @returns {typeof ApiClientAuthenticationLogger} The class.
+   */
+  static get ApiClientAuthenticationLoggerCtor () {
+    return ApiClientAuthenticationLogger
+  }
+
+  /**
    * Create the cipher a stored client secret is read back through.
    *
+   * **Why the failure is logged here rather than inside the cipher.** The cipher refuses an
+   * encryption key that is not an AES-256 key, and refusing is all it should do. This is the third
+   * place that constructs it, and the second whose caller never sees the reason:
+   * `AppRestfulApiContext` states the principle — logging at the construction site is what gives
+   * the operator the sentence the caller never gets — and here the caller is a worker daemon,
+   * where the exception becomes a failed job and a retry rather than anything naming the
+   * environment variable.
+   *
+   * **Log, then rethrow.** Nothing is swallowed: a deployment with an unusable key goes on
+   * refusing every callback exactly as it did, and the line is what says why.
+   *
    * @returns {ApiClientSecretCipher} Cipher.
+   * @throws {Error} When the environment declares no usable encryption key.
    */
   static createApiClientSecretCipher () {
-    return ApiClientSecretCipher.create()
+    try {
+      return ApiClientSecretCipher.create()
+    } catch (unusableEncryptionKeyFailure) {
+      this.logUnusableEncryptionKey()
+
+      throw unusableEncryptionKeyFailure
+    }
+  }
+
+  /**
+   * Write the line an unusable secret encryption key leaves behind.
+   *
+   * The line names the environment variable and carries nothing of what it holds — the logger's
+   * method takes no argument, so there is nothing here that could pass one.
+   *
+   * @returns {void}
+   */
+  static logUnusableEncryptionKey () {
+    const apiClientAuthenticationLogger = this.createApiClientAuthenticationLogger()
+
+    apiClientAuthenticationLogger.logUnusableEncryptionKey()
+  }
+
+  /**
+   * Create the logger an unusable secret encryption key is written through.
+   *
+   * @returns {ApiClientAuthenticationLogger} Logger.
+   */
+  static createApiClientAuthenticationLogger () {
+    return this.ApiClientAuthenticationLoggerCtor.create()
   }
 
   /**
@@ -485,6 +559,12 @@ export default class AiRunTerminalCallbackDeliverer {
   /**
    * Post one attempt to a callback URL already judged deliverable, and record it.
    *
+   * **The inspector is built a second time here, and that is deliberate.** The one built before
+   * answered a question and was let go; this one travels with the request, because the sender
+   * asks it of every URL a redirect names. Building it twice is
+   * two parses of one prefix, and it is what keeps each method's step to itself — the alternative
+   * was threading an object through a method that has no use for it.
+   *
    * @param {{
    *   aiRun: *
    *   apiClient: *
@@ -525,10 +605,15 @@ export default class AiRunTerminalCallbackDeliverer {
       })
     }
 
+    const aiRunCallbackUrlInspector = this.createAiRunCallbackUrlInspector({
+      callbackUrlPrefix: apiClient.callbackUrlPrefix,
+    })
+
     const httpStatusCode = await this.sendTerminalCallback({
       aiRun,
       headerHash,
       rawBody,
+      aiRunCallbackUrlInspector,
     })
 
     await this.saveTerminalCallbackDelivery({
@@ -637,24 +722,29 @@ export default class AiRunTerminalCallbackDeliverer {
   /**
    * Post this attempt, and answer what the far side said.
    *
-   * @param {{
-   *   aiRun: *
-   *   headerHash: Record<string, string>
-   *   rawBody: string
-   * }} params - Parameters.
-   * @returns {Promise<number | null>} The status, or null when the request never completed.
+   * **The inspector travels with the request, and that is the point of it being here.** The URL
+   * the sender is handed has been judged; a URL a redirect names has not, and `fetch` left to
+   * itself would have posted this body and its signature to twenty of them. So the same inspector
+   * this client's prefix built goes down with the call, and the sender asks it of every hop —
+   * which is why the question stays `AiRunCallbackUrlInspector`'s and the sender decides nothing.
+   *
+   * @param {SendAiRunTerminalCallbackParams} params - Parameters.
+   * @returns {Promise<number | null>} The status the chain ended on, or null when the request
+   * never completed.
    * @public
    */
   async sendTerminalCallback ({
     aiRun,
     headerHash,
     rawBody,
+    aiRunCallbackUrlInspector,
   }) {
     const sendOutcome = await this.aiRunCallbackSender.sendAiRunCallback({
       callbackUrl: aiRun.callbackUrl,
       headerHash,
       rawBody,
       runKey: aiRun.runKey,
+      aiRunCallbackUrlInspector,
     })
 
     return sendOutcome.httpStatusCode
@@ -756,6 +846,15 @@ export default class AiRunTerminalCallbackDeliverer {
  *   rawBody: string
  *   attemptedAt: Date
  * }} BuildAiRunTerminalCallbackHeaderHashParams
+ */
+
+/**
+ * @typedef {{
+ *   aiRun: *
+ *   headerHash: Record<string, string>
+ *   rawBody: string
+ *   aiRunCallbackUrlInspector: AiRunCallbackUrlInspector
+ * }} SendAiRunTerminalCallbackParams
  */
 
 /**

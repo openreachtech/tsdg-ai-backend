@@ -39,13 +39,27 @@ const DELIVERABLE_URL_PROTOCOLS = [
  * the same host either way, and a prefix that is not a URL at all refuses everything rather than
  * being compared as text.
  *
+ * **A URL a redirect names is put through this class too, and it is asked the same question.**
+ * This class is handed one URL at a time and knows nothing of chains; `AiRunCallbackSender` is
+ * what asks it of the URL a `3xx` named, before anything is posted there, so a hop is held to
+ * exactly the rule the first URL was held to and to no stricter one. Two things that caller leans
+ * on follow from the comparison being made over the whole normalized `href`, and neither is a
+ * rule written here: the scheme is part of what is compared, so no hop can move a callback from
+ * `https:` to `http:` or back, and the host is part of it, so no hop can leave the origin the
+ * client registered. They are what comparing the normalized text happens to mean — which is why
+ * loosening this comparison to anything less than the whole `href` would reopen both at once,
+ * with nothing in the sender left to refuse them.
+ *
  * **What stays open, stated rather than claimed closed.** A prefix is a URL prefix and not a path
  * boundary, so a registered `https://client.example/cb` matches `https://client.example/cb-other`
  * as well as `https://client.example/cb/7`. That is what "starts with this" means in the contract,
  * and narrowing it here would refuse callbacks a client registered in good faith; what closes it
- * is a client registering a prefix that ends at a separator. Nor is the host resolved: a prefix
- * naming a host that later resolves somewhere else is posted to, because the prefix is the
- * client's own registration and this service does not own their DNS.
+ * is a client registering a prefix that ends at a separator. The same latitude is a hop's: a
+ * client redirecting from one path under its own prefix to another is followed, exactly as a first
+ * URL under it is posted to. Nor is the host resolved: a prefix naming a host that later resolves
+ * somewhere else is posted to, because the prefix is the client's own registration and this
+ * service does not own their DNS — so what a hop is bounded to is whose URL it is, and never where
+ * that URL points.
  */
 export default class AiRunCallbackUrlInspector {
   /**

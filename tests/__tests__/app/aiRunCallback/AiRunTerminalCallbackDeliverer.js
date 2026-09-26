@@ -10,6 +10,7 @@ import AiRunTerminalCallbackDeliverer from '../../../../app/aiRunCallback/AiRunT
 
 import AiRunResponseBuilder from '../../../../app/aiRun/AiRunResponseBuilder.js'
 
+import ApiClientAuthenticationLogger from '../../../../app/apiClient/ApiClientAuthenticationLogger.js'
 import ApiClientSecretCipher from '../../../../app/apiClient/ApiClientSecretCipher.js'
 
 import AiRun from '../../../../sequelize/models/AiRun.js'
@@ -633,6 +634,107 @@ describe('AiRunTerminalCallbackDeliverer', () => {
 
         expect(actual)
           .toBeInstanceOf(ApiClientSecretCipher)
+      })
+    })
+  })
+})
+
+describe('AiRunTerminalCallbackDeliverer', () => {
+  describe('.createApiClientSecretCipher()', () => {
+    /*
+     * The third construction site of the cipher in this application, and the second whose caller
+     * never sees the reason it failed: an encryption key that is not an AES-256 key stops the
+     * cipher at construction, and here the caller is a worker daemon, where that becomes a failed
+     * job and a retry rather than anything naming the environment variable. The line is what says
+     * why — and the throw still reaches the caller, so a deployment with an unusable key goes on
+     * refusing every callback exactly as it did.
+     */
+    describe('should write the line naming the key, and raise anyway', () => {
+      const cases = [
+        {
+          mockCreateFailure: new Error('API client secret encryption key is not 64 hex characters'),
+          expected: 'API client secret encryption key is not 64 hex characters',
+        },
+        {
+          mockCreateFailure: new TypeError('API client secret encryption key is absent'),
+          expected: 'API client secret encryption key is absent',
+        },
+      ]
+
+      test.each(cases)('mockCreateFailure: $mockCreateFailure.message', ({
+        mockCreateFailure,
+        expected,
+      }) => {
+        const apiClientAuthenticationLogger = ApiClientAuthenticationLogger.create()
+
+        const unusableEncryptionKeyLogSpy = jest.spyOn(apiClientAuthenticationLogger, 'logUnusableEncryptionKey')
+          .mockReturnValue(null)
+
+        jest.spyOn(AiRunTerminalCallbackDeliverer, 'createApiClientAuthenticationLogger')
+          .mockReturnValue(apiClientAuthenticationLogger)
+        jest.spyOn(ApiClientSecretCipher, 'create')
+          .mockImplementation(() => {
+            throw mockCreateFailure
+          })
+
+        const actual = () => AiRunTerminalCallbackDeliverer.createApiClientSecretCipher()
+
+        expect(actual)
+          .toThrow(expected)
+        expect(unusableEncryptionKeyLogSpy)
+          .toHaveBeenCalledWith()
+      })
+    })
+  })
+})
+
+describe('AiRunTerminalCallbackDeliverer', () => {
+  describe('.get:ApiClientAuthenticationLoggerCtor', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const actual = AiRunTerminalCallbackDeliverer.ApiClientAuthenticationLoggerCtor
+
+        expect(actual)
+          .toBe(ApiClientAuthenticationLogger) // same reference
+      })
+    })
+  })
+})
+
+describe('AiRunTerminalCallbackDeliverer', () => {
+  describe('.createApiClientAuthenticationLogger()', () => {
+    describe('when called as is', () => {
+      test('should be an ApiClientAuthenticationLogger', () => {
+        const actual = AiRunTerminalCallbackDeliverer.createApiClientAuthenticationLogger()
+
+        expect(actual)
+          .toBeInstanceOf(ApiClientAuthenticationLogger)
+      })
+    })
+  })
+})
+
+describe('AiRunTerminalCallbackDeliverer', () => {
+  describe('.logUnusableEncryptionKey()', () => {
+    /*
+     * The line names the environment variable and carries nothing of what it holds — the logger's
+     * method takes no argument, so there is nothing here that could pass one, and the assertion
+     * says exactly that.
+     */
+    describe('when called as is', () => {
+      test('should write through the logger that holds the line', () => {
+        const apiClientAuthenticationLogger = ApiClientAuthenticationLogger.create()
+
+        const unusableEncryptionKeyLogSpy = jest.spyOn(apiClientAuthenticationLogger, 'logUnusableEncryptionKey')
+          .mockReturnValue(null)
+
+        jest.spyOn(AiRunTerminalCallbackDeliverer, 'createApiClientAuthenticationLogger')
+          .mockReturnValue(apiClientAuthenticationLogger)
+
+        AiRunTerminalCallbackDeliverer.logUnusableEncryptionKey()
+
+        expect(unusableEncryptionKeyLogSpy)
+          .toHaveBeenCalledWith()
       })
     })
   })
@@ -1518,6 +1620,9 @@ describe('AiRunTerminalCallbackDeliverer', () => {
               'x-ort-run-key': 'run-key-10010004',
             },
             rawBody: '{"runKey":"run-key-10010004"}',
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://signing.client.development.invalid/callbacks/',
+            }),
           },
           mockResponseStatus: 200,
           expected: 200,
@@ -1532,6 +1637,9 @@ describe('AiRunTerminalCallbackDeliverer', () => {
               'x-ort-run-key': 'run-key-10010003',
             },
             rawBody: '{"runKey":"run-key-10010003"}',
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://rotating.client.development.invalid/callbacks/',
+            }),
           },
           mockResponseStatus: 503,
           expected: 503,
@@ -1572,6 +1680,9 @@ describe('AiRunTerminalCallbackDeliverer', () => {
               'x-ort-run-key': 'run-key-10010005',
             },
             rawBody: '{"runKey":"run-key-10010005"}',
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://signing.client.development.invalid/callbacks/',
+            }),
           },
           mockSendFailure: new TypeError('fetch failed'),
         },
@@ -1585,6 +1696,9 @@ describe('AiRunTerminalCallbackDeliverer', () => {
               'x-ort-run-key': 'run-key-10010006',
             },
             rawBody: '{"runKey":"run-key-10010006"}',
+            aiRunCallbackUrlInspector: AiRunCallbackUrlInspector.create({
+              callbackUrlPrefix: 'https://signing.client.development.invalid/callbacks/',
+            }),
           },
           mockSendFailure: new DOMException('The operation was aborted', 'TimeoutError'),
         },
@@ -1715,6 +1829,12 @@ describe('AiRunTerminalCallbackDeliverer', () => {
         {
           input: {
             httpStatusCode: 300,
+          },
+        },
+        {
+          // what a redirect this service would not follow is recorded as
+          input: {
+            httpStatusCode: 307,
           },
         },
         {
