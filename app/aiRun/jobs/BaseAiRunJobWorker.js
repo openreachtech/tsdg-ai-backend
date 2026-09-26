@@ -841,6 +841,10 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
         error,
       })
 
+      const failureParameters = this.extractAiRunFailureParameters({
+        error,
+      })
+
       const aiRunId = this.extractAiRunId({
         body,
       })
@@ -854,7 +858,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
       return {
         resultBody: null,
         failureReasonCode,
-        failureParameters: null,
+        failureParameters,
       }
     }
   }
@@ -937,6 +941,35 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     error,
   }) {
     return AI_RUN_FAILURE_REASON_CODE.PROVIDER_CALL_FAILED
+  }
+
+  /**
+   * Extract the parameters recorded beside a thrown failure's reason code.
+   *
+   * **It answers null here, and that is the honest default rather than a placeholder.** A code
+   * whose contract entry names no parameters has none to carry, and six of the seven are written
+   * that way; only `MEDIA_LIMIT_EXCEEDED` says `parameters` carries the limit. A base class that
+   * invented an object for the rest would put a shape into `ai_runs.failure_parameters` that no
+   * client has been told how to read.
+   *
+   * It sits beside `#extractAiRunFailureReasonCode()` because the two answer one question between
+   * them: what a failed row says happened. A job that classifies its own failures overrides both,
+   * and one that classifies neither is still recorded under a code a reader can act on.
+   *
+   * The error is typed as anything for the reason its sibling states: what `#executeAiRunWork()`
+   * threw is whatever the service that wrote it threw, so an override reading a property off it
+   * has to reckon with that.
+   *
+   * @param {{
+   *   error: *
+   * }} params - Parameters.
+   * @returns {Record<string, *> | null} The parameters, or null when the code carries none.
+   * @public
+   */
+  extractAiRunFailureParameters ({
+    error,
+  }) {
+    return null
   }
 
   /**

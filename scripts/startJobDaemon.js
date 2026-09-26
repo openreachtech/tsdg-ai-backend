@@ -29,10 +29,11 @@ import AppJobEngine from '../app/queue/AppJobEngine.js'
  * subscribes, because a run reports its outcome by posting a callback rather than by publishing
  * progress.
  *
- * **There is no registration step, and `app/jobs/` being empty is not a mistake.** The scan is the
- * registration: a service that adds a job directory under that path is picked up with no file
- * edited here. No service has added one yet — the concrete job of a service belongs to that
- * service — so this daemon starts, listens on nothing, and is ready for the first one.
+ * **There is no registration step.** The scan is the registration: a service that adds a job
+ * directory under that path is picked up with no file edited here. Two services have done so —
+ * `deliver-run-callback` and `run-asset-media-extraction` — and neither required a line in this
+ * file, which is the whole of what the scan buys. The concrete job of a service belongs to that
+ * service, so this file names none of them and stays correct as more arrive.
  *
  * **The other half of that sentence: the path is the only thing between a file and being run at
  * boot.** Every `BaseJobWorker` subclass the scan finds under `workersPath` is instantiated and

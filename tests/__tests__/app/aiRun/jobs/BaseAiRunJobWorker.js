@@ -1180,6 +1180,144 @@ describe('BaseAiRunJobWorker', () => {
 })
 
 describe('BaseAiRunJobWorker', () => {
+  describe('#extractAiRunFailureParameters()', () => {
+    /*
+     * Six of the seven codes the client contract fixes name no parameters, so null is what a
+     * failure carries unless the job that raised it says otherwise. A base answering an object
+     * here would put a shape into `ai_runs.failure_parameters` that no client has been told how
+     * to read.
+     */
+    describe('should answer null for a failure the base did not classify', () => {
+      const cases = [
+        {
+          params: {
+            error: new Error('the provider answered 503'),
+          },
+        },
+        {
+          params: {
+            error: new Error('the medium could not be fetched'),
+          },
+        },
+      ]
+
+      test.each(cases)('error: $params.error', ({
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.extractAiRunFailureParameters(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildAiRunWorkOutcome()', () => {
+    /*
+     * The parameters a job classified reach the outcome, which is the half the reason code alone
+     * cannot carry: `MEDIA_LIMIT_EXCEEDED` is the one code whose contract entry says `parameters`
+     * names the limit, and a row recording the code with nothing beside it tells a client that a
+     * limit was passed without saying which.
+     */
+    describe('should carry the parameters the job classified', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10300051,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockError: new Error('thirteen photographs were sent'),
+          mockFailureParameters: {
+            limit: 12,
+            received: 13,
+          },
+          expected: {
+            resultBody: null,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: {
+              limit: 12,
+              received: 13,
+            },
+          },
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10300052,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockError: new Error('the byte cap was passed'),
+          mockFailureParameters: {
+            limit: 20971520,
+            received: 31457280,
+          },
+          expected: {
+            resultBody: null,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: {
+              limit: 20971520,
+              received: 31457280,
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.body.aiRunId', async ({
+        params,
+        mockError,
+        mockFailureParameters,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {
+            timber: {
+              log: () => null,
+              error: () => null,
+            },
+          },
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockRejectedValue(mockError)
+        jest.spyOn(worker, 'extractAiRunFailureParameters')
+          .mockReturnValue(mockFailureParameters)
+
+        const actual = await worker.buildAiRunWorkOutcome(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
   describe('#buildAiRunWorkOutcome()', () => {
     /*
      * The signal is passed through untouched — it is raised by the other side of the race and

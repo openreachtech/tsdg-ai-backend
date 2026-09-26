@@ -1,6 +1,7 @@
 import AiAgentPromptComposer from '../../../../app/aiAgent/AiAgentPromptComposer.js'
 
 import AI_AGENT_CONSTANT_HASH from '../../../../app/constants/aiAgentConstants.js'
+import ASSET_MEDIA_EXTRACTION_TOOL_CONSTANT_HASH from '../../../../app/constants/assetMediaExtractionToolConstants.js'
 
 import AiAgentAvailableAiTool from '../../../../sequelize/models/AiAgentAvailableAiTool.js'
 import AiAgentDefaultInstruction from '../../../../sequelize/models/AiAgentDefaultInstruction.js'
@@ -10,6 +11,10 @@ import AiTool from '../../../../sequelize/models/AiTool.js'
 const {
   AI_AGENT,
 } = AI_AGENT_CONSTANT_HASH
+
+const {
+  ASSET_MEDIA_EXTRACTION_TOOL,
+} = ASSET_MEDIA_EXTRACTION_TOOL_CONSTANT_HASH
 
 describe('AiAgentPromptComposer', () => {
   describe('constructor', () => {
@@ -295,6 +300,11 @@ describe('AiAgentPromptComposer', () => {
      *
      * One case, because the production master seeds exactly one agent; the fixture agents above
      * carry the variation.
+     *
+     * The tool schema is asserted by name alone, because what this method owes is carrying the
+     * bound tools rather than building them — `#buildToolSchemas()` below pins their content. The
+     * array was empty here until the master seeder that binds the tool was written, and the note
+     * that stood in its place recorded the gap as though it were this version's design.
      */
     describe('should carry what the seeded service agent holds', () => {
       const cases = [
@@ -305,7 +315,9 @@ describe('AiAgentPromptComposer', () => {
           expected: expect.objectContaining({
             role: AI_AGENT.ASSET_MEDIA_EXTRACTION.ROLE_INSTRUCTION,
             toolSchemas: [
-              // no tool is bound to the service agent this version
+              expect.objectContaining({
+                name: ASSET_MEDIA_EXTRACTION_TOOL.NAME,
+              }),
             ],
             instructionSavedAt: new Date('2026-09-24T00:00:03.003Z'),
           }),
@@ -610,14 +622,48 @@ describe('AiAgentPromptComposer', () => {
 
 describe('AiAgentPromptComposer', () => {
   describe('#findAvailableAiTools()', () => {
-    describe('should be empty', () => {
+    /*
+     * The shipped service agent's own binding, which is master data rather than a fixture. It was
+     * asserted as empty until the master seeders that bind it were written: nothing had put a row
+     * in `ai_tools` for it, and the emptiness read as a property of this version rather than as
+     * the gap it was. A run whose agent offers no reading tool is refused outright by
+     * `AssetMediaReadingFetcher`, so the state this case now asserts is the one in which the
+     * service works at all.
+     */
+    describe('should find the binding the shipped agent carries', () => {
       const cases = [
         {
-          // the service agent has no tool bound to it this version
           input: {
             aiAgentId: AI_AGENT.ASSET_MEDIA_EXTRACTION.ID,
           },
+          expected: [
+            expect.objectContaining({
+              id: 10202001,
+              AiToolId: 10201001,
+            }),
+          ],
         },
+      ]
+
+      test.each(cases)('aiAgentId: $input.aiAgentId', async ({
+        input,
+        expected,
+      }) => {
+        const composer = AiAgentPromptComposer.create(input)
+
+        const received = await composer.findAvailableAiTools()
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiAgentPromptComposer', () => {
+  describe('#findAvailableAiTools()', () => {
+    describe('should be empty', () => {
+      const cases = [
         {
           // an agent with no binding of its own, though another agent has bindings
           input: {

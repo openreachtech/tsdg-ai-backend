@@ -1,6 +1,8 @@
 import AiRunRateLimitInspector from '../../../../../app/aiRun/AiRunRateLimitInspector.js'
 import AI_RUN_CATEGORY_CONSTANT_HASH from '../../../../../app/constants/aiRunCategoryConstants.js'
 
+import RunAssetMediaExtractionJobDispatcher from '../../../../../app/jobs/run-asset-media-extraction/RunAssetMediaExtractionJobDispatcher.js'
+
 import BaseAiRunPostRenderer from '../../BaseAiRunPostRenderer.js'
 
 const {
@@ -8,26 +10,6 @@ const {
 } = AI_RUN_CATEGORY_CONSTANT_HASH
 
 const RATE_LIMIT_STATUS_CODE = 429
-
-/*
- * The dispatcher handed to the base's commit-time registration until this service has a queue.
- *
- * The base registers a dispatch off the commit of the transaction that created the run, and that
- * registration is not this class's to skip — the rule it encodes (nothing leaves the process until
- * the row is visible) is the same rule whether the queue is real or not. What this service still
- * has is nothing to send: `run-asset-media-extraction` is built at checkpoint 7, and until it is,
- * an accepted run stays `queued` with nothing waiting to pick it up.
- *
- * It is here rather than in `get:JobDispatcherCtor` because the two are not the same statement. The
- * abstract member names the queue this service's runs go to, and naming a sham there would say the
- * queue existed. So the member is left inherited and unanswered, `#ensureJobDispatcher()` is
- * overridden so nothing ever asks it, and the day `RunAssetMediaExtractionJobDispatcher` exists
- * this constant and that override both go and the member is filled. That is the whole of the
- * removal condition.
- */
-const UNBUILT_QUEUE_JOB_DISPATCHER = {
-  dispatchJob: async () => null,
-}
 
 /**
  * Renderer: `POST /v1/asset-media-extractions`.
@@ -42,19 +24,27 @@ const UNBUILT_QUEUE_JOB_DISPATCHER = {
  * contract fixes for the request that created one, and it is what the run actually is: nothing has
  * read a photo, and nothing in this file can.
  *
- * **What the stub that stood here before it left behind.** It settled the run inside the request,
+ * **The queue this route's runs go to is named in `get:JobDispatcherCtor`, and nowhere else.** The
+ * abstract member stood unanswered for two checkpoints, with `#ensureJobDispatcher()` overridden to
+ * hand the base a dispatcher that sent nothing, because naming a queue that did not exist would
+ * have said it did. `run-asset-media-extraction` exists, so the constant and the override are gone
+ * and the member is filled — which is the removal condition that override wrote down, met as
+ * written rather than in part.
+ *
+ * **What the stub that stood here before that left behind.** It settled the run inside the request,
  * with a result body drawn from a digest of the request, because no worker existed to settle it and
  * §20's fourth use case wanted a whole suggestion screen demonstrable without one. That settling is
- * gone, and with it every `*Stub*` constant and member: a run accepted here now stays `queued` until
- * the worker picks it up, and a client reading one back before checkpoint 7 sees exactly that. The
- * determinism was a bridge, and taking it out is the point of this file's rewrite rather than a
- * regression in it.
+ * gone, and with it every `*Stub*` constant and member. A run accepted here is `queued`, and what
+ * moves it is the job: the client's route to the answer is the terminal callback, or reading the
+ * run back by its key.
  *
  * **[[Q123]]'s province stays read as a human-readable name, and the reading now shows nowhere.**
  * The stub wrote it into each field's `reason` line precisely so a client sending a code would see
  * the mismatch on its own demo screen. Nothing in this file writes a reason any more — the reason
  * is written where the reading happens, which is the job — so the obligation to keep that reading
- * loud travels with it rather than ending here.
+ * loud travels with it rather than ending here. It has arrived there and is still unmet: the job
+ * asks a model for the reason line, and nothing in this service inspects what came back for a
+ * province that was sent as a code.
  *
  * **The rate limit is asked here, and it is asked first.** specs/1.0.0 §7 limits the run-creating
  * request per client, and §20's last criterion fixes what the limit has to be true of: the caller
@@ -130,14 +120,21 @@ export default class AssetMediaExtractionPostRenderer extends BaseAiRunPostRende
   }
 
   /**
-   * get: the dispatcher handed to the commit-time registration, which sends nothing.
+   * get: the dispatcher of this service's own queue.
    *
-   * @returns {{
-   *   dispatchJob: () => Promise<null>
-   * }} Job dispatcher.
+   * **This is the member the whole worker checkpoint comes down to.** The base obtains the
+   * dispatcher this names before it opens the run's transaction, builds the registrar from it and
+   * hangs the dispatch off that transaction's commit - so naming the class here is the entirety of
+   * the wiring between an accepted run and the queue that carries it out. Until
+   * `run-asset-media-extraction` existed this was deliberately left inherited and unanswered, with
+   * `#ensureJobDispatcher()` overridden so nothing ever asked it; both of those are gone, which is
+   * the removal condition that override stated.
+   *
+   * @override
+   * @returns {typeof RunAssetMediaExtractionJobDispatcher} Job dispatcher class.
    */
-  static get unbuiltQueueJobDispatcher () {
-    return UNBUILT_QUEUE_JOB_DISPATCHER
+  static get JobDispatcherCtor () {
+    return RunAssetMediaExtractionJobDispatcher
   }
 
   /**
@@ -214,22 +211,5 @@ export default class AssetMediaExtractionPostRenderer extends BaseAiRunPostRende
       apiClientId: context.apiClientId,
       now: context.now,
     })
-  }
-
-  /**
-   * Obtain this service's job dispatcher, which this service has none of yet.
-   *
-   * Nothing is reached and nothing is waited on: the base asks for the dispatcher before it opens
-   * the transaction so that a queue connection is never negotiated inside one, and a service with
-   * no queue to connect to answers that question immediately. `get:JobDispatcherCtor` is left
-   * inherited and unanswered on purpose — see the constant this returns.
-   *
-   * @override
-   * @returns {Promise<{
-   *   dispatchJob: () => Promise<null>
-   * }>} The dispatcher.
-   */
-  async ensureJobDispatcher () {
-    return this.Ctor.unbuiltQueueJobDispatcher
   }
 }

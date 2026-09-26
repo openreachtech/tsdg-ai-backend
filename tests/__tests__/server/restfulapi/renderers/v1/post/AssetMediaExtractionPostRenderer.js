@@ -4,6 +4,8 @@ import BaseAiRunPostRenderer from '../../../../../../../server/restfulapi/render
 
 import AiRunRateLimitInspector from '../../../../../../../app/aiRun/AiRunRateLimitInspector.js'
 
+import RunAssetMediaExtractionJobDispatcher from '../../../../../../../app/jobs/run-asset-media-extraction/RunAssetMediaExtractionJobDispatcher.js'
+
 /*
  * The route section 20 declares, in the members of it that write nothing.
  *
@@ -14,10 +16,11 @@ import AiRunRateLimitInspector from '../../../../../../../app/aiRun/AiRunRateLim
  * class accepts. A member that disappeared from the implementation disappears from its tests in the
  * same breath, and what is left below is every member that remains.
  *
- * **`.get:JobDispatcherCtor` is asserted to still throw, deliberately.** This service has no queue
- * until the worker checkpoint builds one, so the member naming that queue is left inherited and
- * unanswered rather than filled with a sham. The case below is what stops it being filled by
- * accident, and it is the case to delete on the day it is filled on purpose.
+ * **`.get:JobDispatcherCtor` now names a queue, and the case that asserted it still threw is
+ * gone.** It stood here for two checkpoints to stop the member being filled by accident, and said
+ * in its own words that it was the case to delete on the day it was filled on purpose. That day is
+ * this one: `run-asset-media-extraction` exists, and what is asserted below is the class it names
+ * rather than the refusal it used to be.
  *
  * **The rate-limit cases count the development seeder's own runs inside 2026-09-10**, for the
  * reason `AiRunRateLimitInspector`'s own test states: that is the day the fixture was seeded on and
@@ -131,56 +134,19 @@ describe('AssetMediaExtractionPostRenderer', () => {
 
 describe('AssetMediaExtractionPostRenderer', () => {
   describe('.get:JobDispatcherCtor', () => {
-    describe('when not inherited', () => {
-      const cases = [
-        {
-          input: {
-            Ctor: AssetMediaExtractionPostRenderer,
-          },
-          expected: 'AssetMediaExtractionPostRenderer.get:JobDispatcherCtor must be inherited',
-        },
-        {
-          input: {
-            Ctor: class AlphaAssetMediaExtractionPostRenderer extends AssetMediaExtractionPostRenderer {},
-          },
-          expected: 'AlphaAssetMediaExtractionPostRenderer.get:JobDispatcherCtor must be inherited',
-        },
-      ]
-
-      test.each(cases)('Ctor: $input.Ctor.name', ({
-        input,
-        expected,
-      }) => {
-        expect(() => input.Ctor.JobDispatcherCtor)
-          .toThrow(expected)
-      })
-    })
-  })
-})
-
-describe('AssetMediaExtractionPostRenderer', () => {
-  describe('.get:unbuiltQueueJobDispatcher', () => {
     describe('when called as is', () => {
+      /*
+       * The whole of the wiring between an accepted run and the queue that carries it out. The
+       * base obtains the dispatcher this names before it opens the run's transaction and hangs the
+       * dispatch off that transaction's commit, so a member naming the wrong class is a route that
+       * accepts runs nothing ever executes - which is what this route did, on purpose, until the
+       * queue existed.
+       */
       test('should be fixed value', () => {
-        const expected = {
-          dispatchJob: expect.any(Function),
-        }
+        const actual = AssetMediaExtractionPostRenderer.JobDispatcherCtor
 
-        const received = AssetMediaExtractionPostRenderer.unbuiltQueueJobDispatcher
-
-        expect(received)
-          .toEqual(expected)
-      })
-    })
-
-    describe('when its job is dispatched', () => {
-      test('should send nothing', async () => {
-        const jobDispatcher = AssetMediaExtractionPostRenderer.unbuiltQueueJobDispatcher
-
-        const received = await jobDispatcher.dispatchJob()
-
-        expect(received)
-          .toBeNull()
+        expect(actual)
+          .toBe(RunAssetMediaExtractionJobDispatcher) // same reference
       })
     })
   })
@@ -223,34 +189,6 @@ describe('AssetMediaExtractionPostRenderer', () => {
 
       expect(received)
         .toBe(input.Ctor) // same reference
-    })
-  })
-})
-
-describe('AssetMediaExtractionPostRenderer', () => {
-  describe('#ensureJobDispatcher()', () => {
-    const cases = [
-      {
-        input: {
-          Ctor: AssetMediaExtractionPostRenderer,
-        },
-      },
-      {
-        input: {
-          Ctor: class GammaAssetMediaExtractionPostRenderer extends AssetMediaExtractionPostRenderer {},
-        },
-      },
-    ]
-
-    test.each(cases)('Ctor: $input.Ctor.name', async ({
-      input,
-    }) => {
-      const renderer = input.Ctor.create()
-
-      const received = await renderer.ensureJobDispatcher()
-
-      expect(received)
-        .toBe(AssetMediaExtractionPostRenderer.unbuiltQueueJobDispatcher) // same reference
     })
   })
 })

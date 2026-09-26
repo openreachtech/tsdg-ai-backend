@@ -14,11 +14,12 @@ import RunKeyGenerator from '../../../app/aiRun/RunKeyGenerator.js'
  * one that would have failed against the code this replaced - `AiRunStatusId` succeeded, a
  * `finishedAt` and a `resultBody`, all written before the caller was answered.
  *
- * **The job is dispatched, and it is dispatched after the commit.** The dispatcher this service
- * hands the registration sends nothing - there is no `run-asset-media-extraction` queue until the
- * worker checkpoint builds one - but the registration itself is real, so the call can be asserted
- * and the run it names read back. A dispatch naming a run the transaction never committed is the
- * failure that registration exists to prevent.
+ * **The job is dispatched, and it is dispatched after the commit.** The dispatcher is stood in
+ * for, because obtaining the real one means opening a Redis connection a test may not open - the
+ * base reaches it through the request share, which these cases carry none of. The registration
+ * itself is real, so the call can be asserted and the run it names read back: a dispatch naming a
+ * run the transaction never committed is the failure that registration exists to prevent, and it
+ * is the one thing about the queue that is this route's to get right.
  *
  * **The rate-limit refusal is the last acceptance criterion of section 20**, in the half of it that
  * is checkable: "a client that has exceeded its rate limit is refused, and no run is created". The
@@ -115,6 +116,11 @@ describe('AssetMediaExtractionPostRenderer', () => {
           expected,
         }) => {
           const renderer = AssetMediaExtractionPostRenderer.create()
+          const jobDispatcher = {
+            dispatchJob: async () => null,
+          }
+          jest.spyOn(renderer, 'ensureJobDispatcher')
+            .mockResolvedValue(jobDispatcher)
 
           const runKeyGenerator = RunKeyGenerator.create()
           jest.spyOn(runKeyGenerator, 'generateRunKey')
@@ -209,6 +215,11 @@ describe('AssetMediaExtractionPostRenderer', () => {
           expected,
         }) => {
           const renderer = AssetMediaExtractionPostRenderer.create()
+          const jobDispatcher = {
+            dispatchJob: async () => null,
+          }
+          jest.spyOn(renderer, 'ensureJobDispatcher')
+            .mockResolvedValue(jobDispatcher)
 
           const runKeyGenerator = RunKeyGenerator.create()
           jest.spyOn(runKeyGenerator, 'generateRunKey')
@@ -290,6 +301,11 @@ describe('AssetMediaExtractionPostRenderer', () => {
           input,
         }) => {
           const renderer = AssetMediaExtractionPostRenderer.create()
+          const jobDispatcher = {
+            dispatchJob: async () => null,
+          }
+          jest.spyOn(renderer, 'ensureJobDispatcher')
+            .mockResolvedValue(jobDispatcher)
 
           const runKeyGenerator = RunKeyGenerator.create()
           jest.spyOn(runKeyGenerator, 'generateRunKey')
@@ -299,10 +315,7 @@ describe('AssetMediaExtractionPostRenderer', () => {
           })
           jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunAcceptor')
             .mockReturnValue(aiRunAcceptor)
-          const dispatchJobSpy = jest.spyOn(
-            AssetMediaExtractionPostRenderer.unbuiltQueueJobDispatcher,
-            'dispatchJob'
-          )
+          const dispatchJobSpy = jest.spyOn(jobDispatcher, 'dispatchJob')
           const findAiRunArgs = {
             apiClientId: input.context.apiClientId,
             requestKey: input.request.expressRequest.headers['idempotency-key'],
