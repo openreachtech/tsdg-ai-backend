@@ -15,13 +15,43 @@ import AiRunKeyInspector from '../../../../app/aiRun/AiRunKeyInspector.js'
  * bytes under the machine's own temporary directory and then read the disk to see that they are
  * gone. Reading the disk in the assertion is deliberate and is the only way the deletion is
  * observable; it is the external effect the criterion is about, not a re-query of what the method
- * already returned.
+ * already returned. The planted directories and links two of the describes below stand a run's
+ * workspace path up against are real too, and so is the file mode one of them reads back.
+ *
+ * Two describes are the exception and say so where they sit: `#isOwnPrivateDirectory()` and
+ * `.extractOwnUserId()` reason about a status owned by another account and about a platform that
+ * names no account at all, neither of which a test may create on the machine it is running on.
+ * Those two state the rule; every other describe in this file observes it.
  *
  * The run ids are this feature's own (`10440001` upward), so a directory this file creates belongs
  * to this file and to nothing else.
  */
 
 const TEST_WORKSPACE_ROOT_PATH = path.join(os.tmpdir(), 'tsdg-ai-media-workspace-test')
+
+/*
+ * The root is created by each case that needs one, rather than by the class under test.
+ *
+ * `#createWorkspace()` asks `mkdir` for one directory and not for a tree, so the directory the
+ * workspace sits in has to be there already - which in a deployment is the machine's own temporary
+ * directory and here is the directory above. That is the point of it: a `mkdir` building every
+ * missing parent also answers success for a path that already exists, whoever made it.
+ */
+
+/*
+ * The permission bits, and what the file system answers when the mode this class asks for is read
+ * back off a file it created.
+ *
+ * Where a platform has owner-group-other permissions the answer is the 0o600 that was asked for.
+ * Windows expresses a read-only bit and nothing else, and reports 0o666 whatever was asked, so the
+ * figure asserted there is the platform's own and says nothing about this service. The describe
+ * that fails without the fix on every platform is the one below it - an existing file refused
+ * rather than truncated and rewritten.
+ */
+const PERMISSION_BITS = 0o777
+const EXPECTED_MEDIUM_FILE_MODE = process.platform === 'win32'
+  ? 0o666
+  : 0o600
 
 describe('AiRunMediaWorkspace', () => {
   describe('constructor', () => {
@@ -427,6 +457,19 @@ describe('AiRunMediaWorkspace', () => {
         params,
         expected,
       }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+
+        /*
+         * A previous run of this suite left its copy here, and `writeMediumFile()` now opens with
+         * `wx` -- it creates or fails, never truncates. So the arrange phase has to start from
+         * nothing, or the second run of the suite fails where the first passed. The refusal itself
+         * is the subject of its own describe below; a leftover is pollution, not a case.
+         */
+        await fsPromises.rm(expected, {
+          force: true,
+        })
         const workspace = AiRunMediaWorkspace.create(factoryParams)
 
         const actual = await workspace.writeMediumFile(params)
@@ -479,6 +522,9 @@ describe('AiRunMediaWorkspace', () => {
         params,
         expected,
       }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
         const workspace = AiRunMediaWorkspace.create(factoryParams)
         const mediumFilePath = await workspace.writeMediumFile(params)
 
@@ -553,6 +599,9 @@ describe('AiRunMediaWorkspace', () => {
         factoryParams,
         expected,
       }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
         const workspace = AiRunMediaWorkspace.create(factoryParams)
 
         const actual = await workspace.createWorkspace()
@@ -562,6 +611,585 @@ describe('AiRunMediaWorkspace', () => {
         await expect(fsPromises.readdir(actual))
           .resolves
           .toHaveLength(0)
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('#createWorkspace()', () => {
+    /*
+     * The workspace path is derived from a sequential run id, so it is predictable, and it has to
+     * be - the removal is called from a `finally` holding nothing but that id. What follows is that
+     * any local account can create the next few directory names first.
+     *
+     * A link is the case that costs the most: `mkdir` asked with `recursive` answers success for a
+     * path already taken, whatever is at it, so the run wrote its files through the link into a
+     * directory somebody else chose, and `rm` - which `lstat`s - then unlinked the link and left
+     * the bytes where they were. Both acceptance criteria were void with no error raised.
+     *
+     * The link here is made with the junction type so that the case runs on every platform; the
+     * target is read back afterwards to show that nothing was written through it.
+     */
+    describe('should refuse a path already taken by a link to somewhere else', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440030,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          expected: 'refused a workspace path this process does not own',
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440031,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          expected: 'refused a workspace path this process does not own',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $factoryParams.aiRunId', async ({
+        factoryParams,
+        expected,
+      }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+        const plantedTargetPath = path.join(TEST_WORKSPACE_ROOT_PATH, `planted-target-${factoryParams.aiRunId}`)
+        await fsPromises.rm(plantedTargetPath, {
+          recursive: true,
+          force: true,
+        })
+        await fsPromises.mkdir(plantedTargetPath)
+        const plantedLinkPath = path.join(TEST_WORKSPACE_ROOT_PATH, `ai-run-media-${factoryParams.aiRunId}`)
+        await fsPromises.rm(plantedLinkPath, {
+          recursive: true,
+          force: true,
+        })
+        await fsPromises.symlink(plantedTargetPath, plantedLinkPath, 'junction')
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = () => workspace.createWorkspace()
+
+        await expect(actual)
+          .rejects
+          .toThrow(expected)
+        await expect(fsPromises.readdir(plantedTargetPath))
+          .resolves
+          .toHaveLength(0)
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('#writeMediumFile()', () => {
+    /*
+     * The same planted link, taken all the way through to the bytes: the fetched file must not
+     * land in the directory the link points at. The target is read back because that is the only
+     * place the failure would show - an exception alone would not say where the bytes went.
+     */
+    describe('should write no bytes through a path taken by a link', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440032,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            aiRunMediaId: 10440110,
+            bytes: Buffer.from('front-elevation-bytes'),
+          },
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440033,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            aiRunMediaId: 10440111,
+            bytes: Buffer.from('kitchen-counter-bytes'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunMediaId: $params.aiRunMediaId', async ({
+        factoryParams,
+        params,
+      }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+        const plantedTargetPath = path.join(TEST_WORKSPACE_ROOT_PATH, `planted-target-${factoryParams.aiRunId}`)
+        await fsPromises.rm(plantedTargetPath, {
+          recursive: true,
+          force: true,
+        })
+        await fsPromises.mkdir(plantedTargetPath)
+        const plantedLinkPath = path.join(TEST_WORKSPACE_ROOT_PATH, `ai-run-media-${factoryParams.aiRunId}`)
+        await fsPromises.rm(plantedLinkPath, {
+          recursive: true,
+          force: true,
+        })
+        await fsPromises.symlink(plantedTargetPath, plantedLinkPath, 'junction')
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = () => workspace.writeMediumFile(params)
+
+        await expect(actual)
+          .rejects
+          .toThrow('refused a workspace path this process does not own')
+        await expect(fsPromises.readdir(plantedTargetPath))
+          .resolves
+          .toHaveLength(0)
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('#writeMediumFile()', () => {
+    /*
+     * The file's half of the same hole. Without `wx` the write opens whatever is at the path and
+     * truncates it, so a file pre-created at a predictable name is replaced by a caller's
+     * photograph. The pre-existing bytes are read back to show the file was left alone rather than
+     * merely that the call failed.
+     */
+    describe('should refuse a file already at the path', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440034,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            aiRunMediaId: 10440112,
+            bytes: Buffer.from('front-elevation-bytes'),
+          },
+          expected: Buffer.from('bytes-planted-before-the-run'),
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440035,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            aiRunMediaId: 10440113,
+            bytes: Buffer.from('kitchen-counter-bytes'),
+          },
+          expected: Buffer.from('bytes-of-a-file-somebody-else-made'),
+        },
+      ]
+
+      test.each(cases)('aiRunMediaId: $params.aiRunMediaId', async ({
+        factoryParams,
+        params,
+        expected,
+      }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+        const plantedWorkspacePath = path.join(TEST_WORKSPACE_ROOT_PATH, `ai-run-media-${factoryParams.aiRunId}`)
+        await fsPromises.rm(plantedWorkspacePath, {
+          recursive: true,
+          force: true,
+        })
+        await fsPromises.mkdir(plantedWorkspacePath)
+        const plantedFilePath = path.join(plantedWorkspacePath, `medium-${params.aiRunMediaId}`)
+        await fsPromises.writeFile(plantedFilePath, expected)
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = () => workspace.writeMediumFile(params)
+
+        await expect(actual)
+          .rejects
+          .toThrow('EEXIST')
+        await expect(fsPromises.readFile(plantedFilePath))
+          .resolves
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('#writeMediumFile()', () => {
+    /*
+     * The file is a caller's photograph, which the non-functional section classes as personal
+     * data, and it sits in a directory every local account can list. Left to the process's umask
+     * it was created `644` on a common server - readable by every one of them for the length of
+     * the run.
+     *
+     * What this reads back is what the platform answers, which is the mode on a platform that has
+     * one and a fixed number on a platform that has not. See the constant.
+     */
+    describe('should create the file for its owner alone', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440036,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            aiRunMediaId: 10440114,
+            bytes: Buffer.from('balcony-view-bytes'),
+          },
+          expected: EXPECTED_MEDIUM_FILE_MODE,
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440037,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            aiRunMediaId: 10440115,
+            bytes: Buffer.from('parking-space-bytes'),
+          },
+          expected: EXPECTED_MEDIUM_FILE_MODE,
+        },
+      ]
+
+      test.each(cases)('aiRunMediaId: $params.aiRunMediaId', async ({
+        factoryParams,
+        params,
+        expected,
+      }) => {
+        /*
+         * The same reason the sibling describe above clears before it writes: `writeMediumFile()`
+         * opens with `wx`, so a copy a previous run of this suite left behind makes the second run
+         * fail where the first passed. This root is this file's own -- no other test file names it
+         * -- so clearing it whole is the arrange step, not a reach into somebody else's fixture.
+         */
+        await fsPromises.rm(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+          force: true,
+        })
+
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = await workspace.writeMediumFile(params)
+
+        const mediumFileStatus = await fsPromises.stat(actual)
+        const actualMode = mediumFileStatus.mode & PERMISSION_BITS
+
+        expect(actualMode)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('#createWorkspaceDirectory()', () => {
+    /*
+     * A run writes up to twelve files through one workspace, and the workspace is claimed again on
+     * every one of them - so a path this process has already made has to be let stand. That is why
+     * an existing path is examined rather than refused outright.
+     */
+    describe('should let a directory it already made stand', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440038,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspacePath: path.join(TEST_WORKSPACE_ROOT_PATH, 'ai-run-media-10440038'),
+          },
+          expected: path.join(TEST_WORKSPACE_ROOT_PATH, 'ai-run-media-10440038'),
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440039,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspacePath: path.join(TEST_WORKSPACE_ROOT_PATH, 'ai-run-media-10440039'),
+          },
+          expected: path.join(TEST_WORKSPACE_ROOT_PATH, 'ai-run-media-10440039'),
+        },
+      ]
+
+      test.each(cases)('workspacePath: $params.workspacePath', async ({
+        factoryParams,
+        params,
+        expected,
+      }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+        await fsPromises.rm(params.workspacePath, {
+          recursive: true,
+          force: true,
+        })
+        await fsPromises.mkdir(params.workspacePath)
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = await workspace.createWorkspaceDirectory(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    /*
+     * Every failure that is not an existing path is raised as it arrived - a root that is not
+     * there is the readiest of them, and it is also what says that no tree is built here.
+     */
+    describe('should raise a failure that is not an existing path', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440040,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspacePath: path.join(TEST_WORKSPACE_ROOT_PATH, 'no-such-root-10440040', 'ai-run-media-10440040'),
+          },
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440041,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspacePath: path.join(TEST_WORKSPACE_ROOT_PATH, 'no-such-root-10440041', 'ai-run-media-10440041'),
+          },
+        },
+      ]
+
+      test.each(cases)('workspacePath: $params.workspacePath', async ({
+        factoryParams,
+        params,
+      }) => {
+        await fsPromises.mkdir(TEST_WORKSPACE_ROOT_PATH, {
+          recursive: true,
+        })
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = () => workspace.createWorkspaceDirectory(params)
+
+        await expect(actual)
+          .rejects
+          .toThrow('ENOENT')
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('#isOwnPrivateDirectory()', () => {
+    /*
+     * The statuses are stubs because the branches they drive cannot all be reached on one machine:
+     * a status owned by another user is not something a test may create, and the permission bits
+     * are a platform's to express. Every other case in this file runs against the real file
+     * system; this one states the rule itself, and the planted-link cases above are it observed.
+     *
+     * The user id is stubbed alongside, so each case states the platform it is reasoning about
+     * rather than inheriting the one the suite happens to run on.
+     */
+    describe('should refuse an entry it does not own', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440042,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => false,
+              uid: 1000,
+              mode: 0o40700,
+            },
+          },
+          mockOwnUserId: 1000,
+          label: 'a link rather than a directory',
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440043,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => true,
+              uid: 1001,
+              mode: 0o40700,
+            },
+          },
+          mockOwnUserId: 1000,
+          label: 'a directory another account owns',
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440044,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => true,
+              uid: 1000,
+              mode: 0o40777,
+            },
+          },
+          mockOwnUserId: 1000,
+          label: 'a directory open to every account on the host',
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440045,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => false,
+              uid: 0,
+              mode: 0o40666,
+            },
+          },
+          mockOwnUserId: null,
+          label: 'a link, on a platform naming no user',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        factoryParams,
+        params,
+        mockOwnUserId,
+      }) => {
+        jest.spyOn(AiRunMediaWorkspace, 'extractOwnUserId')
+          .mockReturnValue(mockOwnUserId)
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = workspace.isOwnPrivateDirectory(/** @type {*} */ (params))
+
+        expect(actual)
+          .toBeFalsy()
+      })
+    })
+
+    describe('should accept a directory of its own', () => {
+      const cases = [
+        {
+          factoryParams: {
+            aiRunId: 10440046,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => true,
+              uid: 1000,
+              mode: 0o40700,
+            },
+          },
+          mockOwnUserId: 1000,
+          label: 'a directory this account owns, open to nobody else',
+        },
+        {
+          factoryParams: {
+            aiRunId: 10440047,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => true,
+              uid: 1000,
+              mode: 0o40500,
+            },
+          },
+          mockOwnUserId: 1000,
+          label: 'a directory tightened further than this class asked for',
+        },
+        {
+          /*
+           * The residual the class comment states rather than claims closed: where the platform
+           * names no user, a directory is accepted on the strength of its being a directory.
+           */
+          factoryParams: {
+            aiRunId: 10440048,
+            workspaceRootPath: TEST_WORKSPACE_ROOT_PATH,
+          },
+          params: {
+            workspaceStatus: {
+              isDirectory: () => true,
+              uid: 0,
+              mode: 0o40666,
+            },
+          },
+          mockOwnUserId: null,
+          label: 'a directory, on a platform naming no user',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        factoryParams,
+        params,
+        mockOwnUserId,
+      }) => {
+        jest.spyOn(AiRunMediaWorkspace, 'extractOwnUserId')
+          .mockReturnValue(mockOwnUserId)
+        const workspace = AiRunMediaWorkspace.create(factoryParams)
+
+        const actual = workspace.isOwnPrivateDirectory(/** @type {*} */ (params))
+
+        expect(actual)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('AiRunMediaWorkspace', () => {
+  describe('.extractOwnUserId()', () => {
+    /*
+     * A platform without `process.getuid` answers null rather than a user id nobody has, which is
+     * what lets the caller say which half of the claim check it is left with. The process is
+     * stubbed so that the case states the platform rather than the suite's own.
+     */
+    describe('should extract what the platform names', () => {
+      const cases = [
+        {
+          mockProcess: {
+            getuid: () => 1000,
+          },
+          expected: 1000,
+        },
+        {
+          mockProcess: {
+            getuid: () => 0,
+          },
+          expected: 0,
+        },
+      ]
+
+      test.each(cases)('expected user id: $expected', ({
+        mockProcess,
+        expected,
+      }) => {
+        jest.spyOn(AiRunMediaWorkspace, 'nodeProcess', 'get')
+          .mockReturnValue(/** @type {*} */ (mockProcess))
+
+        const actual = AiRunMediaWorkspace.extractOwnUserId()
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    describe('should answer null where the platform names none', () => {
+      test('with no getuid at all', () => {
+        jest.spyOn(AiRunMediaWorkspace, 'nodeProcess', 'get')
+          .mockReturnValue(/** @type {*} */ ({}))
+
+        const actual = AiRunMediaWorkspace.extractOwnUserId()
+
+        expect(actual)
+          .toBeNull()
       })
     })
   })

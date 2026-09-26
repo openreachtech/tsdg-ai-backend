@@ -1529,3 +1529,194 @@ describe('BaseAiRunJobWorker', () => {
     })
   })
 })
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * A concrete job throwing something with no class of its own, taken all the way through.
+     *
+     * `#executeAiRunWork()` is written by another service against this class's contract, and
+     * `throw null` is a line somebody may write there. Reading the class off it inside the catch
+     * raised a TypeError, and a throw inside a catch is not caught by that catch's own try - so it
+     * escaped the outcome builder, passed the terminal write, and left `#executeJob()` with the
+     * run still at running: no terminal state, and a client waiting on a callback that never comes.
+     *
+     * What is asserted is therefore the terminal write itself, and not merely that the call
+     * returned: the failed transition was asked for, with the code an unclassified failure carries.
+     */
+    describe('should settle a run whose work threw nothing with a class', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10450301,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockFailure: null,
+          expected: {
+            aiRunId: 10450301,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            hasSettled: true,
+          },
+          label: 'a work that threw null',
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10450302,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockFailure: 'the provider answered badly',
+          expected: {
+            aiRunId: 10450302,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            hasSettled: true,
+          },
+          label: 'a work that threw text',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        params,
+        mockFailure,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockRejectedValue(mockFailure)
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveFailedAiRunOnce)
+          .toHaveBeenCalledWith({
+            aiRunId: expected.aiRunId,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: null,
+            finishedAt: expect.any(Date),
+          })
+        expect(saveSucceededAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#executeJob()', () => {
+    /*
+     * The removal's own site, reached from the `finally` of a delivery that succeeded. A throw
+     * raised there would replace the result this delivery was returning with one about a
+     * directory - so the result is what is asserted, beside the terminal write that produced it.
+     */
+    describe('should keep its result when the removal threw nothing with a class', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10450303,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockRemovalFailure: null,
+          expected: {
+            aiRunId: 10450303,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+          label: 'a removal that threw null',
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10450304,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockRemovalFailure: 'rm refused ./ai-run-media-10450304',
+          expected: {
+            aiRunId: 10450304,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+          label: 'a removal that threw text',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        params,
+        mockRemovalFailure,
+        expected,
+      }) => {
+        const saveRunningAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 30000,
+          aiRunStatusRecorder: {
+            saveRunningAiRunOnce,
+            saveSucceededAiRunOnce,
+            saveFailedAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockResolvedValue('{"brand":"alpha"}')
+        const removeWorkspace = jest.fn()
+          .mockRejectedValue(mockRemovalFailure)
+        jest.spyOn(worker, 'createAiRunMediaWorkspace')
+          .mockReturnValue(/** @type {*} */ ({
+            removeWorkspace,
+          }))
+
+        const actual = await worker.executeJob(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveSucceededAiRunOnce)
+          .toHaveBeenCalledWith({
+            aiRunId: expected.aiRunId,
+            resultBody: '{"brand":"alpha"}',
+            finishedAt: expect.any(Date),
+          })
+      })
+    })
+  })
+})

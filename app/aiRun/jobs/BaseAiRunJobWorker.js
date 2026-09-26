@@ -43,6 +43,21 @@ const COMPLETED_DELIVERY_MESSAGE = 'a delivery completed'
 const WORKER_ERROR_MESSAGE = 'the worker errored'
 const FAILED_WORKSPACE_REMOVAL_MESSAGE = 'a run ended with its fetched files still on disk'
 
+/*
+ * What a failure is reported as when it came back as something carrying no class of its own - a
+ * thrown string, a thrown null, an object with a null prototype.
+ *
+ * Nothing in this file throws one. `#executeAiRunWork()` is written by another service against
+ * this class's own contract, and `throw null` there is a line somebody may write - so the fallback
+ * is not a courtesy to a hypothetical thrower but the thing that keeps a run from ending with no
+ * terminal state at all. A `throw` raised inside a `catch` is not caught by that `catch`'s own
+ * `try`: reading `.constructor.name` off null there would raise a `TypeError` out through the
+ * outcome builder, past the terminal write, and out of `#executeJob()`, leaving the row at
+ * `running` until the retention sweep and the client waiting on a callback that never comes. The
+ * sibling `MediaFetchClient` already guards the same expression; this file did not.
+ */
+const UNNAMED_ERROR_NAME = 'Error'
+
 const FAILED_AI_RUN_WORK_TAGS = [
   'AiRunJob',
   'FailedAiRunWork',
@@ -493,7 +508,8 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    *
    * **A number that is no id, and an id no row carries, are both answered rather than refused
    * here**, and they part company one call later. `AiRunStatusRecorder` holds every key it is
-   * given to `AiRunKeyInspector`'s rule — a positive integer of at most nineteen digits — so a
+   * given to `AiRunKeyInspector`'s rule — a positive integer of at most nineteen digits, which
+   * spells back the number it reads as — so a
    * zero or a negative is raised there as a defect in the call, named as the field it arrived in.
    * A well-formed id that no row carries is not a defect: it is answered false, telling the
    * delivery there is nothing to do, which is the same answer a re-delivery of a settled run gets
@@ -739,10 +755,12 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * nobody has classified.
    *
    * A job that can tell a media fetch from a provider call overrides this and says so; the error
-   * is handed in for exactly that.
+   * is handed in for exactly that. It is typed as anything rather than as an `Error`, because what
+   * `#executeAiRunWork()` threw is whatever the service that wrote it threw - an override reading
+   * a property off it has to reckon with that, as this file's own `#extractErrorName()` does.
    *
    * @param {{
-   *   error: Error
+   *   error: *
    * }} params - Parameters.
    * @returns {string} The reason code.
    * @public
@@ -767,7 +785,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * @param {{
    *   aiRunId: number | null
    *   failureReasonCode: string
-   *   error: Error
+   *   error: *
    * }} params - Parameters.
    * @returns {void}
    * @public
@@ -777,10 +795,41 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     failureReasonCode,
     error,
   }) {
+    const errorName = this.extractErrorName({
+      error,
+    })
+
     this.Ctor.mentsuLogger.error({
-      message: `${this.Ctor.name} ${FAILED_AI_RUN_WORK_MESSAGE}: AiRunId ${aiRunId}, ${failureReasonCode}, ${error.constructor.name}`,
+      message: `${this.Ctor.name} ${FAILED_AI_RUN_WORK_MESSAGE}: AiRunId ${aiRunId}, ${failureReasonCode}, ${errorName}`,
       tags: FAILED_AI_RUN_WORK_TAGS,
     })
+  }
+
+  /**
+   * Extract the name of the class a failure came back as.
+   *
+   * **The optional chaining is the whole method.** `error.constructor.name` was written at four
+   * sites in this file, and a `throw null` or a `throw 'text'` makes every one of them raise a
+   * `TypeError` from inside a `catch` or an event handler - which no `try` in this file catches,
+   * because a `throw` inside a `catch` escapes the `try` that `catch` belongs to. At the first of
+   * those sites that costs the run its terminal state, which is the one thing this class exists to
+   * guarantee; at the site inside the workspace removal it would replace the delivery's own result
+   * or an exception already on its way out, which is what the `finally` is there to prevent. One
+   * method, asked by all four, so the guard cannot be kept at three of them.
+   *
+   * It is the class name and never the message, for the reason `#logFailedAiRunWork()` gives.
+   *
+   * @param {{
+   *   error: *
+   * }} params - Parameters.
+   * @returns {string} The class name of the failure.
+   * @public
+   */
+  extractErrorName ({
+    error,
+  }) {
+    return error?.constructor?.name
+      ?? UNNAMED_ERROR_NAME
   }
 
   /**
@@ -1008,7 +1057,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    *
    * @param {{
    *   aiRunId: number
-   *   error: Error
+   *   error: *
    * }} params - Parameters.
    * @returns {void}
    * @public
@@ -1017,8 +1066,12 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     aiRunId,
     error,
   }) {
+    const errorName = this.extractErrorName({
+      error,
+    })
+
     this.Ctor.mentsuLogger.error({
-      message: `${this.Ctor.name} ${FAILED_WORKSPACE_REMOVAL_MESSAGE}: AiRunId ${aiRunId}, ${error.constructor.name}`,
+      message: `${this.Ctor.name} ${FAILED_WORKSPACE_REMOVAL_MESSAGE}: AiRunId ${aiRunId}, ${errorName}`,
       tags: FAILED_WORKSPACE_REMOVAL_TAGS,
     })
   }
@@ -1065,7 +1118,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * @override
    * @param {{
    *   jobModel: InstanceType<JobModelCtor>
-   *   error: Error
+   *   error: *
    *   previousStatus: string
    * }} params - Parameters.
    * @returns {null} Nothing.
@@ -1076,8 +1129,12 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     error,
     previousStatus,
   }) {
+    const errorName = this.extractErrorName({
+      error,
+    })
+
     this.Ctor.mentsuLogger.error({
-      message: `${this.Ctor.name} ${FAILED_DELIVERY_MESSAGE}: ${previousStatus}, ${error.constructor.name}`,
+      message: `${this.Ctor.name} ${FAILED_DELIVERY_MESSAGE}: ${previousStatus}, ${errorName}`,
       tags: FAILED_DELIVERY_TAGS,
     })
 
@@ -1114,7 +1171,7 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    *
    * @override
    * @param {{
-   *   error: Error
+   *   error: *
    * }} params - Parameters.
    * @returns {null} Nothing.
    * @public
@@ -1122,8 +1179,12 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
   onWorkerError ({
     error,
   }) {
+    const errorName = this.extractErrorName({
+      error,
+    })
+
     this.Ctor.mentsuLogger.error({
-      message: `${this.Ctor.name} ${WORKER_ERROR_MESSAGE}: ${error.constructor.name}`,
+      message: `${this.Ctor.name} ${WORKER_ERROR_MESSAGE}: ${errorName}`,
       tags: WORKER_ERROR_TAGS,
     })
 

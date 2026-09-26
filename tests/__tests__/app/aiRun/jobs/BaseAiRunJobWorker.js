@@ -2137,3 +2137,391 @@ describe('BaseAiRunJobWorker', () => {
     })
   })
 })
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#extractErrorName()', () => {
+    /*
+     * Four sites in this class read the class a failure came back as, and every one of them used
+     * to read it off the value directly. A `throw null` from a concrete job - written by another
+     * service, against this class's own contract - made each of them raise a TypeError from inside
+     * a catch, which no try in this file catches, because a throw inside a catch escapes the try
+     * that catch belongs to.
+     *
+     * So the cases here are the values a property read faults on, and the ones that carry no class
+     * of their own. What each of them costs when it is not guarded is stated in the describes
+     * below.
+     */
+    describe('should name what carries no class of its own', () => {
+      const cases = [
+        {
+          params: {
+            error: null,
+          },
+          expected: 'Error',
+          label: 'null, which a concrete job may throw',
+        },
+        {
+          params: {
+            error: Object.create(null),
+          },
+          expected: 'Error',
+          label: 'an object with no prototype at all',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.extractErrorName(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    describe('should name the class a failure came back as', () => {
+      const cases = [
+        {
+          params: {
+            error: new Error('the provider answered 503'),
+          },
+          expected: 'Error',
+        },
+        {
+          params: {
+            error: new TypeError('fetch failed'),
+          },
+          expected: 'TypeError',
+        },
+        {
+          params: {
+            error: 'a failure thrown as text',
+          },
+          expected: 'String',
+        },
+        {
+          params: {
+            error: 0,
+          },
+          expected: 'Number',
+        },
+      ]
+
+      test.each(cases)('error: $params.error', ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.extractErrorName(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildAiRunWorkOutcome()', () => {
+    /*
+     * The costliest of the four sites. A work that throws null used to make the logging raise a
+     * TypeError out of the catch, past the terminal write and out of `#executeJob()` - so the run
+     * sat at running until its retention sweep and the client waited on a callback that never
+     * came, which is the one thing this outcome exists to prevent.
+     *
+     * An outcome rather than a rejection is therefore what is asserted, and the reason code with
+     * it: a failure nobody classified is still a failure with a code a reader can act on.
+     */
+    describe('should turn a work that threw nothing with a class into a failure outcome', () => {
+      const cases = [
+        {
+          params: {
+            body: {
+              aiRunId: 10450041,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockFailure: null,
+          expected: {
+            resultBody: null,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: null,
+          },
+          label: 'a work that threw null',
+        },
+        {
+          params: {
+            body: {
+              aiRunId: 10450042,
+            },
+            context: {},
+            parcel: {},
+          },
+          mockFailure: 'the provider answered badly',
+          expected: {
+            resultBody: null,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: null,
+          },
+          label: 'a work that threw text',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        params,
+        mockFailure,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        jest.spyOn(worker, 'executeAiRunWork')
+          .mockRejectedValue(mockFailure)
+
+        const actual = await worker.buildAiRunWorkOutcome(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#logFailedAiRunWork()', () => {
+    describe('should write a line for a failure carrying no class', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10450043,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            error: null,
+          },
+          expected: 'BaseAiRunJobWorker the work of a run threw: AiRunId 10450043, PROVIDER_CALL_FAILED, Error',
+          label: 'a work that threw null',
+        },
+        {
+          params: {
+            aiRunId: 10450044,
+            failureReasonCode: 'MEDIA_FETCH_FAILED',
+            error: 'https://files.client.example/photos/front-elevation.jpg could not be read',
+          },
+          expected: 'BaseAiRunJobWorker the work of a run threw: AiRunId 10450044, MEDIA_FETCH_FAILED, String',
+          label: 'a work that threw text carrying a URL',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const errorSpy = jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+        worker.logFailedAiRunWork(params)
+
+        expect(errorSpy)
+          .toHaveBeenCalledWith({
+            message: expected,
+            tags: [
+              'AiRunJob',
+              'FailedAiRunWork',
+            ],
+          })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#removeAiRunMediaWorkspace()', () => {
+    /*
+     * The second site, and the one that is worse in kind. It is reached from the `finally`, so a
+     * throw raised here would replace the result the delivery was returning or the exception it
+     * was already raising - the exact thing the `finally`'s design says it prevents.
+     */
+    describe('should answer null when the removal threw nothing with a class', () => {
+      const cases = [
+        {
+          mockRemovalFailure: null,
+          params: {
+            aiRunId: 10450045,
+          },
+          label: 'a removal that threw null',
+        },
+        {
+          mockRemovalFailure: 'rm refused ./ai-run-media-10450046',
+          params: {
+            aiRunId: 10450046,
+          },
+          label: 'a removal that threw text',
+        },
+      ]
+
+      test.each(cases)('label: $label', async ({
+        mockRemovalFailure,
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const removeWorkspace = jest.fn()
+          .mockRejectedValue(mockRemovalFailure)
+        jest.spyOn(worker, 'createAiRunMediaWorkspace')
+          .mockReturnValue(/** @type {*} */ ({
+            removeWorkspace,
+          }))
+
+        const actual = await worker.removeAiRunMediaWorkspace(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#onJobFailed()', () => {
+    /*
+     * The third site. BullMQ hands this handler whatever the delivery rejected with, so a delivery
+     * that rejected with null used to fault the handler the queue calls.
+     */
+    describe('should record nothing for a delivery that failed with no class', () => {
+      const cases = [
+        {
+          params: {
+            jobModel: {},
+            error: null,
+            previousStatus: 'active',
+          },
+        },
+        {
+          params: {
+            jobModel: {},
+            error: 'the delivery rejected with text',
+            previousStatus: 'waiting',
+          },
+        },
+      ]
+
+      test.each(cases)('previousStatus: $params.previousStatus', ({
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.onJobFailed(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#onWorkerError()', () => {
+    /*
+     * The fourth site. This one is the queue connection failing rather than a run failing, and the
+     * value it hands over is the driver's rather than this service's.
+     */
+    describe('should record nothing for a worker error with no class', () => {
+      const cases = [
+        {
+          params: {
+            error: null,
+          },
+          label: 'a worker error of null',
+        },
+        {
+          params: {
+            error: 'the queue connection dropped',
+          },
+          label: 'a worker error thrown as text',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.onWorkerError(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})

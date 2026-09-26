@@ -14,8 +14,39 @@ import AiRunKeyInspector from '../aiRun/AiRunKeyInspector.js'
 const WORKSPACE_DIRECTORY_PREFIX = 'ai-run-media-'
 const MEDIUM_FILE_PREFIX = 'medium-'
 
+/*
+ * The permissions the workspace directory and each file in it are created under: the owner alone,
+ * and nobody else at all.
+ *
+ * The temporary directory of a machine is shared ground. Every local account can read it, and the
+ * files in it are a caller's photographs - personal data under the non-functional section - so a
+ * file created under the process's umask, which is commonly `644`, is one every account on that
+ * host can read for the length of the run. These two numbers are what the file system is asked
+ * for; what it does with them is the platform's, and the class comment says where that stops.
+ */
+const WORKSPACE_DIRECTORY_MODE = 0o700
+const MEDIUM_FILE_MODE = 0o600
+
+/*
+ * The permission bits belonging to anybody but the owner.
+ *
+ * An existing directory is measured against this rather than against `0o700` exactly, because a
+ * directory this process created and then had its mode tightened further is still its own.
+ */
+const PERMISSIONS_BEYOND_OWNER = 0o077
+
+/*
+ * What the file system answers with when a path is already taken.
+ *
+ * `mkdir` is asked without `recursive`, so a path already taken is answered with this code rather
+ * than with success: it is the one answer that says "somebody got here first", and that has to be
+ * examined rather than adopted.
+ */
+const EXISTING_PATH_ERROR_CODE = 'EEXIST'
+
 const UNREADABLE_AI_RUN_ID_MESSAGE = 'refused a run that is not an id'
 const UNREADABLE_AI_RUN_MEDIA_ID_MESSAGE = 'refused a medium that is not an id'
+const FOREIGN_WORKSPACE_MESSAGE = 'refused a workspace path this process does not own'
 
 /**
  * Holds the temporary copies of one run's fetched files, and removes them when the run ends.
@@ -26,6 +57,34 @@ const UNREADABLE_AI_RUN_MEDIA_ID_MESSAGE = 'refused a medium that is not an id'
  * temporary directory, never into a column, never under the repository, and never anywhere a
  * retention sweep would have to be taught about. The sixth acceptance criterion is a property of
  * where the file is put, and the fifth is `#removeWorkspace()` being called when the run ends.
+ * Both of those are properties of the directory the bytes went into, which is why the paragraph
+ * below is part of the same promise rather than a hardening note beside it.
+ *
+ * **The path is predictable, so the directory is claimed rather than assumed.** It has to be
+ * predictable: `#removeWorkspace()` is called from a `finally` holding nothing but the run's id,
+ * and a random suffix would have to be remembered somewhere that survives a process restart, which
+ * is nowhere. What follows from that is that any local account on the worker host can work out the
+ * next directory names and create them first. So the directory is created with `mkdir` **without**
+ * `recursive` - which answers `EEXIST` for a path already taken rather than adopting it - and a
+ * path that was already there is then examined: it must be a directory in its own right, which is
+ * what refuses a symbolic link or a junction pointing somewhere else, and where the platform names
+ * a user it must be this process's own with no permission granted beyond the owner. A path that
+ * fails that is refused by exception, and the run fails, rather than the run writing a caller's
+ * photograph into a directory somebody else chose and `#removeWorkspace()` unlinking the link
+ * while the bytes stay on disk.
+ *
+ * **Each file is created for the owner alone, and never over a file already there.** `0o600` is
+ * asked for rather than left to the process's umask, and the write is made with `wx`, which fails
+ * on an existing path. The second half is the other end of the same hole: a file pre-created at a
+ * predictable path would otherwise be truncated and rewritten with the caller's bytes, whatever it
+ * was and whoever owned it. The cost is that one medium is written once per run - a second write
+ * of the same medium is refused rather than replacing the first - and no caller in this version
+ * writes one twice.
+ *
+ * **The root is trusted and not created.** `os.tmpdir()` is the machine's own answer to where
+ * temporary files go, and nothing here builds a path to it: `mkdir` is asked for one directory,
+ * so a root that is not there is an error and not a tree this class creates. A deployment that
+ * points the root somewhere else has made that path part of the promise above.
  *
  * **One directory per run, removed whole.** Removing the directory rather than the files inside it
  * is what makes the fifth criterion hold for a run that failed halfway: a run that fetched four of
@@ -46,12 +105,29 @@ const UNREADABLE_AI_RUN_MEDIA_ID_MESSAGE = 'refused a medium that is not an id'
  * removed, and that is raised rather than swallowed, because it is a fetched file still sitting on
  * a disk after the run that fetched it ended.
  *
- * **What stays open, stated rather than claimed closed.** The workspace lives for as long as the
- * process lets it: a worker killed between the fetch and the removal leaves the directory behind,
- * and nothing here sweeps one left by a process that is gone. The operating system's own temporary
- * directory is the mitigation rather than a plan - it is the one place a machine is expected to
- * clear - and a deployment that keeps its worker's temporary directory across reboots has a file
- * outliving its run with nothing in this service to say so.
+ * **What stays open, stated rather than claimed closed.** Three things.
+ *
+ * The workspace lives for as long as the process lets it: a worker killed between the fetch and
+ * the removal leaves the directory behind, and nothing here sweeps one left by a process that is
+ * gone. The operating system's own temporary directory is the mitigation rather than a plan - it
+ * is the one place a machine is expected to clear - and a deployment that keeps its worker's
+ * temporary directory across reboots has a file outliving its run with nothing in this service to
+ * say so.
+ *
+ * The ownership half of the claim check is only as good as the platform's answer. `process.getuid`
+ * exists on POSIX and not on Windows, and where it is absent an existing *directory* is accepted
+ * on the strength of its being a directory alone - so on such a platform a plain directory
+ * pre-created by another local account is still adopted. The link case is refused everywhere,
+ * because that one is answered by `lstat` rather than by a user id. A worker running where the
+ * platform names no user therefore has the weaker of the two checks, and this says which one it
+ * has lost rather than leaving a reader to assume both are kept.
+ *
+ * The mode numbers are requests, and a platform answers them or it does not. Where user ids exist
+ * the mode is both asked for and read back, so a directory granting anything beyond its owner is
+ * refused; where they do not, the platform reports the same bits whatever was asked for and
+ * neither the request nor a check of it would mean anything, so neither is made. What is
+ * load-bearing on every platform is the pair of refusals - an existing path that is not a
+ * directory, and an existing file - rather than the bits.
  */
 export default class AiRunMediaWorkspace {
   /**
@@ -120,6 +196,29 @@ export default class AiRunMediaWorkspace {
   }
 
   /**
+   * get: the running process, which answers the user this worker runs as.
+   *
+   * @returns {typeof process} The process.
+   */
+  static get nodeProcess () {
+    return process
+  }
+
+  /**
+   * Extract the user id this process runs as, where the platform names one.
+   *
+   * `process.getuid` is POSIX's and is absent on Windows, so the absence is answered as null rather
+   * than as a user id nobody has - which is what lets the caller say plainly which half of the
+   * claim check a platform without user ids is left with.
+   *
+   * @returns {number | null} The user id, or null where the platform names none.
+   */
+  static extractOwnUserId () {
+    return this.nodeProcess.getuid?.()
+      ?? null
+  }
+
+  /**
    * Build the directory every run's workspace is made under.
    *
    * @returns {string} The path of the machine's own temporary directory.
@@ -147,20 +246,127 @@ export default class AiRunMediaWorkspace {
   }
 
   /**
-   * Create the directory this run's fetched files live in.
+   * Create the directory this run's fetched files live in, and claim it.
+   *
+   * The two steps are one promise and are written as two methods because they answer two
+   * questions: the first makes the directory where there is none, and the second says whether what
+   * is at the path is this process's own directory - which is the question a predictable path
+   * makes worth asking, and which `mkdir` with `recursive` answered by never raising it.
+   *
+   * It is asked again on every write rather than once per run, because this class holds no memory
+   * of having run it and a second instance of it for the same run holds none either. That is what
+   * makes an existing path something to examine rather than something to refuse.
    *
    * @returns {Promise<string>} The path of the directory.
-   * @throws {Error} When the run is not an id.
+   * @throws {Error} When the run is not an id, when the path is taken by something this process
+   * does not own, or when the directory could not be created.
    * @public
    */
   async createWorkspace () {
     const workspacePath = this.buildWorkspacePath()
 
-    await this.Ctor.fsPromises.mkdir(workspacePath, {
-      recursive: true,
+    await this.createWorkspaceDirectory({
+      workspacePath,
+    })
+
+    await this.confirmOwnWorkspaceDirectory({
+      workspacePath,
     })
 
     return workspacePath
+  }
+
+  /**
+   * Create the directory, and let one that is already there stand for the check that follows.
+   *
+   * `recursive` is deliberately not asked for. It would build every missing parent, and - the part
+   * that matters here - it answers success for a path that already exists, whatever is at it and
+   * whoever made it. Without it an existing path is `EEXIST`, which is a fact the caller can act
+   * on. Every other failure is raised as it arrived.
+   *
+   * @param {{
+   *   workspacePath: string
+   * }} params - Parameters.
+   * @returns {Promise<string>} The path of the directory.
+   * @throws {Error} When the directory could not be created for any reason but an existing path.
+   * @public
+   */
+  async createWorkspaceDirectory ({
+    workspacePath,
+  }) {
+    try {
+      await this.Ctor.fsPromises.mkdir(workspacePath, {
+        mode: WORKSPACE_DIRECTORY_MODE,
+      })
+
+      return workspacePath
+    } catch (error) {
+      if (error?.code !== EXISTING_PATH_ERROR_CODE) {
+        throw error
+      }
+
+      return workspacePath
+    }
+  }
+
+  /**
+   * Confirm what is at the path is this process's own directory, and refuse what is not.
+   *
+   * @param {{
+   *   workspacePath: string
+   * }} params - Parameters.
+   * @returns {Promise<string>} The path of the directory.
+   * @throws {Error} When the path is taken by something this process does not own.
+   * @public
+   */
+  async confirmOwnWorkspaceDirectory ({
+    workspacePath,
+  }) {
+    const workspaceStatus = await this.Ctor.fsPromises.lstat(workspacePath)
+
+    if (
+      !this.isOwnPrivateDirectory({
+        workspaceStatus,
+      })
+    ) {
+      throw new Error(`${this.Ctor.name}#confirmOwnWorkspaceDirectory() ${FOREIGN_WORKSPACE_MESSAGE}`)
+    }
+
+    return workspacePath
+  }
+
+  /**
+   * Check whether an entry is a directory this process alone can reach.
+   *
+   * The status is `lstat`'s and never `stat`'s, which is the whole of the first test: `stat`
+   * follows a symbolic link and would answer for the directory at the far end of one, so a link
+   * planted at this path would be called a directory and the bytes would be written wherever it
+   * pointed. `lstat` answers for the link itself, and a link is not a directory.
+   *
+   * @param {{
+   *   workspaceStatus: import('node:fs').Stats
+   * }} params - Parameters.
+   * @returns {boolean} Whether it is this process's own private directory.
+   * @public
+   */
+  isOwnPrivateDirectory ({
+    workspaceStatus,
+  }) {
+    if (!workspaceStatus.isDirectory()) {
+      return false
+    }
+
+    const ownUserId = this.Ctor.extractOwnUserId()
+
+    if (ownUserId === null) {
+      return true
+    }
+
+    if (workspaceStatus.uid !== ownUserId) {
+      return false
+    }
+
+    return (workspaceStatus.mode & PERMISSIONS_BEYOND_OWNER) === 0
   }
 
   /**
@@ -187,12 +393,19 @@ export default class AiRunMediaWorkspace {
   /**
    * Write the temporary copy of one fetched file.
    *
+   * **`wx` and `0o600` are the file's half of what the directory above promises.** `wx` creates
+   * the file or fails; it never opens one that is already there, so a file somebody pre-created at
+   * this predictable path is refused rather than truncated and filled with a caller's photograph.
+   * `0o600` asks for the owner alone rather than leaving the mode to the process's umask, which on
+   * a common server grants every local account a read of it for the length of the run.
+   *
    * @param {{
    *   aiRunMediaId: *
    *   bytes: Buffer
    * }} params - Parameters.
    * @returns {Promise<string>} The path the copy was written to.
-   * @throws {Error} When the run or the medium is not an id.
+   * @throws {Error} When the run or the medium is not an id, when the workspace is not this
+   * process's own, or when a file is already at the path.
    * @public
    */
   async writeMediumFile ({
@@ -205,7 +418,10 @@ export default class AiRunMediaWorkspace {
 
     await this.createWorkspace()
 
-    await this.Ctor.fsPromises.writeFile(mediumFilePath, bytes)
+    await this.Ctor.fsPromises.writeFile(mediumFilePath, bytes, {
+      mode: MEDIUM_FILE_MODE,
+      flag: 'wx',
+    })
 
     return mediumFilePath
   }

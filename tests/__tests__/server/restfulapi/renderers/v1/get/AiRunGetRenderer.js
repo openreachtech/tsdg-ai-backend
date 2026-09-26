@@ -4,15 +4,34 @@ import {
   BaseGetRenderer,
 } from '@openreachtech/renchan'
 
-const QUEUED_RUN_KEY = '1111111111111111111111111111111111111111111111111111111111111111'
-const RUNNING_RUN_KEY = '2222222222222222222222222222222222222222222222222222222222222222'
-const SUCCEEDED_RUN_KEY = '3333333333333333333333333333333333333333333333333333333333333333'
-const FAILED_RUN_KEY = '4444444444444444444444444444444444444444444444444444444444444444'
-const CANCELED_RUN_KEY = '5555555555555555555555555555555555555555555555555555555555555555'
+import AiRunResponseBuilder from '../../../../../../../app/aiRun/AiRunResponseBuilder.js'
+
+/*
+ * The route section 12 declares, read end to end against the development seeders.
+ *
+ * **Nothing is mocked, and nothing is written.** Every run below is `#run-contract`'s seeded row,
+ * every step is `#run-record`'s and every model call is `#provider-layer`'s, so the body asserted
+ * here is one this application really assembled out of five tables through the real
+ * `AiRunResponseBuilder`. Stubbing the builder would have proved that the renderer calls something
+ * and nothing about what a client reads.
+ *
+ * **Three columns no seeded run carries are why some fields read null on every case** —
+ * `engine_label`, `result_body` and `failure_parameters`. `#run-contract`'s seeder writes none of
+ * the three on any row, so `engine.label` is null throughout, `result` is null even on the
+ * succeeded runs, and the failed run's `failure.parameters` is null. The non-null paths are
+ * covered against a run entity written out by hand in
+ * `tests/__tests__/app/aiRun/AiRunResponseBuilder.js`, where the builder's own describes live. The
+ * gap belongs to the fixture and is reported rather than papered over: it is not weakened here by
+ * asserting something looser than what the rows really answer.
+ *
+ * **The client is a plain object.** `AppRestfulApiContext` resolves a client from a signed request,
+ * which a renderer test has no request to present; the renderer reads one field off it, and that
+ * field is what the cases supply. The resolution itself has its own test file.
+ */
 
 describe('AiRunGetRenderer', () => {
-  describe('super class', () => {
-    test('to be instance of BaseGetRenderer', () => {
+  describe('inheritance', () => {
+    test('should be correct class', () => {
       const received = AiRunGetRenderer.prototype
 
       expect(received)
@@ -24,13 +43,11 @@ describe('AiRunGetRenderer', () => {
 describe('AiRunGetRenderer', () => {
   describe('.get:routePath', () => {
     describe('when called as is', () => {
-      test('should declare the route the contract fixes', () => {
-        const expected = '/ai-runs/:runKey'
+      test('should be the route the contract fixes', () => {
+        const received = AiRunGetRenderer.routePath
 
-        const actual = AiRunGetRenderer.routePath
-
-        expect(actual)
-          .toBe(expected)
+        expect(received)
+          .toBe('/ai-runs/:runKey')
       })
     })
   })
@@ -39,28 +56,61 @@ describe('AiRunGetRenderer', () => {
 describe('AiRunGetRenderer', () => {
   describe('.get:method', () => {
     describe('when called as is', () => {
-      test('should declare the HTTP method of the route', () => {
-        const expected = 'get'
+      test('should be the HTTP method of the route', () => {
+        const received = AiRunGetRenderer.method
 
-        const actual = AiRunGetRenderer.method
-
-        expect(actual)
-          .toBe(expected)
+        expect(received)
+          .toBe('get')
       })
     })
   })
 })
 
 describe('AiRunGetRenderer', () => {
-  describe('.get:fallbackCannedRunKey', () => {
+  describe('.get:errorStructureHash', () => {
+    /*
+     * One refusal, and the whole of the vocabulary. A second entry here would be a second thing a
+     * caller could tell apart, which is what the ninth criterion forbids.
+     */
     describe('when called as is', () => {
-      test('should be the succeeded canned run key', () => {
-        const expected = SUCCEEDED_RUN_KEY
+      test('should declare the one refusal this route answers with', () => {
+        const expected = {
+          AiRunNotFound: {
+            statusCode: 404,
+            errorMessage: 'AI run not found',
+          },
+        }
 
-        const actual = AiRunGetRenderer.fallbackCannedRunKey
+        const received = AiRunGetRenderer.errorStructureHash
 
-        expect(actual)
-          .toBe(expected)
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRunGetRenderer', () => {
+  describe('.get:AiRunResponseBuilderCtor', () => {
+    describe('when called as is', () => {
+      test('should be the builder both callers share', () => {
+        const received = AiRunGetRenderer.AiRunResponseBuilderCtor
+
+        expect(received)
+          .toBe(AiRunResponseBuilder) // same reference
+      })
+    })
+  })
+})
+
+describe('AiRunGetRenderer', () => {
+  describe('.createAiRunResponseBuilder()', () => {
+    describe('when called as is', () => {
+      test('should be instance of AiRunResponseBuilder', () => {
+        const received = AiRunGetRenderer.createAiRunResponseBuilder()
+
+        expect(received)
+          .toBeInstanceOf(AiRunResponseBuilder)
       })
     })
   })
@@ -68,241 +118,164 @@ describe('AiRunGetRenderer', () => {
 
 describe('AiRunGetRenderer', () => {
   describe('#get:Ctor', () => {
-    describe('when reached through an instance', () => {
-      test('should be own class', () => {
-        const renderer = AiRunGetRenderer.create()
+    const cases = [
+      {
+        tally: AiRunGetRenderer,
+      },
+      {
+        tally: class AlphaAiRunGetRenderer extends AiRunGetRenderer {},
+      },
+      {
+        tally: class BetaAiRunGetRenderer extends AiRunGetRenderer {},
+      },
+    ]
 
-        const actual = renderer.Ctor
+    test.each(cases)('Ctor: $tally.name', ({
+      tally,
+    }) => {
+      const renderer = tally.create()
 
-        expect(actual)
-          .toBe(AiRunGetRenderer) // same reference
-      })
+      const received = renderer.Ctor
+
+      expect(received)
+        .toBe(tally) // same reference
     })
   })
 })
 
 describe('AiRunGetRenderer', () => {
   describe('#extractRunKey()', () => {
+    /*
+     * The third case is what the framework's path-parameter proxy answers for a key the path did
+     * not carry: null, never undefined.
+     */
     const cases = [
       {
-        params: {
+        input: {
           request: {
             pathParameterHash: {
-              runKey: SUCCEEDED_RUN_KEY,
+              runKey: 'run-key-10010004',
             },
           },
         },
-        expected: SUCCEEDED_RUN_KEY,
+        expected: 'run-key-10010004',
       },
       {
-        params: {
+        input: {
           request: {
             pathParameterHash: {
-              runKey: FAILED_RUN_KEY,
+              runKey: 'run-key-10010005',
             },
           },
         },
-        expected: FAILED_RUN_KEY,
+        expected: 'run-key-10010005',
       },
       {
-        params: {
+        input: {
           request: {
             pathParameterHash: {
-              runKey: 'a-run-key-this-stub-does-not-name',
+              runKey: null,
             },
           },
         },
-        expected: 'a-run-key-this-stub-does-not-name',
+        expected: null,
       },
     ]
 
-    test.each(cases)('runKey: $params.request.pathParameterHash.runKey', ({
-      params,
+    test.each(cases)('runKey: $input.request.pathParameterHash.runKey', ({
+      input,
       expected,
     }) => {
       const renderer = AiRunGetRenderer.create()
 
-      const actual = renderer.extractRunKey(params)
+      const received = renderer.extractRunKey(input)
 
-      expect(actual)
+      expect(received)
         .toBe(expected)
     })
   })
 })
 
 describe('AiRunGetRenderer', () => {
-  describe('#extractCannedRunKey()', () => {
-    describe('when the run key names a canned run', () => {
+  describe('#extractExpandsSteps()', () => {
+    /*
+     * `steps` is the one expansion this version answers to, so the truthy side has exactly one
+     * value to carry — the contract names no second one.
+     */
+    describe('should be truthy', () => {
       const cases = [
         {
-          params: {
-            runKey: QUEUED_RUN_KEY,
+          input: {
+            query: {
+              expand: 'steps',
+            },
           },
-          expected: QUEUED_RUN_KEY,
-        },
-        {
-          params: {
-            runKey: RUNNING_RUN_KEY,
-          },
-          expected: RUNNING_RUN_KEY,
-        },
-        {
-          params: {
-            runKey: SUCCEEDED_RUN_KEY,
-          },
-          expected: SUCCEEDED_RUN_KEY,
-        },
-        {
-          params: {
-            runKey: FAILED_RUN_KEY,
-          },
-          expected: FAILED_RUN_KEY,
-        },
-        {
-          params: {
-            runKey: CANCELED_RUN_KEY,
-          },
-          expected: CANCELED_RUN_KEY,
         },
       ]
 
-      test.each(cases)('runKey: $params.runKey', ({
-        params,
-        expected,
+      test.each(cases)('expand: $input.query.expand', ({
+        input,
       }) => {
         const renderer = AiRunGetRenderer.create()
 
-        const actual = renderer.extractCannedRunKey(params)
+        const received = renderer.extractExpandsSteps(input)
 
-        expect(actual)
-          .toBe(expected)
+        expect(received)
+          .toBeTruthy()
       })
     })
 
-    describe('when the run key names no canned run', () => {
+    describe('should be falsy', () => {
       const cases = [
         {
-          params: {
-            runKey: 'a-run-key-this-stub-does-not-name',
-          },
-          expected: SUCCEEDED_RUN_KEY,
-        },
-        {
-          params: {
-            runKey: 'toString',
-          },
-          expected: SUCCEEDED_RUN_KEY,
-        },
-        {
-          params: {
-            runKey: null,
-          },
-          expected: SUCCEEDED_RUN_KEY,
-        },
-      ]
-
-      test.each(cases)('runKey: $params.runKey', ({
-        params,
-        expected,
-      }) => {
-        const renderer = AiRunGetRenderer.create()
-
-        const actual = renderer.extractCannedRunKey(params)
-
-        expect(actual)
-          .toBe(expected)
-      })
-    })
-  })
-})
-
-describe('AiRunGetRenderer', () => {
-  describe('#buildStepsExpansion()', () => {
-    describe('when steps were asked for', () => {
-      const cases = [
-        {
-          params: {
-            cannedRunKey: QUEUED_RUN_KEY,
-            expand: 'steps',
-          },
-          expected: {
-            steps: [],
+          input: {
+            query: {
+              // expand: not sent
+            },
           },
         },
         {
-          params: {
-            cannedRunKey: FAILED_RUN_KEY,
-            expand: 'steps',
+          input: {
+            query: {
+              expand: 'rejections',
+            },
           },
-          expected: {
-            steps: [
-              {
-                stepIndex: 1,
-                stepName: 'select-suggestible-fields',
-                stepCategoryName: 'code',
-                outcomeCode: 'succeeded',
-                reasonCode: null,
-                startedAt: new Date('2026-01-07T08:30:00.000Z'),
-                finishedAt: new Date('2026-01-07T08:30:01.000Z'),
-              },
-              {
-                stepIndex: 2,
-                stepName: 'fetch-asset-media',
-                stepCategoryName: 'code',
-                outcomeCode: 'abandoned',
-                reasonCode: 'MEDIA_LIMIT_EXCEEDED',
-                startedAt: new Date('2026-01-07T08:30:02.000Z'),
-                finishedAt: new Date('2026-01-07T08:30:03.000Z'),
-              },
-            ],
+        },
+        {
+          input: {
+            query: {
+              expand: 'Steps', // the value is answered to as sent, and never case-folded
+            },
+          },
+        },
+        {
+          input: {
+            query: {
+              expand: '',
+            },
+          },
+        },
+        {
+          input: {
+            query: {
+              expand: [ // what a repeated query parameter arrives as
+                'steps',
+                'steps',
+              ],
+            },
           },
         },
       ]
 
-      test.each(cases)('cannedRunKey: $params.cannedRunKey', ({
-        params,
-        expected,
+      test.each(cases)('expand: $input.query.expand', ({
+        input,
       }) => {
         const renderer = AiRunGetRenderer.create()
 
-        const actual = renderer.buildStepsExpansion(params)
+        const received = renderer.extractExpandsSteps(input)
 
-        expect(actual)
-          .toEqual(expected)
-      })
-    })
-
-    describe('when steps were not asked for', () => {
-      const cases = [
-        {
-          params: {
-            cannedRunKey: SUCCEEDED_RUN_KEY,
-            expand: 'usage',
-          },
-        },
-        {
-          params: {
-            cannedRunKey: SUCCEEDED_RUN_KEY,
-            expand: 'toString',
-          },
-        },
-        {
-          params: {
-            cannedRunKey: SUCCEEDED_RUN_KEY,
-            expand: 'STEPS',
-          },
-        },
-      ]
-
-      test.each(cases)('expand: $params.expand', ({
-        params,
-      }) => {
-        const renderer = AiRunGetRenderer.create()
-
-        const actual = renderer.buildStepsExpansion(params)
-
-        expect(actual)
-          .toEqual({})
+        expect(received)
+          .toBeFalsy()
       })
     })
   })
@@ -310,573 +283,694 @@ describe('AiRunGetRenderer', () => {
 
 describe('AiRunGetRenderer', () => {
   describe('#render()', () => {
-    describe('when no expansion was asked for', () => {
+    /*
+     * The fourth acceptance criterion of section 12: reading a run back by its key answers the
+     * body the terminal callback carries. All five values of `statusName` are here, because a
+     * route that answered one of them would leave the other four met for the first time by
+     * whoever wired against it.
+     *
+     * The sixth criterion is the failed run: a reason code and its parameters, and no result. The
+     * seventh is the canceled run: two model calls and the tokens they spent before the stop,
+     * rather than nothing.
+     *
+     * No case carries `steps`. The whole response is compared, so the absence of the key is what
+     * is asserted — "a response that did not ask for the trace carries none" is the second half of
+     * the fifth criterion.
+     */
+    describe('when the client owns the run', () => {
       const cases = [
         {
-          params: {
+          input: {
             query: {},
+            context: {
+              apiClientId: 10000001,
+            },
             request: {
               pathParameterHash: {
-                runKey: QUEUED_RUN_KEY,
+                runKey: 'run-key-10010002',
               },
             },
           },
           expected: {
-            runKey: QUEUED_RUN_KEY,
-            runCategoryName: 'asset-media-extraction',
-            externalRef: expect.any(String),
-            subjectLabel: expect.any(String),
-            correlationId: expect.any(String),
-            statusName: 'queued',
-            engine: {
-              label: null,
-              confidenceMethodVersion: null,
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010002',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010002',
+              subjectLabel: 'Subject label of run 10010002',
+              correlationId: 'correlation-id-10010002',
+              statusName: 'queued',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 0,
+                inputTokenCount: 0,
+                outputTokenCount: 0,
+              },
+              result: null,
+              failure: null,
             },
-            usage: {
-              modelCallCount: 0,
-              inputTokenCount: 0,
-              outputTokenCount: 0,
-            },
-            result: null,
-            failure: null,
+            error: null,
           },
         },
         {
-          params: {
+          input: {
             query: {},
+            context: {
+              apiClientId: 10000001,
+            },
             request: {
               pathParameterHash: {
-                runKey: RUNNING_RUN_KEY,
+                runKey: 'run-key-10010001',
               },
             },
           },
           expected: {
-            runKey: RUNNING_RUN_KEY,
-            runCategoryName: 'asset-media-extraction',
-            externalRef: expect.any(String),
-            subjectLabel: expect.any(String),
-            correlationId: expect.any(String),
-            statusName: 'running',
-            engine: {
-              label: expect.any(String),
-              confidenceMethodVersion: null,
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010001',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010001',
+              subjectLabel: 'Subject label of run 10010001',
+              correlationId: 'correlation-id-10010001',
+              statusName: 'running',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 1,
+                inputTokenCount: 1609,
+                outputTokenCount: 199,
+              },
+              result: null,
+              failure: null,
             },
-            usage: {
-              modelCallCount: 1,
-              inputTokenCount: 4820,
-              outputTokenCount: 310,
-            },
-            result: null,
-            failure: null,
+            error: null,
           },
         },
         {
-          params: {
+          input: {
             query: {},
+            context: {
+              apiClientId: 10000001,
+            },
             request: {
               pathParameterHash: {
-                runKey: SUCCEEDED_RUN_KEY,
+                runKey: 'run-key-10010004',
               },
             },
           },
           expected: {
-            runKey: SUCCEEDED_RUN_KEY,
-            runCategoryName: 'asset-media-extraction',
-            externalRef: expect.any(String),
-            subjectLabel: expect.any(String),
-            correlationId: expect.any(String),
-            statusName: 'succeeded',
-            engine: {
-              label: expect.any(String),
-              confidenceMethodVersion: expect.any(String),
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010004',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010004',
+              subjectLabel: 'Subject label of run 10010004',
+              correlationId: 'correlation-id-10010004',
+              statusName: 'succeeded',
+              engine: {
+                label: null,
+                confidenceMethodVersion: 'confidence-v1.0.0',
+              },
+              usage: {
+                modelCallCount: 3,
+                inputTokenCount: 14406, // 4801 + 4802 + 4803
+                outputTokenCount: 966, // 311 + 322 + 333
+              },
+              result: null,
+              failure: null,
             },
-            usage: {
-              modelCallCount: 3,
-              inputTokenCount: 14650,
-              outputTokenCount: 1284,
-            },
-            result: expect.objectContaining({
-              fields: expect.any(Array),
-              missingFieldPaths: expect.any(Array),
-              unreadableMediaKeys: expect.any(Array),
-              mediaSignature: expect.any(String),
-            }),
-            failure: null,
+            error: null,
           },
         },
         {
-          params: {
+          input: {
             query: {},
+            context: {
+              apiClientId: 10000001,
+            },
             request: {
               pathParameterHash: {
-                runKey: FAILED_RUN_KEY,
+                runKey: 'run-key-10010005',
               },
             },
           },
           expected: {
-            runKey: FAILED_RUN_KEY,
-            runCategoryName: 'asset-media-extraction',
-            externalRef: expect.any(String),
-            subjectLabel: expect.any(String),
-            correlationId: expect.any(String),
-            statusName: 'failed',
-            engine: {
-              label: expect.any(String),
-              confidenceMethodVersion: null,
-            },
-            usage: {
-              modelCallCount: 0,
-              inputTokenCount: 0,
-              outputTokenCount: 0,
-            },
-            result: null,
-            failure: {
-              reasonCode: 'MEDIA_LIMIT_EXCEEDED',
-              parameters: {
-                limitName: 'mediaCount',
-                limitValue: 12,
-                declaredValue: 17,
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010005',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010005',
+              subjectLabel: 'Subject label of run 10010005',
+              correlationId: 'correlation-id-10010005',
+              statusName: 'failed',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 0,
+                inputTokenCount: 0,
+                outputTokenCount: 0,
+              },
+              result: null,
+              failure: {
+                reasonCode: 'MEDIA_UNREADABLE',
+                parameters: null,
               },
             },
+            error: null,
           },
         },
         {
-          params: {
+          input: {
             query: {},
+            context: {
+              apiClientId: 10000001,
+            },
             request: {
               pathParameterHash: {
-                runKey: CANCELED_RUN_KEY,
+                runKey: 'run-key-10010006',
               },
             },
           },
           expected: {
-            runKey: CANCELED_RUN_KEY,
-            runCategoryName: 'asset-media-extraction',
-            externalRef: expect.any(String),
-            subjectLabel: expect.any(String),
-            correlationId: expect.any(String),
-            statusName: 'canceled',
-            engine: {
-              label: expect.any(String),
-              confidenceMethodVersion: null,
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010006',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010006',
+              subjectLabel: 'Subject label of run 10010006',
+              correlationId: 'correlation-id-10010006',
+              statusName: 'canceled',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 2,
+                inputTokenCount: 5413, // 2706 + 2707
+                outputTokenCount: 343, // 166 + 177
+              },
+              result: null,
+              failure: null,
             },
-            usage: {
-              modelCallCount: 2,
-              inputTokenCount: 9240,
-              outputTokenCount: 617,
-            },
-            result: null,
-            failure: null,
+            error: null,
           },
         },
       ]
 
-      test.each(cases)('runKey: $params.request.pathParameterHash.runKey', async ({
-        params,
+      test.each(cases)('runKey: $input.request.pathParameterHash.runKey', async ({
+        input,
         expected,
       }) => {
         const renderer = AiRunGetRenderer.create()
 
-        const actual = await renderer.render(params)
+        const received = await renderer.render(input)
 
-        expect(actual.content)
+        expect(received)
           .toEqual(expected)
       })
     })
 
-    describe('to answer with the status code the contract fixes', () => {
+    /*
+     * The fifth criterion's first half: asking for the trace adds it to that same response.
+     *
+     * The seven steps of run 10010004 are the whole of its trace, and each carries the seven
+     * fields the contract's shape declares — `rejections` is absent although two of the seeded
+     * rows hold it, which is what keeps the internal decision trace off a client surface. A run
+     * that has begun nothing answers the same key holding no entry, rather than no key.
+     */
+    describe('when the step trace was asked for', () => {
       const cases = [
         {
-          params: {
-            query: {},
-            request: {
-              pathParameterHash: {
-                runKey: SUCCEEDED_RUN_KEY,
-              },
+          input: {
+            query: {
+              expand: 'steps',
             },
-          },
-          expected: 200,
-        },
-        {
-          params: {
-            query: {},
-            request: {
-              pathParameterHash: {
-                runKey: FAILED_RUN_KEY,
-              },
+            context: {
+              apiClientId: 10000001,
             },
-          },
-          expected: 200,
-        },
-        {
-          params: {
-            query: {},
             request: {
               pathParameterHash: {
-                runKey: CANCELED_RUN_KEY,
-              },
-            },
-          },
-          expected: 200,
-        },
-      ]
-
-      test.each(cases)('runKey: $params.request.pathParameterHash.runKey', async ({
-        params,
-        expected,
-      }) => {
-        const renderer = AiRunGetRenderer.create()
-
-        const actual = await renderer.render(params)
-
-        expect(actual.statusCode)
-          .toBe(expected)
-      })
-    })
-
-    describe('when the run key names no canned run', () => {
-      const cases = [
-        {
-          params: {
-            query: {},
-            request: {
-              pathParameterHash: {
-                runKey: 'a-run-key-this-stub-does-not-name',
-              },
-            },
-          },
-          expected: SUCCEEDED_RUN_KEY,
-        },
-        {
-          params: {
-            query: {},
-            request: {
-              pathParameterHash: {
-                runKey: 'another-run-key-this-stub-does-not-name',
-              },
-            },
-          },
-          expected: SUCCEEDED_RUN_KEY,
-        },
-      ]
-
-      test.each(cases)('runKey: $params.request.pathParameterHash.runKey', async ({
-        params,
-        expected,
-      }) => {
-        const renderer = AiRunGetRenderer.create()
-
-        const actual = await renderer.render(params)
-
-        expect(actual.content)
-          .toHaveProperty('runKey', expected)
-      })
-    })
-
-    describe('when the run succeeded', () => {
-      const cases = [
-        {
-          params: {
-            query: {},
-            request: {
-              pathParameterHash: {
-                runKey: SUCCEEDED_RUN_KEY,
+                runKey: 'run-key-10010004',
               },
             },
           },
           expected: {
-            fields: [
-              {
-                path: 'exterior.wallMaterial',
-                value: 'brick',
-                fieldStateName: 'extracted',
-                suggestionConfidence: 0.92,
-                reason: expect.any(String),
-                sourceMediaKeys: [
-                  'media-key-0001',
-                  'media-key-0002',
-                ],
-                agreement: {
-                  agreedReadingCount: 3,
-                  totalReadingCount: 3,
-                },
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010004',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010004',
+              subjectLabel: 'Subject label of run 10010004',
+              correlationId: 'correlation-id-10010004',
+              statusName: 'succeeded',
+              engine: {
+                label: null,
+                confidenceMethodVersion: 'confidence-v1.0.0',
               },
-              {
-                path: 'exterior.roofCondition',
-                value: 'weathered',
-                fieldStateName: 'suggested',
-                suggestionConfidence: 0.64,
-                reason: expect.any(String),
-                sourceMediaKeys: [
-                  'media-key-0002',
-                ],
-                agreement: {
-                  agreedReadingCount: 2,
-                  totalReadingCount: 3,
-                },
+              usage: {
+                modelCallCount: 3,
+                inputTokenCount: 14406, // 4801 + 4802 + 4803
+                outputTokenCount: 966, // 311 + 322 + 333
               },
-              {
-                path: 'interior.floorCount',
-                value: 2,
-                fieldStateName: 'derived',
-                suggestionConfidence: 0.71,
-                reason: expect.any(String),
-                sourceMediaKeys: [
-                  'media-key-0003',
-                ],
-                agreement: {
-                  agreedReadingCount: 2,
-                  totalReadingCount: 3,
+              result: null,
+              failure: null,
+              steps: [
+                {
+                  stepIndex: 1,
+                  stepName: 'filter-suggestible-fields',
+                  stepCategoryName: 'code',
+                  outcomeCode: 'fields-kept',
+                  reasonCode: null,
+                  startedAt: new Date('2026-09-12T01:01:01.001Z'),
+                  finishedAt: new Date('2026-09-12T01:01:01.101Z'),
                 },
+                {
+                  stepIndex: 2,
+                  stepName: 'fetch-media',
+                  stepCategoryName: 'code',
+                  outcomeCode: 'media-fetched',
+                  reasonCode: null,
+                  startedAt: new Date('2026-09-12T01:01:02.002Z'),
+                  finishedAt: new Date('2026-09-12T01:01:04.202Z'),
+                },
+                {
+                  stepIndex: 3,
+                  stepName: 'read-media',
+                  stepCategoryName: 'ai',
+                  outcomeCode: 'readings-returned',
+                  reasonCode: null,
+                  startedAt: new Date('2026-09-12T01:01:05.005Z'),
+                  finishedAt: new Date('2026-09-12T01:01:11.305Z'),
+                },
+                {
+                  stepIndex: 4,
+                  stepName: 'drop-disallowed-readings',
+                  stepCategoryName: 'code',
+                  outcomeCode: 'readings-dropped',
+                  reasonCode: 'schema-check-dropped-readings',
+                  startedAt: new Date('2026-09-12T01:01:12.012Z'),
+                  finishedAt: new Date('2026-09-12T01:01:12.412Z'),
+                },
+                {
+                  stepIndex: 5,
+                  stepName: 'settle-by-majority',
+                  stepCategoryName: 'code',
+                  outcomeCode: 'fields-settled',
+                  reasonCode: 'majority-not-reached-for-some-fields',
+                  startedAt: new Date('2026-09-12T01:01:13.013Z'),
+                  finishedAt: new Date('2026-09-12T01:01:13.513Z'),
+                },
+                {
+                  stepIndex: 6,
+                  stepName: 'score-confidence',
+                  stepCategoryName: 'code',
+                  outcomeCode: 'confidence-scored',
+                  reasonCode: null,
+                  startedAt: new Date('2026-09-12T01:01:14.014Z'),
+                  finishedAt: new Date('2026-09-12T01:01:14.614Z'),
+                },
+                {
+                  stepIndex: 7,
+                  stepName: 'await-owner-decision',
+                  stepCategoryName: 'human',
+                  outcomeCode: 'decision-recorded',
+                  reasonCode: null,
+                  startedAt: new Date('2026-09-12T01:01:15.015Z'),
+                  finishedAt: new Date('2026-09-12T01:01:45.715Z'),
+                },
+              ],
+            },
+            error: null,
+          },
+        },
+        {
+          input: {
+            query: {
+              expand: 'steps',
+            },
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010002',
               },
-            ],
-            missingFieldPaths: [
-              'interior.ceilingHeightMeters',
-            ],
-            unreadableMediaKeys: [
-              'media-key-0004',
-            ],
-            mediaSignature: expect.any(String),
+            },
+          },
+          expected: {
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010002',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010002',
+              subjectLabel: 'Subject label of run 10010002',
+              correlationId: 'correlation-id-10010002',
+              statusName: 'queued',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 0,
+                inputTokenCount: 0,
+                outputTokenCount: 0,
+              },
+              result: null,
+              failure: null,
+              steps: [],
+            },
+            error: null,
           },
         },
       ]
 
-      test.each(cases)('runKey: $params.request.pathParameterHash.runKey', async ({
-        params,
+      test.each(cases)('runKey: $input.request.pathParameterHash.runKey', async ({
+        input,
         expected,
       }) => {
         const renderer = AiRunGetRenderer.create()
 
-        const actual = await renderer.render(params)
+        const received = await renderer.render(input)
 
-        expect(actual.content.result)
+        expect(received)
           .toEqual(expected)
       })
     })
 
-    describe('when steps were asked for, and the run has not begun', () => {
+    /*
+     * The fifth criterion read from the other side: an expansion this version does not answer to
+     * adds nothing, and is not a refusal either. The run answers its ordinary body, `steps` key
+     * and all absent — including for the array a repeated `?expand=steps&expand=steps` arrives as,
+     * which is a value and not the string.
+     */
+    describe('when an expansion this version does not answer to was asked for', () => {
       const cases = [
         {
-          params: {
+          input: {
             query: {
-              expand: 'steps',
+              expand: 'rejections',
+            },
+            context: {
+              apiClientId: 10000001,
             },
             request: {
               pathParameterHash: {
-                runKey: QUEUED_RUN_KEY,
+                runKey: 'run-key-10010006',
               },
             },
+          },
+          expected: {
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010006',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010006',
+              subjectLabel: 'Subject label of run 10010006',
+              correlationId: 'correlation-id-10010006',
+              statusName: 'canceled',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 2,
+                inputTokenCount: 5413, // 2706 + 2707
+                outputTokenCount: 343, // 166 + 177
+              },
+              result: null,
+              failure: null,
+            },
+            error: null,
+          },
+        },
+        {
+          input: {
+            query: {
+              expand: [
+                'steps',
+                'steps',
+              ],
+            },
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010005',
+              },
+            },
+          },
+          expected: {
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010005',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010005',
+              subjectLabel: 'Subject label of run 10010005',
+              correlationId: 'correlation-id-10010005',
+              statusName: 'failed',
+              engine: {
+                label: null,
+                confidenceMethodVersion: null,
+              },
+              usage: {
+                modelCallCount: 0,
+                inputTokenCount: 0,
+                outputTokenCount: 0,
+              },
+              result: null,
+              failure: {
+                reasonCode: 'MEDIA_UNREADABLE',
+                parameters: null,
+              },
+            },
+            error: null,
           },
         },
       ]
 
-      test.each(cases)('runKey: $params.request.pathParameterHash.runKey', async ({
-        params,
-      }) => {
-        const renderer = AiRunGetRenderer.create()
-
-        const actual = await renderer.render(params)
-
-        expect(actual.content.steps)
-          .toHaveLength(0)
-      })
-    })
-
-    describe('when steps were asked for', () => {
-      const cases = [
-        {
-          params: {
-            query: {
-              expand: 'steps',
-            },
-            request: {
-              pathParameterHash: {
-                runKey: RUNNING_RUN_KEY,
-              },
-            },
-          },
-          expected: [
-            {
-              stepIndex: 1,
-              stepName: 'select-suggestible-fields',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-02-01T09:00:00.000Z'),
-              finishedAt: new Date('2026-02-01T09:00:01.000Z'),
-            },
-            {
-              stepIndex: 2,
-              stepName: 'fetch-asset-media',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-02-01T09:00:02.000Z'),
-              finishedAt: new Date('2026-02-01T09:00:09.000Z'),
-            },
-            {
-              stepIndex: 3,
-              stepName: 'read-asset-media',
-              stepCategoryName: 'ai',
-              outcomeCode: 'running',
-              reasonCode: null,
-              startedAt: new Date('2026-02-01T09:00:10.000Z'),
-              finishedAt: null,
-            },
-          ],
-        },
-        {
-          params: {
-            query: {
-              expand: 'steps',
-            },
-            request: {
-              pathParameterHash: {
-                runKey: SUCCEEDED_RUN_KEY,
-              },
-            },
-          },
-          expected: [
-            {
-              stepIndex: 1,
-              stepName: 'select-suggestible-fields',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-05T11:00:00.000Z'),
-              finishedAt: new Date('2026-01-05T11:00:01.000Z'),
-            },
-            {
-              stepIndex: 2,
-              stepName: 'fetch-asset-media',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-05T11:00:02.000Z'),
-              finishedAt: new Date('2026-01-05T11:00:14.000Z'),
-            },
-            {
-              stepIndex: 3,
-              stepName: 'read-asset-media',
-              stepCategoryName: 'ai',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-05T11:00:15.000Z'),
-              finishedAt: new Date('2026-01-05T11:00:48.000Z'),
-            },
-            {
-              stepIndex: 4,
-              stepName: 'validate-readings',
-              stepCategoryName: 'code',
-              outcomeCode: 'partially_settled',
-              reasonCode: 'reading_too_long',
-              startedAt: new Date('2026-01-05T11:00:49.000Z'),
-              finishedAt: new Date('2026-01-05T11:00:50.000Z'),
-            },
-            {
-              stepIndex: 5,
-              stepName: 'settle-fields',
-              stepCategoryName: 'code',
-              outcomeCode: 'partially_settled',
-              reasonCode: 'low_agreement',
-              startedAt: new Date('2026-01-05T11:00:51.000Z'),
-              finishedAt: new Date('2026-01-05T11:00:52.000Z'),
-            },
-            {
-              stepIndex: 6,
-              stepName: 'score-confidence',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-05T11:00:53.000Z'),
-              finishedAt: new Date('2026-01-05T11:00:54.000Z'),
-            },
-          ],
-        },
-        {
-          params: {
-            query: {
-              expand: 'steps',
-            },
-            request: {
-              pathParameterHash: {
-                runKey: FAILED_RUN_KEY,
-              },
-            },
-          },
-          expected: [
-            {
-              stepIndex: 1,
-              stepName: 'select-suggestible-fields',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-07T08:30:00.000Z'),
-              finishedAt: new Date('2026-01-07T08:30:01.000Z'),
-            },
-            {
-              stepIndex: 2,
-              stepName: 'fetch-asset-media',
-              stepCategoryName: 'code',
-              outcomeCode: 'abandoned',
-              reasonCode: 'MEDIA_LIMIT_EXCEEDED',
-              startedAt: new Date('2026-01-07T08:30:02.000Z'),
-              finishedAt: new Date('2026-01-07T08:30:03.000Z'),
-            },
-          ],
-        },
-        {
-          params: {
-            query: {
-              expand: 'steps',
-            },
-            request: {
-              pathParameterHash: {
-                runKey: CANCELED_RUN_KEY,
-              },
-            },
-          },
-          expected: [
-            {
-              stepIndex: 1,
-              stepName: 'select-suggestible-fields',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-09T14:15:00.000Z'),
-              finishedAt: new Date('2026-01-09T14:15:01.000Z'),
-            },
-            {
-              stepIndex: 2,
-              stepName: 'fetch-asset-media',
-              stepCategoryName: 'code',
-              outcomeCode: 'succeeded',
-              reasonCode: null,
-              startedAt: new Date('2026-01-09T14:15:02.000Z'),
-              finishedAt: new Date('2026-01-09T14:15:19.000Z'),
-            },
-            {
-              stepIndex: 3,
-              stepName: 'read-asset-media',
-              stepCategoryName: 'ai',
-              outcomeCode: 'abandoned',
-              reasonCode: null,
-              startedAt: new Date('2026-01-09T14:15:20.000Z'),
-              finishedAt: new Date('2026-01-09T14:15:33.000Z'),
-            },
-          ],
-        },
-      ]
-
-      test.each(cases)('runKey: $params.request.pathParameterHash.runKey', async ({
-        params,
+      test.each(cases)('runKey: $input.request.pathParameterHash.runKey', async ({
+        input,
         expected,
       }) => {
         const renderer = AiRunGetRenderer.create()
 
-        const actual = await renderer.render(params)
+        const received = await renderer.render(input)
 
-        expect(actual.content.steps)
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+
+    /*
+     * The ninth criterion, and the reason every case below carries the same `expected` object.
+     *
+     * Two of these run keys name a run that exists — 10010003 and 10010007 both belong to the
+     * rotating client — and two name nothing at all. All four are answered with one status, one
+     * body and one wording, so a caller holding another client's run key learns from the answer
+     * exactly what a caller holding a key nothing carries learns: nothing. A `403`, or a `404`
+     * worded differently, would confirm that somebody else's run exists.
+     *
+     * Asking for the trace does not change the refusal either: the read that would have loaded the
+     * run is the read that refused it, so there is nothing further to do or not do.
+     */
+    describe('when the client owns no run under that key', () => {
+      const cases = [
+        {
+          input: {
+            query: {},
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010003', // the rotating client's succeeded run
+              },
+            },
+          },
+          expected: {
+            statusCode: 404,
+            headers: {},
+            content: null,
+            error: {
+              message: 'AI run not found',
+            },
+          },
+        },
+        {
+          input: {
+            query: {
+              expand: 'steps',
+            },
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010007', // the rotating client's queued run
+              },
+            },
+          },
+          expected: {
+            statusCode: 404,
+            headers: {},
+            content: null,
+            error: {
+              message: 'AI run not found',
+            },
+          },
+        },
+        {
+          input: {
+            query: {},
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-that-no-run-carries',
+              },
+            },
+          },
+          expected: {
+            statusCode: 404,
+            headers: {},
+            content: null,
+            error: {
+              message: 'AI run not found',
+            },
+          },
+        },
+        {
+          input: {
+            query: {},
+            context: {
+              apiClientId: 10000001,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: null, // what the proxy answers when the path carried no key
+              },
+            },
+          },
+          expected: {
+            statusCode: 404,
+            headers: {},
+            content: null,
+            error: {
+              message: 'AI run not found',
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('runKey: $input.request.pathParameterHash.runKey', async ({
+        input,
+        expected,
+      }) => {
+        const renderer = AiRunGetRenderer.create()
+
+        const received = await renderer.render(input)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+
+    /*
+     * The same run key, read by the client that owns it and by the one that does not.
+     *
+     * The pair is what makes the ninth criterion an assertion rather than a claim: one case's
+     * answer carries the run and the other's carries the refusal, and the only thing that differs
+     * between the two calls is which client asked.
+     */
+    describe('when the same run key is read by two clients', () => {
+      const cases = [
+        {
+          input: {
+            query: {},
+            context: {
+              apiClientId: 10000002,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010003',
+              },
+            },
+          },
+          expected: {
+            statusCode: 200,
+            headers: {},
+            content: {
+              runKey: 'run-key-10010003',
+              runCategoryName: 'asset-media-extraction',
+              externalRef: 'external-ref-10010003',
+              subjectLabel: 'Subject label of run 10010003',
+              correlationId: 'correlation-id-10010003',
+              statusName: 'succeeded',
+              engine: {
+                label: null,
+                confidenceMethodVersion: 'confidence-v1.1.0',
+              },
+              usage: {
+                modelCallCount: 2,
+                inputTokenCount: 7809, // 3904 + 3905
+                outputTokenCount: 499, // 244 + 255
+              },
+              result: null,
+              failure: null,
+            },
+            error: null,
+          },
+        },
+        {
+          input: {
+            query: {},
+            context: {
+              apiClientId: 10000003,
+            },
+            request: {
+              pathParameterHash: {
+                runKey: 'run-key-10010003',
+              },
+            },
+          },
+          expected: {
+            statusCode: 404,
+            headers: {},
+            content: null,
+            error: {
+              message: 'AI run not found',
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('apiClientId: $input.context.apiClientId', async ({
+        input,
+        expected,
+      }) => {
+        const renderer = AiRunGetRenderer.create()
+
+        const received = await renderer.render(input)
+
+        expect(received)
           .toEqual(expected)
       })
     })
