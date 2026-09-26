@@ -634,8 +634,8 @@ describe('AssetMediaReadingFetcher', () => {
               [
                 {
                   path: 'attributes.wallMaterial',
-                  value: 'concrete',
-                  evidenceKindName: 'visual-estimate',
+                  value: 'timber',
+                  evidenceKindName: 'category-prior',
                   reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
                   sourceMediaKeys: [
                     'media-key-10610977',
@@ -643,8 +643,8 @@ describe('AssetMediaReadingFetcher', () => {
                 },
                 {
                   path: 'attributes.frontageNote',
-                  value: 'stub-value-430108842',
-                  evidenceKindName: 'visible-text',
+                  value: 'stub-value-2115552256',
+                  evidenceKindName: 'visual-estimate',
                   reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
                   sourceMediaKeys: [
                     'media-key-10610977',
@@ -654,8 +654,8 @@ describe('AssetMediaReadingFetcher', () => {
               [
                 {
                   path: 'attributes.wallMaterial',
-                  value: 'concrete',
-                  evidenceKindName: 'visual-estimate',
+                  value: 'timber',
+                  evidenceKindName: 'category-prior',
                   reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
                   sourceMediaKeys: [
                     'media-key-10610977',
@@ -663,8 +663,8 @@ describe('AssetMediaReadingFetcher', () => {
                 },
                 {
                   path: 'attributes.frontageNote',
-                  value: 'stub-value-430108842',
-                  evidenceKindName: 'visible-text',
+                  value: 'stub-value-2115552256',
+                  evidenceKindName: 'visual-estimate',
                   reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
                   sourceMediaKeys: [
                     'media-key-10610977',
@@ -674,8 +674,8 @@ describe('AssetMediaReadingFetcher', () => {
               [
                 {
                   path: 'attributes.wallMaterial',
-                  value: 'concrete',
-                  evidenceKindName: 'visual-estimate',
+                  value: 'timber',
+                  evidenceKindName: 'category-prior',
                   reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
                   sourceMediaKeys: [
                     'media-key-10610977',
@@ -683,8 +683,8 @@ describe('AssetMediaReadingFetcher', () => {
                 },
                 {
                   path: 'attributes.frontageNote',
-                  value: 'stub-value-430108842',
-                  evidenceKindName: 'visible-text',
+                  value: 'stub-value-2115552256',
+                  evidenceKindName: 'visual-estimate',
                   reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
                   sourceMediaKeys: [
                     'media-key-10610977',
@@ -694,7 +694,7 @@ describe('AssetMediaReadingFetcher', () => {
             ],
             totalReadingCount: 3,
           },
-          expectedResponseBody: '[{"name":"record_field_readings","arguments":{"readings":[{"path":"attributes.wallMaterial","value":"concrete","evidenceKindName":"visual-estimate","reason":"[stub] demonstration value for attributes.wallMaterial, supplied without a model call.","sourceMediaKeys":["media-key-10610977"]},{"path":"attributes.frontageNote","value":"stub-value-430108842","evidenceKindName":"visible-text","reason":"[stub] demonstration value for attributes.frontageNote, supplied without a model call.","sourceMediaKeys":["media-key-10610977"]}]}}]',
+          expectedResponseBody: '[{"name":"record_field_readings","arguments":{"readings":[{"path":"attributes.wallMaterial","value":"timber","evidenceKindName":"category-prior","reason":"[stub] demonstration value for attributes.wallMaterial, supplied without a model call.","sourceMediaKeys":["media-key-10610977"]},{"path":"attributes.frontageNote","value":"stub-value-2115552256","evidenceKindName":"visual-estimate","reason":"[stub] demonstration value for attributes.frontageNote, supplied without a model call.","sourceMediaKeys":["media-key-10610977"]}]}}]',
         },
       ]
 

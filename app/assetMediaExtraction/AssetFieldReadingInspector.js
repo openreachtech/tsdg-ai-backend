@@ -168,13 +168,51 @@ export default class AssetFieldReadingInspector {
       return []
     }
 
+    const fieldSchemaEntries = this.buildFieldSchemaEntries({
+      fieldSchema,
+    })
+
     return fieldReadings.map(it =>
       this.buildInspectedFieldReading({
         fieldReading: it,
-        fieldSchema,
+        fieldSchemaEntries,
         sentMediaKeys,
         readingIndex,
       })
+    )
+  }
+
+  /**
+   * Build the schema, keyed by the path each entry declares, so a reading finds its own in one
+   * step.
+   *
+   * **Why it is built once rather than scanned per item.** Both lists are the caller's: the schema
+   * is what the request sent, and the items are one per field of it. Scanning the schema for every
+   * item is the product of the two, and nothing above this bounded either - so a request could buy
+   * quadratic work with one call. Keying the schema once makes the whole inspection linear in what
+   * arrived.
+   *
+   * **A path declared twice keeps the first entry**, which is what a scan answered: the reversal
+   * before the map is built is what makes the earliest declaration the one that survives, since a
+   * map keeps the last value written under a key.
+   *
+   * @param {{
+   *   fieldSchema: Array<restfulapi.v1.AssetMediaExtractionFieldSchemaRequest>
+   * }} params - Parameters.
+   * @returns {Map<string, restfulapi.v1.AssetMediaExtractionFieldSchemaRequest>} The entries, by
+   * path.
+   * @public
+   */
+  buildFieldSchemaEntries ({
+    fieldSchema,
+  }) {
+    const pathedEntries = fieldSchema.map(it => [
+      it?.path,
+      it,
+    ])
+
+    return new Map(
+      /** @type {*} */ (pathedEntries.toReversed())
     )
   }
 
@@ -183,7 +221,7 @@ export default class AssetFieldReadingInspector {
    *
    * @param {{
    *   fieldReading: *
-   *   fieldSchema: Array<restfulapi.v1.AssetMediaExtractionFieldSchemaRequest>
+   *   fieldSchemaEntries: Map<string, restfulapi.v1.AssetMediaExtractionFieldSchemaRequest>
    *   sentMediaKeys: Array<string>
    *   readingIndex: number
    * }} params - Parameters.
@@ -192,13 +230,13 @@ export default class AssetFieldReadingInspector {
    */
   buildInspectedFieldReading ({
     fieldReading,
-    fieldSchema,
+    fieldSchemaEntries,
     sentMediaKeys,
     readingIndex,
   }) {
     const fieldSchemaEntry = this.extractFieldSchemaEntry({
       fieldReading,
-      fieldSchema,
+      fieldSchemaEntries,
     })
 
     const rejectionReasonCode = this.extractRejectionReasonCode({
@@ -283,7 +321,7 @@ export default class AssetFieldReadingInspector {
    *
    * @param {{
    *   fieldReading: *
-   *   fieldSchema: Array<restfulapi.v1.AssetMediaExtractionFieldSchemaRequest>
+   *   fieldSchemaEntries: Map<string, restfulapi.v1.AssetMediaExtractionFieldSchemaRequest>
    * }} params - Parameters.
    * @returns {restfulapi.v1.AssetMediaExtractionFieldSchemaRequest | null} The entry, or null when
    * the item names a path the schema does not carry.
@@ -291,14 +329,13 @@ export default class AssetFieldReadingInspector {
    */
   extractFieldSchemaEntry ({
     fieldReading,
-    fieldSchema,
+    fieldSchemaEntries,
   }) {
     if (typeof fieldReading?.path !== 'string') {
       return null
     }
 
-    return fieldSchema
-      .find(it => it.path === fieldReading.path)
+    return fieldSchemaEntries.get(fieldReading.path)
       ?? null
   }
 

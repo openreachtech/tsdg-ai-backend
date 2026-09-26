@@ -102,10 +102,14 @@ export default class FieldConsensusResolver {
       readings,
     })
 
+    const readingVotes = this.buildReadingVotes({
+      readings,
+    })
+
     const fieldConsensuses = readFieldPaths.map(it =>
       this.buildFieldConsensus({
         fieldPath: it,
-        readings,
+        readingVotes,
         totalReadingCount,
       })
     )
@@ -160,11 +164,64 @@ export default class FieldConsensusResolver {
   }
 
   /**
+   * Build each reading's answers, keyed by the field path each answers.
+   *
+   * **Why the readings are keyed once rather than scanned per field.** A field is settled by asking
+   * every reading what it said about that one path, and there is a field per path any reading
+   * answered - so scanning each reading for each path is the product of the two, and both grow
+   * with the schema the caller sent. Keying each reading once makes settling linear in what the
+   * readings between them carry.
+   *
+   * **A reading answering one path twice still votes once, with its first answer** - the rule
+   * `#extractFieldVotes()` states. A map keeps the last value written under a key, so the reading
+   * is reversed before it is keyed and the earliest answer is the one that survives.
+   *
+   * @param {{
+   *   readings: Array<Array<import('./AssetFieldReadingInspector.js').AssetFieldReading>>
+   * }} params - Parameters.
+   * @returns {Array<Map<string, import('./AssetFieldReadingInspector.js').AssetFieldReading>>} One
+   * map per reading, in reading order.
+   * @public
+   */
+  buildReadingVotes ({
+    readings,
+  }) {
+    return readings.map(it =>
+      this.buildOneReadingVotes({
+        fieldReadings: it,
+      })
+    )
+  }
+
+  /**
+   * Build one reading's answers, keyed by the field path each answers.
+   *
+   * @param {{
+   *   fieldReadings: Array<import('./AssetFieldReadingInspector.js').AssetFieldReading>
+   * }} params - Parameters.
+   * @returns {Map<string, import('./AssetFieldReadingInspector.js').AssetFieldReading>} The
+   * answers, by path.
+   * @public
+   */
+  buildOneReadingVotes ({
+    fieldReadings,
+  }) {
+    const pathedFieldReadings = fieldReadings.map(it => [
+      it.path,
+      it,
+    ])
+
+    return new Map(
+      /** @type {*} */ (pathedFieldReadings.toReversed())
+    )
+  }
+
+  /**
    * Build what the readings made of one field.
    *
    * @param {{
    *   fieldPath: string
-   *   readings: Array<Array<import('./AssetFieldReadingInspector.js').AssetFieldReading>>
+   *   readingVotes: Array<Map<string, import('./AssetFieldReadingInspector.js').AssetFieldReading>>
    *   totalReadingCount: number
    * }} params - Parameters.
    * @returns {FieldConsensus} The field as it was settled, or what it fell short by.
@@ -172,12 +229,12 @@ export default class FieldConsensusResolver {
    */
   buildFieldConsensus ({
     fieldPath,
-    readings,
+    readingVotes,
     totalReadingCount,
   }) {
     const votes = this.extractFieldVotes({
       fieldPath,
-      readings,
+      readingVotes,
     })
 
     const voteGroups = this.buildVoteGroups({
@@ -215,7 +272,7 @@ export default class FieldConsensusResolver {
    *
    * @param {{
    *   fieldPath: string
-   *   readings: Array<Array<import('./AssetFieldReadingInspector.js').AssetFieldReading>>
+   *   readingVotes: Array<Map<string, import('./AssetFieldReadingInspector.js').AssetFieldReading>>
    * }} params - Parameters.
    * @returns {Array<import('./AssetFieldReadingInspector.js').AssetFieldReading>} The votes, in
    * reading order.
@@ -223,11 +280,11 @@ export default class FieldConsensusResolver {
    */
   extractFieldVotes ({
     fieldPath,
-    readings,
+    readingVotes,
   }) {
-    return readings
+    return readingVotes
       .map(it =>
-        it.find(fieldReading => fieldReading.path === fieldPath)
+        it.get(fieldPath)
         ?? null
       )
       .filter(it => it !== null)
@@ -462,7 +519,9 @@ export default class FieldConsensusResolver {
     requiredFieldPaths,
     settledFields,
   }) {
-    const settledFieldPaths = settledFields.map(it => it.path)
+    const settledFieldPaths = this.buildSettledFieldPaths({
+      settledFields,
+    })
 
     const consideredFieldPaths = [
       ...new Set([
@@ -471,7 +530,28 @@ export default class FieldConsensusResolver {
       ]),
     ]
 
-    return consideredFieldPaths.filter(it => !settledFieldPaths.includes(it))
+    return consideredFieldPaths.filter(it => !settledFieldPaths.has(it))
+  }
+
+  /**
+   * Build the paths a majority settled, in the shape membership is asked of them.
+   *
+   * A scan per path asked about is the product of two lists that both grow with the caller's own
+   * schema; a set is asked once per path however long the settled list is. The answers are
+   * unchanged, and so is their order - the order belongs to the list being filtered, never to this.
+   *
+   * @param {{
+   *   settledFields: Array<SettledField>
+   * }} params - Parameters.
+   * @returns {Set<string>} The paths.
+   * @public
+   */
+  buildSettledFieldPaths ({
+    settledFields,
+  }) {
+    const paths = settledFields.map(it => it.path)
+
+    return new Set(paths)
   }
 
   /**
@@ -488,9 +568,11 @@ export default class FieldConsensusResolver {
     requiredFieldPaths,
     settledFields,
   }) {
-    const settledFieldPaths = settledFields.map(it => it.path)
+    const settledFieldPaths = this.buildSettledFieldPaths({
+      settledFields,
+    })
 
-    return requiredFieldPaths.filter(it => !settledFieldPaths.includes(it))
+    return requiredFieldPaths.filter(it => !settledFieldPaths.has(it))
   }
 
   /**
@@ -513,12 +595,43 @@ export default class FieldConsensusResolver {
     unsettledFieldPaths,
     totalReadingCount,
   }) {
+    const agreedReadingCounts = this.buildAgreedReadingCounts({
+      fieldConsensuses,
+    })
+
     return unsettledFieldPaths.map(it =>
       this.buildRejection({
         fieldPath: it,
-        fieldConsensuses,
+        agreedReadingCounts,
         totalReadingCount,
       })
+    )
+  }
+
+  /**
+   * Build how many readings agreed on each field, keyed by the field's path.
+   *
+   * Keyed once rather than scanned per rejection, for the reason `#buildSettledFieldPaths()` gives:
+   * both lists grow with the caller's own schema, so a scan inside the map is their product. The
+   * first consensus of a path wins, as a scan answered - hence the reversal before the map, since
+   * a map keeps the last value written under a key.
+   *
+   * @param {{
+   *   fieldConsensuses: Array<FieldConsensus>
+   * }} params - Parameters.
+   * @returns {Map<string, number>} The counts, by path.
+   * @public
+   */
+  buildAgreedReadingCounts ({
+    fieldConsensuses,
+  }) {
+    const pathedCounts = fieldConsensuses.map(it => [
+      it.fieldPath,
+      it.agreedReadingCount,
+    ])
+
+    return new Map(
+      /** @type {*} */ (pathedCounts.toReversed())
     )
   }
 
@@ -527,7 +640,7 @@ export default class FieldConsensusResolver {
    *
    * @param {{
    *   fieldPath: string
-   *   fieldConsensuses: Array<FieldConsensus>
+   *   agreedReadingCounts: Map<string, number>
    *   totalReadingCount: number
    * }} params - Parameters.
    * @returns {import('./AssetFieldReadingInspector.js').AssetFieldRejection} The rejection.
@@ -535,12 +648,10 @@ export default class FieldConsensusResolver {
    */
   buildRejection ({
     fieldPath,
-    fieldConsensuses,
+    agreedReadingCounts,
     totalReadingCount,
   }) {
-    const agreedReadingCount = fieldConsensuses
-      .find(it => it.fieldPath === fieldPath)
-      ?.agreedReadingCount
+    const agreedReadingCount = agreedReadingCounts.get(fieldPath)
       ?? 0
 
     return {

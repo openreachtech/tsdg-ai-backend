@@ -26,11 +26,21 @@ import RunKeyGenerator from '../../../app/aiRun/RunKeyGenerator.js'
  * other half - "and no model is called" - is vacuous here, in a class that calls no model on any
  * path, and no case below pretends to assert it.
  *
- * The refusal cases stand on the development seeder's own runs inside 2026-09-10, where the three
- * seeded clients hold six, three and two runs and nothing any test writes ever lands; the accepted
- * cases are dated 2026-10-12, clear of that day, so the runs they create cannot move a count the
- * read-only tests assert. Every run below is created through the acceptor and takes its id from the
- * auto-increment, which is why this file sits above every file writing an explicit id.
+ * **The two bounded fields are refused before any of that.** `fieldSchema` and `mediaSignature`
+ * are this request's own, and nothing bounded either of them until now; both are read by the job
+ * this route hands the run to, by synchronous work that grows with what the caller sent, and §7's
+ * run time limit is a deadline raced against the run rather than something that can interrupt a
+ * synchronous loop. So the last describe asks the two questions that can only be asked here: is
+ * the caller answered `422`, and is the run its key named really absent afterwards.
+ *
+ * The rate-limit refusal cases stand on the development seeder's own runs inside 2026-09-10, where
+ * the three seeded clients hold six, three and two runs and nothing any test writes ever lands; the
+ * accepted cases are dated 2026-10-12, clear of that day, so the runs they create cannot move a
+ * count the read-only tests assert. The bounded-field cases are dated 2026-10-12 as well, hours
+ * clear of the accepted ones, and each is refused before the acceptor is reached - so none of them
+ * writes a row at all and none can move a count either. Every run below is created through the
+ * acceptor and takes its id from the auto-increment, which is why this file sits above every file
+ * writing an explicit id.
  */
 
 describe('AssetMediaExtractionPostRenderer', () => {
@@ -487,6 +497,258 @@ describe('AssetMediaExtractionPostRenderer', () => {
           const renderer = AssetMediaExtractionPostRenderer.create()
           jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunRateLimitInspector')
             .mockReturnValue(AiRunRateLimitInspector.create(input.aiRunRateLimitInspectorArgs))
+          const aiRunAcceptor = AiRunAcceptor.create()
+          const findAiRunArgs = {
+            apiClientId: input.context.apiClientId,
+            requestKey: input.request.expressRequest.headers['idempotency-key'],
+          }
+          const renderArgs = {
+            body: input.body,
+            context: input.context,
+            request: input.request,
+          }
+
+          await renderer.render(renderArgs)
+
+          const received = await aiRunAcceptor.findAiRun(findAiRunArgs)
+          expect(received)
+            .toBeNull()
+        })
+      })
+    })
+
+    /*
+     * The two fields of this request that nothing bounded, refused at the door.
+     *
+     * **Why the door and not the job.** Both are read by work the `run-asset-media-extraction`
+     * worker does synchronously and that grows with what the caller sent - the field schema once
+     * per field, the signature once per run - and §7's three-hundred-second run limit is a deadline
+     * raced against the run, which cannot interrupt a synchronous loop nor even fire while one
+     * holds the event loop. A request accepted here is a request that queue is committed to, so the
+     * size of the two has to be settled before a run exists.
+     *
+     * The bodies below carry a field schema one entry over the figure, and a signature one
+     * character over it. `422` is what the contract already fixes for "a value the schema does not
+     * accept", and the run each key names has to be absent afterwards: a refusal that still wrote a
+     * row would let the caller's next attempt under the same key be answered `409` for a run it
+     * never had.
+     */
+    describe('when a bounded field is over its figure', () => {
+      describe('should refuse the request', () => {
+        const cases = [
+          {
+            input: {
+              body: {
+                externalRef: 'external-ref-10620015',
+                subjectLabel: 'Subject label of oversized request 10620015',
+                correlationId: 'correlation-id-10620015',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620015',
+                fieldSchema: Array.from(
+                  {
+                    length: 201, // One over MAXIMUM_FIELD_SCHEMA_ENTRY_COUNT
+                  },
+                  (unusedValue, index) => ({
+                    path: `attributes.field${index}`,
+                    label: `Field ${index}`,
+                    valueKind: 'text',
+                    isRequired: false,
+                  })
+                ),
+                mediaSignature: 'media-signature-10620015',
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-10-12T12:00:15.015Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620015',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620015","mediaSignature":"media-signature-10620015"}',
+                },
+              },
+            },
+            expected: expect.objectContaining({
+              statusCode: 422,
+              error: {
+                message: 'Invalid fieldSchema',
+              },
+            }),
+          },
+          {
+            input: {
+              body: {
+                externalRef: 'external-ref-10620016',
+                subjectLabel: 'Subject label of oversized request 10620016',
+                correlationId: 'correlation-id-10620016',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620016',
+                fieldSchema: [
+                  {
+                    path: 'attributes.wallMaterial',
+                    label: 'Wall material',
+                    valueKind: 'select',
+                    isRequired: true,
+                    options: [
+                      'brick',
+                    ],
+                  },
+                ],
+                mediaSignature: 'z'.repeat(2305), // One over MAXIMUM_MEDIA_SIGNATURE_LENGTH
+              },
+              context: {
+                apiClientId: 10000002,
+                now: new Date('2026-10-12T12:00:16.016Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620016',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620016","mediaSignature":"oversized"}',
+                },
+              },
+            },
+            expected: expect.objectContaining({
+              statusCode: 422,
+              error: {
+                message: 'Invalid mediaSignature',
+              },
+            }),
+          },
+          {
+            input: {
+              body: {
+                externalRef: 'external-ref-10620017',
+                subjectLabel: 'Subject label of oversized request 10620017',
+                correlationId: 'correlation-id-10620017',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620017',
+                fieldSchema: [
+                  {
+                    path: 'attributes.frontageNote',
+                    label: 'Frontage note',
+                    valueKind: 'text',
+                    isRequired: false,
+                  },
+                ],
+                mediaSignature: JSON.parse(`${'['.repeat(4000)}${']'.repeat(4000)}`),
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-10-12T12:00:17.017Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620017',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620017","mediaSignature":"nested"}',
+                },
+              },
+            },
+            expected: expect.objectContaining({
+              statusCode: 422,
+              error: {
+                message: 'Invalid mediaSignature',
+              },
+            }),
+          },
+        ]
+
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          input,
+          expected,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
+          const renderArgs = {
+            body: input.body,
+            context: input.context,
+            request: input.request,
+          }
+
+          const received = await renderer.render(renderArgs)
+
+          expect(received)
+            .toEqual(expected)
+        })
+      })
+
+      describe('should create no run', () => {
+        const cases = [
+          {
+            input: {
+              body: {
+                externalRef: 'external-ref-10620018',
+                subjectLabel: 'Subject label of oversized request 10620018',
+                correlationId: 'correlation-id-10620018',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620018',
+                fieldSchema: Array.from(
+                  {
+                    length: 201, // One over MAXIMUM_FIELD_SCHEMA_ENTRY_COUNT
+                  },
+                  (unusedValue, index) => ({
+                    path: `attributes.field${index}`,
+                    label: `Field ${index}`,
+                    valueKind: 'text',
+                    isRequired: false,
+                  })
+                ),
+                mediaSignature: 'media-signature-10620018',
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-10-12T12:00:18.018Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620018',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620018","mediaSignature":"media-signature-10620018"}',
+                },
+              },
+            },
+          },
+          {
+            input: {
+              body: {
+                externalRef: 'external-ref-10620019',
+                subjectLabel: 'Subject label of oversized request 10620019',
+                correlationId: 'correlation-id-10620019',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620019',
+                fieldSchema: [
+                  {
+                    path: 'attributes.wallMaterial',
+                    label: 'Wall material',
+                    valueKind: 'select',
+                    isRequired: true,
+                    options: [
+                      'brick',
+                    ],
+                  },
+                ],
+                mediaSignature: 'z'.repeat(2305), // One over MAXIMUM_MEDIA_SIGNATURE_LENGTH
+              },
+              context: {
+                apiClientId: 10000002,
+                now: new Date('2026-10-12T12:00:19.019Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620019',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620019","mediaSignature":"oversized"}',
+                },
+              },
+            },
+          },
+        ]
+
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          input,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
           const aiRunAcceptor = AiRunAcceptor.create()
           const findAiRunArgs = {
             apiClientId: input.context.apiClientId,

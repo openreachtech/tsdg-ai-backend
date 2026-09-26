@@ -4,6 +4,9 @@ import BaseAiRunPostRenderer from '../../../../../../../server/restfulapi/render
 
 import AiRunRateLimitInspector from '../../../../../../../app/aiRun/AiRunRateLimitInspector.js'
 
+import AssetMediaExtractionInputAdapter from '../../../../../../../app/adapter/forRenderer/AssetMediaExtractionInputAdapter.js'
+import AssetMediaExtractionInputValidator from '../../../../../../../app/validator/forRenderer/AssetMediaExtractionInputValidator.js'
+
 import RunAssetMediaExtractionJobDispatcher from '../../../../../../../app/jobs/run-asset-media-extraction/RunAssetMediaExtractionJobDispatcher.js'
 
 /*
@@ -120,6 +123,14 @@ describe('AssetMediaExtractionPostRenderer', () => {
           RateLimitExceeded: {
             statusCode: 429,
             errorMessage: 'Rate limit exceeded',
+          },
+          InvalidFieldSchema: {
+            statusCode: 422,
+            errorMessage: 'Invalid fieldSchema',
+          },
+          InvalidMediaSignature: {
+            statusCode: 422,
+            errorMessage: 'Invalid mediaSignature',
           },
         }
 
@@ -336,6 +347,128 @@ describe('AssetMediaExtractionPostRenderer', () => {
 
         expect(isWithinRateLimitSpy)
           .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+/*
+ * The two seams the base names for a service that has fields of its own, taken here for the two
+ * fields nothing bounded: `fieldSchema` and `mediaSignature`. Read together they are the whole of
+ * how a request over either figure is refused at the door - the adapter is what lets the rule see
+ * the field, and the validator is the rule.
+ */
+describe('AssetMediaExtractionPostRenderer', () => {
+  describe('#createInputAdapter()', () => {
+    const cases = [
+      {
+        input: {
+          body: {
+            externalRef: 'external-ref-10660001',
+            mediaSignature: 'media-signature-10660001',
+          },
+          request: {
+            expressRequest: {
+              headers: {
+                'idempotency-key': 'request-key-10660001',
+              },
+            },
+          },
+        },
+      },
+      {
+        input: {
+          body: {
+            externalRef: 'external-ref-10660002',
+            mediaSignature: 'media-signature-10660002',
+          },
+          request: {
+            expressRequest: {
+              headers: {
+                'idempotency-key': 'request-key-10660002',
+              },
+            },
+          },
+        },
+      },
+    ]
+
+    test.each(cases)('externalRef: $input.body.externalRef', ({
+      input,
+    }) => {
+      const renderer = AssetMediaExtractionPostRenderer.create()
+
+      const received = renderer.createInputAdapter(input)
+
+      expect(received)
+        .toBeInstanceOf(AssetMediaExtractionInputAdapter)
+    })
+  })
+})
+
+describe('AssetMediaExtractionPostRenderer', () => {
+  describe('#createInputValidator()', () => {
+    const cases = [
+      {
+        input: {
+          input: {
+            requestKey: 'request-key-10660011',
+            mediaSignature: 'media-signature-10660011',
+          },
+        },
+      },
+      {
+        input: {
+          input: {
+            requestKey: 'request-key-10660012',
+            mediaSignature: 'media-signature-10660012',
+          },
+        },
+      },
+    ]
+
+    test.each(cases)('requestKey: $input.input.requestKey', ({
+      input,
+    }) => {
+      const renderer = AssetMediaExtractionPostRenderer.create()
+
+      const received = renderer.createInputValidator(input)
+
+      expect(received)
+        .toBeInstanceOf(AssetMediaExtractionInputValidator)
+    })
+  })
+})
+
+describe('AssetMediaExtractionPostRenderer', () => {
+  describe('#createInputValidator()', () => {
+    describe('should hand the validator this route own error hash', () => {
+      const cases = [
+        {
+          input: {
+            input: {
+              requestKey: 'request-key-10660021',
+            },
+          },
+        },
+        {
+          input: {
+            input: {
+              requestKey: 'request-key-10660022',
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('requestKey: $input.input.requestKey', ({
+        input,
+      }) => {
+        const renderer = AssetMediaExtractionPostRenderer.create()
+
+        const received = renderer.createInputValidator(input)
+
+        expect(received)
+          .toHaveProperty('errorHash', renderer.errorResponseHash)
       })
     })
   })

@@ -1209,6 +1209,306 @@ describe('AssetFieldReadingInspector', () => {
 })
 
 describe('AssetFieldReadingInspector', () => {
+  describe('#buildFieldSchemaEntries()', () => {
+    describe('should key every entry the schema declares', () => {
+      const cases = [
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'attributes.wallMaterial',
+                valueKind: 'select',
+                options: [
+                  'brick',
+                  'concrete',
+                ],
+              },
+              {
+                path: 'attributes.balconyCount',
+                valueKind: 'number',
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.wallMaterial',
+              {
+                path: 'attributes.wallMaterial',
+                valueKind: 'select',
+                options: [
+                  'brick',
+                  'concrete',
+                ],
+              },
+            ],
+            [
+              'attributes.balconyCount',
+              {
+                path: 'attributes.balconyCount',
+                valueKind: 'number',
+              },
+            ],
+          ]),
+        },
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'attributes.frontageNote',
+                valueKind: 'text',
+                maxLength: 64,
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.frontageNote',
+              {
+                path: 'attributes.frontageNote',
+                valueKind: 'text',
+                maxLength: 64,
+              },
+            ],
+          ]),
+        },
+      ]
+
+      test.each(cases)('fieldSchema[0].path: $params.fieldSchema.0.path', ({
+        params,
+        expected,
+      }) => {
+        const inspector = AssetFieldReadingInspector.create()
+
+        const actual = inspector.buildFieldSchemaEntries(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+
+    /*
+     * A path declared twice is a schema the caller wrote wrongly, and the entry that answers for it
+     * is the first - which is what scanning the schema answered before it was keyed. The second
+     * entry below bounds the field differently, so a map that kept the last one would be visible
+     * here rather than in some later run.
+     */
+    describe('should keep the first entry where a path is declared twice', () => {
+      const cases = [
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'attributes.wallMaterial',
+                valueKind: 'select',
+                options: [
+                  'brick',
+                ],
+              },
+              {
+                path: 'attributes.wallMaterial',
+                valueKind: 'text',
+                maxLength: 32,
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.wallMaterial',
+              {
+                path: 'attributes.wallMaterial',
+                valueKind: 'select',
+                options: [
+                  'brick',
+                ],
+              },
+            ],
+          ]),
+        },
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'attributes.balconyCount',
+                valueKind: 'number',
+                minimum: 0,
+                maximum: 4,
+              },
+              {
+                path: 'attributes.balconyCount',
+                valueKind: 'number',
+                minimum: 10,
+                maximum: 40,
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.balconyCount',
+              {
+                path: 'attributes.balconyCount',
+                valueKind: 'number',
+                minimum: 0,
+                maximum: 4,
+              },
+            ],
+          ]),
+        },
+      ]
+
+      test.each(cases)('fieldSchema[0].path: $params.fieldSchema.0.path', ({
+        params,
+        expected,
+      }) => {
+        const inspector = AssetFieldReadingInspector.create()
+
+        const actual = inspector.buildFieldSchemaEntries(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AssetFieldReadingInspector', () => {
+  describe('#extractFieldSchemaEntry()', () => {
+    describe('should answer the entry the reading names', () => {
+      const cases = [
+        {
+          params: {
+            fieldReading: {
+              path: 'attributes.wallMaterial',
+              value: 'brick',
+            },
+            fieldSchemaEntries: new Map([
+              [
+                'attributes.wallMaterial',
+                {
+                  path: 'attributes.wallMaterial',
+                  valueKind: 'select',
+                  options: [
+                    'brick',
+                  ],
+                },
+              ],
+            ]),
+          },
+          expected: {
+            path: 'attributes.wallMaterial',
+            valueKind: 'select',
+            options: [
+              'brick',
+            ],
+          },
+        },
+        {
+          params: {
+            fieldReading: {
+              path: 'attributes.frontageNote',
+              value: 'Corner plot.',
+            },
+            fieldSchemaEntries: new Map([
+              [
+                'attributes.frontageNote',
+                {
+                  path: 'attributes.frontageNote',
+                  valueKind: 'text',
+                  maxLength: 64,
+                },
+              ],
+            ]),
+          },
+          expected: {
+            path: 'attributes.frontageNote',
+            valueKind: 'text',
+            maxLength: 64,
+          },
+        },
+      ]
+
+      test.each(cases)('path: $params.fieldReading.path', ({
+        params,
+        expected,
+      }) => {
+        const inspector = AssetFieldReadingInspector.create()
+
+        const actual = inspector.extractFieldSchemaEntry(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+
+    describe('should answer nothing where the schema does not carry the path', () => {
+      const cases = [
+        {
+          label: 'a path outside the schema',
+          params: {
+            fieldReading: {
+              path: 'attributes.roofMaterial',
+              value: 'tiled',
+            },
+            fieldSchemaEntries: new Map([
+              [
+                'attributes.wallMaterial',
+                {
+                  path: 'attributes.wallMaterial',
+                  valueKind: 'select',
+                },
+              ],
+            ]),
+          },
+        },
+        {
+          label: 'a path that is not a string',
+          params: {
+            fieldReading: {
+              path: 10610161,
+              value: 'tiled',
+            },
+            fieldSchemaEntries: new Map([
+              [
+                'attributes.wallMaterial',
+                {
+                  path: 'attributes.wallMaterial',
+                  valueKind: 'select',
+                },
+              ],
+            ]),
+          },
+        },
+        {
+          label: 'an item that is not an object at all',
+          params: {
+            fieldReading: 'attributes.wallMaterial',
+            fieldSchemaEntries: new Map([
+              [
+                'attributes.wallMaterial',
+                {
+                  path: 'attributes.wallMaterial',
+                  valueKind: 'select',
+                },
+              ],
+            ]),
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+      }) => {
+        const inspector = AssetFieldReadingInspector.create()
+
+        const actual = inspector.extractFieldSchemaEntry(params)
+
+        expect(actual)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AssetFieldReadingInspector', () => {
   describe('#get:Ctor', () => {
     const cases = [
       {

@@ -267,8 +267,8 @@ describe('StubAssetFieldReadingSupplier', () => {
           expected: [
             {
               path: 'attributes.wallMaterial',
-              value: 'timber',
-              evidenceKindName: 'category-prior',
+              value: 'brick',
+              evidenceKindName: 'visible-text',
               reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
               sourceMediaKeys: [
                 'media-key-10620011',
@@ -276,7 +276,7 @@ describe('StubAssetFieldReadingSupplier', () => {
             },
             {
               path: 'attributes.frontageNote',
-              value: 'stub-value-4175472933',
+              value: 'stub-value-1198203555',
               evidenceKindName: 'visible-text',
               reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
               sourceMediaKeys: [
@@ -319,8 +319,8 @@ describe('StubAssetFieldReadingSupplier', () => {
             },
             {
               path: 'attributes.frontageNote',
-              value: 'stub-value-1953544865',
-              evidenceKindName: 'category-prior',
+              value: 'stub-value-698877826',
+              evidenceKindName: 'visual-estimate',
               reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
               sourceMediaKeys: [
                 'media-key-10620012',
@@ -365,7 +365,7 @@ describe('StubAssetFieldReadingSupplier', () => {
           expected: [
             {
               path: 'attributes.frontageNote',
-              value: 'stub-value-2591828422',
+              value: 'stub-value-1643311498',
               evidenceKindName: 'visual-estimate',
               reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
               sourceMediaKeys: [
@@ -390,8 +390,8 @@ describe('StubAssetFieldReadingSupplier', () => {
           expected: [
             {
               path: 'attributes.frontageNote',
-              value: 'stub-value-1102660191',
-              evidenceKindName: 'visible-text',
+              value: 'stub-value-3303514871',
+              evidenceKindName: 'category-prior',
               reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
               sourceMediaKeys: [
                 'media-key-10620021',
@@ -417,8 +417,13 @@ describe('StubAssetFieldReadingSupplier', () => {
     /*
      * All three kinds a photograph can be read for, in one schema, over two photographs: a select
      * answers one of the caller's own options, a number answers a number inside the range sent, and
-     * a text answers a marked string. Different fields cite different photographs, which is what a
-     * screen showing "the photos this came from" per field is built against.
+     * a text answers a marked string.
+     *
+     * The second case is the one that shows different fields citing different photographs - the
+     * property a screen showing "the photos this came from" per field is built against. Which
+     * photograph a field cites is drawn from that field's own number, so it is a property of the
+     * draw rather than of any one request: the first case happens to cite one photograph for all
+     * three of its fields, and stands as it is because that is a real answer too.
      */
     describe('should answer every kind a photograph can be read for', () => {
       const cases = [
@@ -459,12 +464,72 @@ describe('StubAssetFieldReadingSupplier', () => {
               evidenceKindName: 'visible-text',
               reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
               sourceMediaKeys: [
+                'media-key-10620032',
+              ],
+            },
+            {
+              path: 'attributes.balconyCount',
+              value: 0,
+              evidenceKindName: 'category-prior',
+              reason: '[stub] demonstration value for attributes.balconyCount, supplied without a model call.',
+              sourceMediaKeys: [
+                'media-key-10620032',
+              ],
+            },
+            {
+              path: 'attributes.frontageNote',
+              value: 'stub-value-3799207399',
+              evidenceKindName: 'visual-estimate',
+              reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
+              sourceMediaKeys: [
+                'media-key-10620032',
+              ],
+            },
+          ],
+        },
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'attributes.wallMaterial',
+                valueKind: 'select',
+                options: [
+                  'brick',
+                  'concrete',
+                  'timber',
+                ],
+              },
+              {
+                path: 'attributes.balconyCount',
+                valueKind: 'number',
+                minimum: 0,
+                maximum: 4,
+              },
+              {
+                path: 'attributes.frontageNote',
+                valueKind: 'text',
+                maxLength: 64,
+              },
+            ],
+            mediaSignature: 'media-signature-10620013',
+            readableMediaKeys: [
+              'media-key-10620031',
+              'media-key-10620032',
+            ],
+          },
+          expected: [
+            {
+              path: 'attributes.wallMaterial',
+              value: 'timber',
+              evidenceKindName: 'category-prior',
+              reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
+              sourceMediaKeys: [
                 'media-key-10620031',
               ],
             },
             {
               path: 'attributes.balconyCount',
-              value: 2,
+              value: 4,
               evidenceKindName: 'visible-text',
               reason: '[stub] demonstration value for attributes.balconyCount, supplied without a model call.',
               sourceMediaKeys: [
@@ -473,11 +538,11 @@ describe('StubAssetFieldReadingSupplier', () => {
             },
             {
               path: 'attributes.frontageNote',
-              value: 'stub-value-4161982087',
+              value: 'stub-value-2145955324',
               evidenceKindName: 'visual-estimate',
               reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
               sourceMediaKeys: [
-                'media-key-10620032',
+                'media-key-10620031',
               ],
             },
           ],
@@ -673,8 +738,16 @@ describe('StubAssetFieldReadingSupplier', () => {
   })
 })
 
+/*
+ * A run digest written out here is the value `#generateRunDigest()` answers for a named signature
+ * and a named set of photographs, recorded rather than recomputed - the same reason every other
+ * expected value in this file is written out. Each case says which pair its digest belongs to, so a
+ * digest that moved is a failure here and a failure in the `#generateRunDigest()` describes below,
+ * and the two cannot drift apart.
+ */
 describe('StubAssetFieldReadingSupplier', () => {
   describe('#buildFieldReading()', () => {
+    // runDigest: media-signature-10620001 over media-key-10620011.
     describe('should answer what one field was read as', () => {
       const cases = [
         {
@@ -688,15 +761,15 @@ describe('StubAssetFieldReadingSupplier', () => {
                 'timber',
               ],
             },
-            mediaSignature: 'media-signature-10620001',
+            runDigest: '5e5393fbd828d2afff03401b1af8141c4ddd02532765dbb97f27c489a364f13f',
             readableMediaKeys: [
               'media-key-10620011',
             ],
           },
           expected: {
             path: 'attributes.wallMaterial',
-            value: 'timber',
-            evidenceKindName: 'category-prior',
+            value: 'brick',
+            evidenceKindName: 'visible-text',
             reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
             sourceMediaKeys: [
               'media-key-10620011',
@@ -709,14 +782,14 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.frontageNote',
               valueKind: 'text',
             },
-            mediaSignature: 'media-signature-10620001',
+            runDigest: '5e5393fbd828d2afff03401b1af8141c4ddd02532765dbb97f27c489a364f13f',
             readableMediaKeys: [
               'media-key-10620011',
             ],
           },
           expected: {
             path: 'attributes.frontageNote',
-            value: 'stub-value-4175472933',
+            value: 'stub-value-1198203555',
             evidenceKindName: 'visible-text',
             reason: '[stub] demonstration value for attributes.frontageNote, supplied without a model call.',
             sourceMediaKeys: [
@@ -739,6 +812,7 @@ describe('StubAssetFieldReadingSupplier', () => {
       })
     })
 
+    // runDigest: media-signature-10620010 over media-key-10620081.
     describe('should answer nothing for a field bounded to nothing', () => {
       const cases = [
         {
@@ -747,7 +821,7 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.roofMaterial',
               valueKind: 'select',
             },
-            mediaSignature: 'media-signature-10620009',
+            runDigest: 'e8602edbad9c1cbce2182e9bbcc771caa1cfa15c3920cbfc9b11829a9c49f6a3',
             readableMediaKeys: [
               'media-key-10620081',
             ],
@@ -759,7 +833,7 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.handoverDate',
               valueKind: 'date',
             },
-            mediaSignature: 'media-signature-10620009',
+            runDigest: 'e8602edbad9c1cbce2182e9bbcc771caa1cfa15c3920cbfc9b11829a9c49f6a3',
             readableMediaKeys: [
               'media-key-10620081',
             ],
@@ -783,6 +857,7 @@ describe('StubAssetFieldReadingSupplier', () => {
 
 describe('StubAssetFieldReadingSupplier', () => {
   describe('#generateDrawnNumber()', () => {
+    // runDigest: media-signature-10620006 over media-key-10620051.
     describe('should draw a different number for each field', () => {
       const cases = [
         {
@@ -791,12 +866,9 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.wallMaterial',
               valueKind: 'select',
             },
-            mediaSignature: 'media-signature-10620006',
-            readableMediaKeys: [
-              'media-key-10620051',
-            ],
+            runDigest: 'd7dcd994f2cf76ae47fdddc1bf48f8d80bad129c134b08632fd741c39edd862b',
           },
-          expected: 46362532,
+          expected: 3673449097,
         },
         {
           params: {
@@ -804,12 +876,9 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.frontageNote',
               valueKind: 'text',
             },
-            mediaSignature: 'media-signature-10620006',
-            readableMediaKeys: [
-              'media-key-10620051',
-            ],
+            runDigest: 'd7dcd994f2cf76ae47fdddc1bf48f8d80bad129c134b08632fd741c39edd862b',
           },
-          expected: 1516660246,
+          expected: 749935750,
         },
       ]
 
@@ -826,7 +895,13 @@ describe('StubAssetFieldReadingSupplier', () => {
       })
     })
 
-    describe('should draw a different number for each media signature', () => {
+    /*
+     * One field, two runs. The first digest is media-signature-10620006 over media-key-10620051 and
+     * the second is media-signature-10620007 over the same photograph, so what moves between the
+     * two cases is the caller's signature and nothing else - which is what the run digest carries
+     * into the draw on its behalf.
+     */
+    describe('should draw a different number for each run digest', () => {
       const cases = [
         {
           params: {
@@ -834,12 +909,9 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.wallMaterial',
               valueKind: 'select',
             },
-            mediaSignature: 'media-signature-10620006',
-            readableMediaKeys: [
-              'media-key-10620051',
-            ],
+            runDigest: 'd7dcd994f2cf76ae47fdddc1bf48f8d80bad129c134b08632fd741c39edd862b',
           },
-          expected: 46362532,
+          expected: 3673449097,
         },
         {
           params: {
@@ -847,16 +919,13 @@ describe('StubAssetFieldReadingSupplier', () => {
               path: 'attributes.wallMaterial',
               valueKind: 'select',
             },
-            mediaSignature: 'media-signature-10620007',
-            readableMediaKeys: [
-              'media-key-10620051',
-            ],
+            runDigest: '4cb4a9eef7305e261d0b4e7e843fe5dd33052620186a8e1a63e17d617c9e71bd',
           },
-          expected: 1115991863,
+          expected: 363312244,
         },
       ]
 
-      test.each(cases)('mediaSignature: $params.mediaSignature', ({
+      test.each(cases)('runDigest: $params.runDigest', ({
         params,
         expected,
       }) => {
@@ -866,6 +935,227 @@ describe('StubAssetFieldReadingSupplier', () => {
 
         expect(actual)
           .toBe(expected)
+      })
+    })
+  })
+})
+
+/*
+ * The run digest is the whole of what one request contributes to every field's draw, built once for
+ * the run instead of once per field. These two describes are what keeps "different photographs, a
+ * different answer" and "a different signature, a different answer" true after that move: if either
+ * value stopped reaching the digest, one of them would come back the same.
+ */
+describe('StubAssetFieldReadingSupplier', () => {
+  describe('#generateRunDigest()', () => {
+    describe('should digest differently for different photographs', () => {
+      const cases = [
+        {
+          params: {
+            mediaSignature: 'media-signature-10620011',
+            readableMediaKeys: [
+              'media-key-10620101',
+            ],
+          },
+          expected: '45a3e83e8ae72a62a1ae7147d158fdc26a79520e572164dc1e9baeaba76f5801',
+        },
+        {
+          params: {
+            mediaSignature: 'media-signature-10620011',
+            readableMediaKeys: [
+              'media-key-10620102',
+            ],
+          },
+          expected: 'f966a0018d0fb76a79112591fee208d65f253b6a2f899fdb474cb1255b9aa8fc',
+        },
+      ]
+
+      test.each(cases)('readableMediaKeys[0]: $params.readableMediaKeys.0', ({
+        params,
+        expected,
+      }) => {
+        const supplier = StubAssetFieldReadingSupplier.create()
+
+        const actual = supplier.generateRunDigest(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    describe('should digest differently for different media signatures', () => {
+      const cases = [
+        {
+          params: {
+            mediaSignature: 'media-signature-10620011',
+            readableMediaKeys: [
+              'media-key-10620101',
+            ],
+          },
+          expected: '45a3e83e8ae72a62a1ae7147d158fdc26a79520e572164dc1e9baeaba76f5801',
+        },
+        {
+          params: {
+            mediaSignature: 'media-signature-10620012',
+            readableMediaKeys: [
+              'media-key-10620101',
+            ],
+          },
+          expected: '2782e159ecc634415bee1866bb8cd2a1e149bd846abca424e1a445b7b6911b8c',
+        },
+      ]
+
+      test.each(cases)('mediaSignature: $params.mediaSignature', ({
+        params,
+        expected,
+      }) => {
+        const supplier = StubAssetFieldReadingSupplier.create()
+
+        const actual = supplier.generateRunDigest(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    /*
+     * A signature of any shape but a string digests to what no signature digests to, and reaches
+     * that answer without walking the value. The array case is four thousand deep on purpose: the
+     * canonical text the digester builds is recursive, so that value reaching it exhausts the stack
+     * - and a run that ended there was recorded as a provider call that failed, which is untrue,
+     * because no provider was ever called. The two cases share one expected digest, which is the
+     * whole claim: the shape made no difference, because the value was never read.
+     *
+     * `label` rather than a field path: one case's signature is null and the other's renders as
+     * eight thousand brackets, and neither names the case to a person reading the run.
+     */
+    describe('should digest a signature of any other shape as no signature', () => {
+      const cases = [
+        {
+          label: 'no signature at all',
+          params: {
+            mediaSignature: null,
+            readableMediaKeys: [
+              'media-key-10620091',
+            ],
+          },
+          expected: 'a35caafed836e8bf751d25359d85b9a1e31e5b8ed30166dd0620015f7bec5e5d',
+        },
+        {
+          label: 'an array four thousand deep',
+          params: {
+            mediaSignature: JSON.parse(`${'['.repeat(4000)}${']'.repeat(4000)}`),
+            readableMediaKeys: [
+              'media-key-10620091',
+            ],
+          },
+          expected: 'a35caafed836e8bf751d25359d85b9a1e31e5b8ed30166dd0620015f7bec5e5d',
+        },
+        {
+          label: 'a number',
+          params: {
+            mediaSignature: 10620092,
+            readableMediaKeys: [
+              'media-key-10620091',
+            ],
+          },
+          expected: 'a35caafed836e8bf751d25359d85b9a1e31e5b8ed30166dd0620015f7bec5e5d',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+        expected,
+      }) => {
+        const supplier = StubAssetFieldReadingSupplier.create()
+
+        const actual = supplier.generateRunDigest(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('StubAssetFieldReadingSupplier', () => {
+  describe('#extractDigestibleMediaSignature()', () => {
+    describe('should answer the signature the caller sent', () => {
+      const cases = [
+        {
+          params: {
+            mediaSignature: 'media-signature-10620093',
+          },
+          expected: 'media-signature-10620093',
+        },
+        {
+          params: {
+            mediaSignature: '',
+          },
+          expected: '',
+        },
+      ]
+
+      test.each(cases)('mediaSignature: $params.mediaSignature', ({
+        params,
+        expected,
+      }) => {
+        const supplier = StubAssetFieldReadingSupplier.create()
+
+        const actual = supplier.extractDigestibleMediaSignature(params)
+
+        expect(actual)
+          .toBe(expected)
+      })
+    })
+
+    describe('should answer nothing for a signature that is not a string', () => {
+      const cases = [
+        {
+          label: 'no signature at all',
+          params: {
+            mediaSignature: null,
+          },
+        },
+        {
+          label: 'a number',
+          params: {
+            mediaSignature: 10620094,
+          },
+        },
+        {
+          label: 'an array',
+          params: {
+            mediaSignature: [
+              'media-signature-10620095',
+            ],
+          },
+        },
+        {
+          label: 'an object',
+          params: {
+            mediaSignature: {
+              signature: 'media-signature-10620096',
+            },
+          },
+        },
+        {
+          label: 'a boolean',
+          params: {
+            mediaSignature: true,
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+      }) => {
+        const supplier = StubAssetFieldReadingSupplier.create()
+
+        const actual = supplier.extractDigestibleMediaSignature(params)
+
+        expect(actual)
+          .toBeNull()
       })
     })
   })

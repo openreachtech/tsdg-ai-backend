@@ -474,7 +474,7 @@ describe('AssetMediaExtractionRunner', () => {
      * changed.
      *
      * Four things a client's screen has to be built against are all in one answer here: three
-     * fields settled unanimously, two different field states, two different confidences, and a
+     * fields settled unanimously, three different field states, three different confidences, and a
      * required field reported missing. The missing one is a select the request bounded to nothing -
      * it sends no options - so no reading could be offered for it; the date field beside it is not
      * missing at all, because step 1 never tried it.
@@ -515,7 +515,7 @@ describe('AssetMediaExtractionRunner', () => {
               failureReasonCode: null,
             },
           },
-          expected: '{"fields":[{"path":"attributes.wallMaterial","value":"concrete","fieldStateName":"derived","suggestionConfidence":0.75,"reason":"[stub] demonstration value for attributes.wallMaterial, supplied without a model call.","sourceMediaKeys":["media-key-10630601-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.balconyCount","value":2,"fieldStateName":"extracted","suggestionConfidence":1,"reason":"[stub] demonstration value for attributes.balconyCount, supplied without a model call.","sourceMediaKeys":["media-key-10630602-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.frontageNote","value":"stub-value-3450563698","fieldStateName":"derived","suggestionConfidence":0.75,"reason":"[stub] demonstration value for attributes.frontageNote, supplied without a model call.","sourceMediaKeys":["media-key-10630601-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}}],"missingFieldPaths":["attributes.frontDirection"],"unreadableMediaKeys":[],"mediaSignature":"media-signature-10630106"}',
+          expected: '{"fields":[{"path":"attributes.wallMaterial","value":"timber","fieldStateName":"suggested","suggestionConfidence":0.5,"reason":"[stub] demonstration value for attributes.wallMaterial, supplied without a model call.","sourceMediaKeys":["media-key-10630602-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.balconyCount","value":3,"fieldStateName":"derived","suggestionConfidence":0.75,"reason":"[stub] demonstration value for attributes.balconyCount, supplied without a model call.","sourceMediaKeys":["media-key-10630602-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.frontageNote","value":"stub-value-830718747","fieldStateName":"extracted","suggestionConfidence":1,"reason":"[stub] demonstration value for attributes.frontageNote, supplied without a model call.","sourceMediaKeys":["media-key-10630602-photograph"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}}],"missingFieldPaths":["attributes.frontDirection"],"unreadableMediaKeys":[],"mediaSignature":"media-signature-10630106"}',
         },
       ]
 

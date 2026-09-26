@@ -260,8 +260,8 @@ describe('AssetMediaReadingFetcher', () => {
                 readings: [
                   {
                     path: 'attributes.wallMaterial',
-                    value: 'timber',
-                    evidenceKindName: 'category-prior',
+                    value: 'brick',
+                    evidenceKindName: 'visible-text',
                     reason: '[stub] demonstration value for attributes.wallMaterial, supplied without a model call.',
                     sourceMediaKeys: [
                       'media-key-10610981',

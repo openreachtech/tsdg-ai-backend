@@ -570,16 +570,126 @@ describe('FieldConsensusResolver', () => {
 })
 
 describe('FieldConsensusResolver', () => {
-  describe('#extractFieldVotes()', () => {
+  describe('#buildOneReadingVotes()', () => {
     /*
      * One reading is one vote however many times it wrote the field down: a reading that answered
-     * the same path twice must not out-vote the other two by repeating itself.
+     * the same path twice must not out-vote the other two by repeating itself. Which of the two it
+     * votes with is the first, and this is the member that decides it - the second answer is the
+     * one thrown away, whatever it said.
      */
-    describe('should take one vote per reading', () => {
+    describe('should keep the first answer a reading gave for a path', () => {
       const cases = [
         {
           params: {
-            fieldPath: 'attributes.wallMaterial',
+            fieldReadings: [
+              {
+                path: 'attributes.wallMaterial',
+                value: 'brick',
+                evidenceKindName: 'visible-text',
+                reason: 'Visible on the front wall.',
+                sourceMediaKeys: [
+                  'media-key-10610131',
+                ],
+              },
+              {
+                path: 'attributes.wallMaterial',
+                value: 'concrete',
+                evidenceKindName: 'visual-estimate',
+                reason: 'Said twice by one reading.',
+                sourceMediaKeys: [
+                  'media-key-10610131',
+                ],
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.wallMaterial',
+              {
+                path: 'attributes.wallMaterial',
+                value: 'brick',
+                evidenceKindName: 'visible-text',
+                reason: 'Visible on the front wall.',
+                sourceMediaKeys: [
+                  'media-key-10610131',
+                ],
+              },
+            ],
+          ]),
+        },
+        {
+          params: {
+            fieldReadings: [
+              {
+                path: 'attributes.roofMaterial',
+                value: 'tiled',
+                evidenceKindName: 'visual-estimate',
+                reason: 'Another field entirely.',
+                sourceMediaKeys: [
+                  'media-key-10610132',
+                ],
+              },
+              {
+                path: 'attributes.floorArea',
+                value: 86.4,
+                evidenceKindName: 'visible-text',
+                reason: 'Printed on the floor plan.',
+                sourceMediaKeys: [
+                  'media-key-10610133',
+                ],
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.roofMaterial',
+              {
+                path: 'attributes.roofMaterial',
+                value: 'tiled',
+                evidenceKindName: 'visual-estimate',
+                reason: 'Another field entirely.',
+                sourceMediaKeys: [
+                  'media-key-10610132',
+                ],
+              },
+            ],
+            [
+              'attributes.floorArea',
+              {
+                path: 'attributes.floorArea',
+                value: 86.4,
+                evidenceKindName: 'visible-text',
+                reason: 'Printed on the floor plan.',
+                sourceMediaKeys: [
+                  'media-key-10610133',
+                ],
+              },
+            ],
+          ]),
+        },
+      ]
+
+      test.each(cases)('fieldReadings[0].path: $params.fieldReadings.0.path', ({
+        params,
+        expected,
+      }) => {
+        const resolver = FieldConsensusResolver.create()
+
+        const actual = resolver.buildOneReadingVotes(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('FieldConsensusResolver', () => {
+  describe('#buildReadingVotes()', () => {
+    describe('should key every reading, in reading order', () => {
+      const cases = [
+        {
+          params: {
             readings: [
               [
                 {
@@ -588,16 +698,7 @@ describe('FieldConsensusResolver', () => {
                   evidenceKindName: 'visible-text',
                   reason: 'Visible on the front wall.',
                   sourceMediaKeys: [
-                    'media-key-10610131',
-                  ],
-                },
-                {
-                  path: 'attributes.wallMaterial',
-                  value: 'brick',
-                  evidenceKindName: 'visual-estimate',
-                  reason: 'Said twice by one reading.',
-                  sourceMediaKeys: [
-                    'media-key-10610131',
+                    'media-key-10610141',
                   ],
                 },
               ],
@@ -608,10 +709,135 @@ describe('FieldConsensusResolver', () => {
                   evidenceKindName: 'visual-estimate',
                   reason: 'Another field entirely.',
                   sourceMediaKeys: [
-                    'media-key-10610132',
+                    'media-key-10610142',
                   ],
                 },
               ],
+            ],
+          },
+          expected: [
+            new Map([
+              [
+                'attributes.wallMaterial',
+                {
+                  path: 'attributes.wallMaterial',
+                  value: 'brick',
+                  evidenceKindName: 'visible-text',
+                  reason: 'Visible on the front wall.',
+                  sourceMediaKeys: [
+                    'media-key-10610141',
+                  ],
+                },
+              ],
+            ]),
+            new Map([
+              [
+                'attributes.roofMaterial',
+                {
+                  path: 'attributes.roofMaterial',
+                  value: 'tiled',
+                  evidenceKindName: 'visual-estimate',
+                  reason: 'Another field entirely.',
+                  sourceMediaKeys: [
+                    'media-key-10610142',
+                  ],
+                },
+              ],
+            ]),
+          ],
+        },
+        {
+          params: {
+            readings: [
+              [
+                {
+                  path: 'attributes.floorArea',
+                  value: 86.4,
+                  evidenceKindName: 'visible-text',
+                  reason: 'Printed on the floor plan.',
+                  sourceMediaKeys: [
+                    'media-key-10610143',
+                  ],
+                },
+              ],
+            ],
+          },
+          expected: [
+            new Map([
+              [
+                'attributes.floorArea',
+                {
+                  path: 'attributes.floorArea',
+                  value: 86.4,
+                  evidenceKindName: 'visible-text',
+                  reason: 'Printed on the floor plan.',
+                  sourceMediaKeys: [
+                    'media-key-10610143',
+                  ],
+                },
+              ],
+            ]),
+          ],
+        },
+      ]
+
+      test.each(cases)('readings[0][0].path: $params.readings.0.0.path', ({
+        params,
+        expected,
+      }) => {
+        const resolver = FieldConsensusResolver.create()
+
+        const actual = resolver.buildReadingVotes(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('FieldConsensusResolver', () => {
+  describe('#extractFieldVotes()', () => {
+    /*
+     * A reading that answered nothing about the path casts no vote, and the votes that are cast
+     * come back in reading order. The one-vote-per-reading rule is settled before this member sees
+     * the readings - see `#buildOneReadingVotes()` - so what it is asked for here is one answer per
+     * reading and the order they arrive in.
+     */
+    describe('should take one vote per reading that answered the field', () => {
+      const cases = [
+        {
+          params: {
+            fieldPath: 'attributes.wallMaterial',
+            readingVotes: [
+              new Map([
+                [
+                  'attributes.wallMaterial',
+                  {
+                    path: 'attributes.wallMaterial',
+                    value: 'brick',
+                    evidenceKindName: 'visible-text',
+                    reason: 'Visible on the front wall.',
+                    sourceMediaKeys: [
+                      'media-key-10610131',
+                    ],
+                  },
+                ],
+              ]),
+              new Map([
+                [
+                  'attributes.roofMaterial',
+                  {
+                    path: 'attributes.roofMaterial',
+                    value: 'tiled',
+                    evidenceKindName: 'visual-estimate',
+                    reason: 'Another field entirely.',
+                    sourceMediaKeys: [
+                      'media-key-10610132',
+                    ],
+                  },
+                ],
+              ]),
             ],
           },
           expected: [
@@ -629,29 +855,35 @@ describe('FieldConsensusResolver', () => {
         {
           params: {
             fieldPath: 'attributes.floorArea',
-            readings: [
-              [
-                {
-                  path: 'attributes.floorArea',
-                  value: 86.4,
-                  evidenceKindName: 'visible-text',
-                  reason: 'Printed on the floor plan.',
-                  sourceMediaKeys: [
-                    'media-key-10610133',
-                  ],
-                },
-              ],
-              [
-                {
-                  path: 'attributes.floorArea',
-                  value: 86.4,
-                  evidenceKindName: 'visible-text',
-                  reason: 'Printed on the floor plan.',
-                  sourceMediaKeys: [
-                    'media-key-10610134',
-                  ],
-                },
-              ],
+            readingVotes: [
+              new Map([
+                [
+                  'attributes.floorArea',
+                  {
+                    path: 'attributes.floorArea',
+                    value: 86.4,
+                    evidenceKindName: 'visible-text',
+                    reason: 'Printed on the floor plan.',
+                    sourceMediaKeys: [
+                      'media-key-10610133',
+                    ],
+                  },
+                ],
+              ]),
+              new Map([
+                [
+                  'attributes.floorArea',
+                  {
+                    path: 'attributes.floorArea',
+                    value: 86.4,
+                    evidenceKindName: 'visible-text',
+                    reason: 'Printed on the floor plan.',
+                    sourceMediaKeys: [
+                      'media-key-10610134',
+                    ],
+                  },
+                ],
+              ]),
             ],
           },
           expected: [
@@ -684,6 +916,165 @@ describe('FieldConsensusResolver', () => {
         const resolver = FieldConsensusResolver.create()
 
         const actual = resolver.extractFieldVotes(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('FieldConsensusResolver', () => {
+  describe('#buildSettledFieldPaths()', () => {
+    describe('should carry the path of every field a majority settled', () => {
+      const cases = [
+        {
+          params: {
+            settledFields: [
+              {
+                path: 'attributes.wallMaterial',
+                value: 'brick',
+                evidenceKindName: 'visible-text',
+                reason: 'Visible on the front wall.',
+                sourceMediaKeys: [
+                  'media-key-10610151',
+                ],
+                agreedReadingCount: 3,
+                totalReadingCount: 3,
+              },
+              {
+                path: 'attributes.roofMaterial',
+                value: 'tiled',
+                evidenceKindName: 'visual-estimate',
+                reason: 'Judged from the roof line.',
+                sourceMediaKeys: [
+                  'media-key-10610152',
+                ],
+                agreedReadingCount: 2,
+                totalReadingCount: 3,
+              },
+            ],
+          },
+          expected: new Set([
+            'attributes.wallMaterial',
+            'attributes.roofMaterial',
+          ]),
+        },
+        {
+          params: {
+            settledFields: [
+              {
+                path: 'attributes.floorArea',
+                value: 86.4,
+                evidenceKindName: 'visible-text',
+                reason: 'Printed on the floor plan.',
+                sourceMediaKeys: [
+                  'media-key-10610153',
+                ],
+                agreedReadingCount: 3,
+                totalReadingCount: 3,
+              },
+            ],
+          },
+          expected: new Set([
+            'attributes.floorArea',
+          ]),
+        },
+      ]
+
+      test.each(cases)('settledFields[0].path: $params.settledFields.0.path', ({
+        params,
+        expected,
+      }) => {
+        const resolver = FieldConsensusResolver.create()
+
+        const actual = resolver.buildSettledFieldPaths(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+
+    describe('should carry nothing where no field was settled', () => {
+      const cases = [
+        {
+          label: 'no settled field at all',
+          params: {
+            settledFields: [],
+          },
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+      }) => {
+        const resolver = FieldConsensusResolver.create()
+
+        const actual = resolver.buildSettledFieldPaths(params)
+
+        expect(actual.size)
+          .toBe(0)
+      })
+    })
+  })
+})
+
+describe('FieldConsensusResolver', () => {
+  describe('#buildAgreedReadingCounts()', () => {
+    describe('should carry how many readings agreed on each field', () => {
+      const cases = [
+        {
+          params: {
+            fieldConsensuses: [
+              {
+                fieldPath: 'attributes.wallMaterial',
+                agreedReadingCount: 3,
+                settledField: null,
+              },
+              {
+                fieldPath: 'attributes.roofMaterial',
+                agreedReadingCount: 1,
+                settledField: null,
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.wallMaterial',
+              3,
+            ],
+            [
+              'attributes.roofMaterial',
+              1,
+            ],
+          ]),
+        },
+        {
+          params: {
+            fieldConsensuses: [
+              {
+                fieldPath: 'attributes.floorArea',
+                agreedReadingCount: 2,
+                settledField: null,
+              },
+            ],
+          },
+          expected: new Map([
+            [
+              'attributes.floorArea',
+              2,
+            ],
+          ]),
+        },
+      ]
+
+      test.each(cases)('fieldConsensuses[0].fieldPath: $params.fieldConsensuses.0.fieldPath', ({
+        params,
+        expected,
+      }) => {
+        const resolver = FieldConsensusResolver.create()
+
+        const actual = resolver.buildAgreedReadingCounts(params)
 
         expect(actual)
           .toEqual(expected)

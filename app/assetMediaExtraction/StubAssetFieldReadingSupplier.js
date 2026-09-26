@@ -168,11 +168,16 @@ export default class StubAssetFieldReadingSupplier {
       return []
     }
 
+    const runDigest = this.generateRunDigest({
+      mediaSignature,
+      readableMediaKeys,
+    })
+
     return fieldSchema
       .map(it =>
         this.buildFieldReading({
           fieldSchemaEntry: it,
-          mediaSignature,
+          runDigest,
           readableMediaKeys,
         })
       )
@@ -199,6 +204,80 @@ export default class StubAssetFieldReadingSupplier {
   }
 
   /**
+   * Digest the part of a request that does not vary field by field, once for the whole run.
+   *
+   * **Why it is built here and not inside the draw.** The signature and the photographs are one
+   * request's, and they are the same for every field of it - but the draw is taken per field, so
+   * digesting them inside the draw digests the caller's whole signature once per field. A caller
+   * choosing both numbers chooses the product of them, and neither is bounded by anything this
+   * class can see; the work is synchronous, so the run's own time limit cannot end it and the
+   * queue's event loop is held for as long as it takes. Built once and carried in as a
+   * fixed-width digest, the per-field draw costs the same whatever the caller sent.
+   *
+   * It is the argument `AssetMediaReadingFetcher#buildSuppliedFunctionCalls()` already makes one
+   * level up - "answered once for the whole run rather than once per reading" - applied one level
+   * down, to the part of a reading that is the run's rather than the field's.
+   *
+   * **What it does not change.** The signature and the photographs are still both inside every
+   * field's draw, so a different set of photographs and a different signature each still answer
+   * differently. What moved is when they are read, not whether.
+   *
+   * @param {{
+   *   mediaSignature: *
+   *   readableMediaKeys: *
+   * }} params - Parameters.
+   * @returns {string} The digest of this run's own part, as lower case hex.
+   * @public
+   */
+  generateRunDigest ({
+    mediaSignature,
+    readableMediaKeys,
+  }) {
+    const text = this.answerDigester.buildCanonicalText({
+      value: {
+        mediaSignature: this.extractDigestibleMediaSignature({
+          mediaSignature,
+        }),
+        readableMediaKeys,
+      },
+    })
+
+    return this.answerDigester.digestText({
+      text,
+    })
+  }
+
+  /**
+   * Extract the signature this run is digested from, or nothing where the caller sent no signature.
+   *
+   * **A signature that is not a string is treated as no signature at all**, which is the same
+   * reading `AssetMediaExtractionResultBuilder#generateEchoableMediaSignature()` already takes of
+   * the same field: what §20 calls "a value derived from a request's media" is a string, and
+   * anything else the caller put there is not one.
+   *
+   * It is checked here rather than in the digester because the digester is shared. Its canonical
+   * text walks a value recursively, so a deeply nested array reaching it exhausts the stack - and
+   * the run is then recorded as a provider call that failed, which is untrue: no provider was
+   * called and nothing was asked of one. Narrowing the value at this boundary is what stops that,
+   * and leaves the digester's own behavior alone for the callers that depend on it.
+   *
+   * @param {{
+   *   mediaSignature: *
+   * }} params - Parameters.
+   * @returns {string | null} The signature, or null when the request carried none this can read.
+   * @public
+   */
+  extractDigestibleMediaSignature ({
+    mediaSignature,
+  }) {
+    if (typeof mediaSignature !== 'string') {
+      return null
+    }
+
+    return mediaSignature
+  }
+
+  /**
    * Build what one reading found about one field, or nothing where the schema bounds it to nothing.
    *
    * @param {BuildFieldReadingParams} params - Parameters.
@@ -207,13 +286,12 @@ export default class StubAssetFieldReadingSupplier {
    */
   buildFieldReading ({
     fieldSchemaEntry,
-    mediaSignature,
+    runDigest,
     readableMediaKeys,
   }) {
     const drawnNumber = this.generateDrawnNumber({
       fieldSchemaEntry,
-      mediaSignature,
-      readableMediaKeys,
+      runDigest,
     })
 
     const value = this.generateFieldValue({
@@ -252,27 +330,34 @@ export default class StubAssetFieldReadingSupplier {
   /**
    * Generate the number every answer about one field is drawn from.
    *
-   * **The photographs are inside it beside the signature.** `mediaSignature` is the caller's own
-   * string, and specs/1.0.0 §20 calls it "a value derived from a request's media" - but a caller
-   * that sent one signature for two different sets of photographs would otherwise be demonstrated
-   * the same answer twice. Digesting the keys that were read makes "different photographs, a
-   * different answer" a property of this class rather than a promise about the caller's discipline.
+   * **The photographs are inside it beside the signature**, through the run digest handed in.
+   * `mediaSignature` is the caller's own string, and specs/1.0.0 §20 calls it "a value derived
+   * from a request's media" - but a caller that sent one signature for two different sets of
+   * photographs would otherwise be demonstrated the same answer twice. Digesting the keys that
+   * were read makes "different photographs, a different answer" a property of this class rather
+   * than a promise about the caller's discipline.
    *
    * The field's own path and kind are in it too, so two fields of one request answer differently.
    *
-   * @param {BuildFieldReadingParams} params - Parameters.
+   * **What it is handed is the digest and not the two values themselves**, so that the length of
+   * what a caller sent is read once for the run rather than once for every field of it - see
+   * `#generateRunDigest()`. The digest is a fixed width, so this method costs the same whatever
+   * the request weighed.
+   *
+   * @param {{
+   *   fieldSchemaEntry: *
+   *   runDigest: string
+   * }} params - Parameters.
    * @returns {number} The drawn number.
    * @public
    */
   generateDrawnNumber ({
     fieldSchemaEntry,
-    mediaSignature,
-    readableMediaKeys,
+    runDigest,
   }) {
     const text = this.answerDigester.buildCanonicalText({
       value: {
-        mediaSignature,
-        readableMediaKeys,
+        runDigest,
         path: fieldSchemaEntry?.path,
         valueKind: fieldSchemaEntry?.valueKind,
       },
@@ -578,7 +663,7 @@ export default class StubAssetFieldReadingSupplier {
 /**
  * @typedef {{
  *   fieldSchemaEntry: *
- *   mediaSignature: *
+ *   runDigest: string
  *   readableMediaKeys: Array<string>
  * }} BuildFieldReadingParams
  */

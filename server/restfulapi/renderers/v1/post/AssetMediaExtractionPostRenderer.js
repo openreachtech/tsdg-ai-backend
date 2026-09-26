@@ -1,6 +1,9 @@
 import AiRunRateLimitInspector from '../../../../../app/aiRun/AiRunRateLimitInspector.js'
 import AI_RUN_CATEGORY_CONSTANT_HASH from '../../../../../app/constants/aiRunCategoryConstants.js'
 
+import AssetMediaExtractionInputAdapter from '../../../../../app/adapter/forRenderer/AssetMediaExtractionInputAdapter.js'
+import AssetMediaExtractionInputValidator from '../../../../../app/validator/forRenderer/AssetMediaExtractionInputValidator.js'
+
 import RunAssetMediaExtractionJobDispatcher from '../../../../../app/jobs/run-asset-media-extraction/RunAssetMediaExtractionJobDispatcher.js'
 
 import BaseAiRunPostRenderer from '../../BaseAiRunPostRenderer.js'
@@ -10,6 +13,16 @@ const {
 } = AI_RUN_CATEGORY_CONSTANT_HASH
 
 const RATE_LIMIT_STATUS_CODE = 429
+
+/*
+ * The status a field carrying a value the schema does not accept is answered with.
+ *
+ * `.hora/contracts/1.0.0/client-api.md` already fixes `422` for exactly that sentence, and
+ * `aiRunRefusalConstants.js` answers every common field with it. These two are not common fields -
+ * they belong to `AssetMediaExtractionRequest` and to no other request - so they are declared here,
+ * the way the rate limit's own refusal is, rather than in the hash every AI service inherits.
+ */
+const UNACCEPTABLE_FIELD_STATUS_CODE = 422
 
 /**
  * Renderer: `POST /v1/asset-media-extractions`.
@@ -61,6 +74,20 @@ const RATE_LIMIT_STATUS_CODE = 429
  * there, and the base is shared by every AI service's renderer; adding one is reported rather than
  * taken. The gap it leaves is narrow: the figure is roughly eighty times the busiest rate this
  * version foresees, so a caller retrying a request it never saw answered is not a caller near it.
+ *
+ * **Two fields of this request are bounded here, and were bounded nowhere before.** `fieldSchema`
+ * and `mediaSignature` belong to `AssetMediaExtractionRequest` alone, and the common validator
+ * judges neither. Both are read by the job this route hands the run to, by synchronous work that
+ * grows with what the caller sent - so one accepted request could hold the
+ * `run-asset-media-extraction` queue's event loop against every other client of it, for longer than
+ * §7's run time limit, which is a deadline raced against the run and cannot interrupt a synchronous
+ * loop. The size of the two is therefore refused at the door, `422`, which is what the contract
+ * already says of "a value the schema does not accept". The figures are derived in
+ * `constants/assetMediaExtractionRequestLimitConstants.cjs` and nowhere else.
+ *
+ * **Those two `422` lines are not in the contract's shapes table either**, which describes
+ * `fieldSchema[]` and `mediaSignature` without a ceiling on either. Reported as drift beside the
+ * `429` below, for the same reason: the contract is the client's as much as it is this service's.
  *
  * **`429` is not in the contract's refusal table.** That table fixes `401`, `403`, `404`, `409` and
  * `422`, and was written before this criterion had an implementation to describe. The status is the
@@ -115,6 +142,16 @@ export default class AssetMediaExtractionPostRenderer extends BaseAiRunPostRende
       RateLimitExceeded: {
         statusCode: RATE_LIMIT_STATUS_CODE,
         errorMessage: 'Rate limit exceeded',
+      },
+
+      InvalidFieldSchema: {
+        statusCode: UNACCEPTABLE_FIELD_STATUS_CODE,
+        errorMessage: 'Invalid fieldSchema',
+      },
+
+      InvalidMediaSignature: {
+        statusCode: UNACCEPTABLE_FIELD_STATUS_CODE,
+        errorMessage: 'Invalid mediaSignature',
       },
     }
   }
@@ -210,6 +247,54 @@ export default class AssetMediaExtractionPostRenderer extends BaseAiRunPostRende
     return aiRunRateLimitInspector.isWithinRateLimit({
       apiClientId: context.apiClientId,
       now: context.now,
+    })
+  }
+
+  /**
+   * Create the adapter reading this request.
+   *
+   * The base reads the five fields every run-creating request carries; this service's own two
+   * travel in the same body and are read by the same pass, so that the rules below see one input.
+   *
+   * @override
+   * @param {{
+   *   body: *
+   *   request: *
+   * }} params - Parameters.
+   * @returns {AssetMediaExtractionInputAdapter} Adapter.
+   */
+  createInputAdapter ({
+    body,
+    request,
+  }) {
+    return AssetMediaExtractionInputAdapter.create({
+      body,
+      request,
+    })
+  }
+
+  /**
+   * Create the validator the input is judged by.
+   *
+   * **This is the seam the base already named** - "a service overrides this to add its own rules" -
+   * and it is taken here for the two fields nothing bounded: the field schema and the media
+   * signature. Both are read by the job this route hands the run to, by work that grows with what
+   * the caller sent and that runs synchronously; §7's run time limit is a deadline raced against
+   * the run, and a deadline cannot interrupt a synchronous loop. The door is therefore the only
+   * place the size of those two can be refused, and this is the door.
+   *
+   * @override
+   * @param {{
+   *   input: *
+   * }} params - Parameters.
+   * @returns {AssetMediaExtractionInputValidator} Validator.
+   */
+  createInputValidator ({
+    input,
+  }) {
+    return AssetMediaExtractionInputValidator.create({
+      input,
+      errorHash: this.errorResponseHash,
     })
   }
 }
