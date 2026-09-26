@@ -204,6 +204,28 @@ describe('AiRunPageCursor', () => {
             cursorText: 'not-a-cursor!!',
           },
         },
+        {
+          input: {
+            /*
+             * Three NUL bytes. This is honest base64url and re-encodes to itself, so the round
+             * trip alone accepted it and handed a string of NULs to a `where`, where the read
+             * failed as a server fault instead of the `422` this route declares. Four characters.
+             */
+            cursorText: 'AAAA',
+          },
+        },
+        {
+          input: {
+            // a key with a control character buried inside it, which the round trip also allows
+            cursorText: 'cnVuLWtleS0xMAB0MDAwMDE',
+          },
+        },
+        {
+          input: {
+            // longer than the column a run key is stored in
+            cursorText: 'eA'.repeat(200),
+          },
+        },
       ]
 
       test.each(cases)('cursorText: $input.cursorText', ({

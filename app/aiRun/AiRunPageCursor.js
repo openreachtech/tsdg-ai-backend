@@ -1,3 +1,11 @@
+/*
+ * What a decoded cursor has to look like to be worth resolving: printable characters only, and no
+ * longer than the column a run key is stored in. It refuses a control character — the NUL bytes of
+ * `AAAA` among them — without claiming to know how a key is minted, which the seeders and the
+ * generator disagree about.
+ */
+const KEY_SHAPED_PATTERN = /^[!-~]{1,191}$/u
+
 const CURSOR_TEXT_ENCODING = 'base64url'
 
 const RUN_KEY_ENCODING = 'utf8'
@@ -84,10 +92,23 @@ export default class AiRunPageCursor {
   /**
    * Extract the run key a cursor text names.
    *
-   * The round trip is the whole of the judgment: a text this class issued re-encodes to itself,
-   * and one it did not re-encodes to something else — padding a decoder ignored, a character it
-   * dropped, an empty string. Answering null rather than throwing leaves the refusal to the
-   * caller that knows which status it answers with.
+   * **The round trip judges the encoding, and something else has to judge the content.** A text
+   * this class issued re-encodes to itself, and one it did not re-encodes to something else —
+   * padding a decoder ignored, a character it dropped, an empty string. What it cannot see is a
+   * text that is honest base64url and decodes to bytes no run key contains: `AAAA` is three NUL
+   * bytes, re-encodes to `AAAA`, and used to pass. It reached a `where`, where a NUL truncates the
+   * escaped literal and the read fails as a server fault rather than as the `422` this route
+   * declares for a cursor it cannot resolve.
+   *
+   * **So the decoded text is also checked for being key-shaped**, and deliberately not against the
+   * shape a key is minted in. `RunKeyGenerator` mints 64 hexadecimal characters, but every key in
+   * the development seeders reads `run-key-10700001`; a pattern matching the mint would refuse
+   * every cursor built from seeded data and turn a whole page of tests red for a reason that has
+   * nothing to do with the defect. What is asserted instead is the smallest true property: a key
+   * is printable text within its column's width.
+   *
+   * Answering null rather than throwing leaves the refusal to the caller that knows which status
+   * it answers with.
    *
    * @param {{
    *   cursorText: string
@@ -102,6 +123,10 @@ export default class AiRunPageCursor {
       .toString(RUN_KEY_ENCODING)
 
     if (runKey === '') {
+      return null
+    }
+
+    if (!KEY_SHAPED_PATTERN.test(runKey)) {
       return null
     }
 
