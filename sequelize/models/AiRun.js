@@ -8,6 +8,7 @@ import {
 
 import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
 
+import AiRunKeyInspector from '../../app/aiRun/AiRunKeyInspector.js'
 import AiRunTerminalStatusInspector from '../../app/aiRun/AiRunTerminalStatusInspector.js'
 
 const AI_RUN_STATUS_ATTRIBUTE_NAME = 'AiRunStatusId'
@@ -17,13 +18,14 @@ const REFUSED_SETTLED_TRANSITION_MESSAGE = 'AiRun refuses a move out of a status
 /*
  * The message says the rule as it stands, not as it once stood.
  *
- * It read "refused when it writes AiRunStatusId" while that was the whole rule. It is not any
- * longer — an update whose `where` already excludes every terminal status is accepted, because it
- * can match no settled run and therefore cannot move one out of a status a run never leaves. A
- * refusal naming a rule stricter than the one it applies would send a reader looking for a defect
- * in the wrong place.
+ * It read "refused when it writes AiRunStatusId" while that was the whole rule, and then "unless
+ * its where excludes every terminal status" while the guard read the caller's condition object.
+ * Neither is the rule now: what is accepted is a `where` that compiles to the one condition this
+ * model builds for a single unsettled run, and the write is then made under that condition. A
+ * refusal naming a rule other than the one it applies would send a reader looking for a defect in
+ * the wrong place.
  */
-const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId is refused unless its where excludes every terminal status. Move the run through AiRunStatusRecorder.'
+const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.'
 
 /**
  * AiRun model
@@ -47,32 +49,49 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * status against the one it would replace. A bulk update that writes anything but the status still
  * runs — it cannot move a status it does not write.
  *
- * **A bulk update that writes the status is refused unless its own `where` proves it cannot break
- * the rule.** What the rule forbids is a run moving **out of** a terminal status. An update whose
- * `where` states that the rows it matches carry none of the terminal statuses cannot make that
- * move, whatever status it writes. **The proof is the whole of the status condition, and not one
- * key found inside it.** Sequelize compiles a column's condition object as a unit, and an
- * `Op.notIn` standing beside a sibling key on the same column need not survive that compilation:
- * `{ [Op.notIn]: [3, 4, 5], [Op.and]: [{ [Op.gte]: 1 }] }` compiles to
- * `` (`ai_run_status_id` >= 1) `` alone, in either key order, and `Op.or` in place of `Op.and`
- * does the same. A guard reading only the `Op.notIn` key therefore read a proof the database was
- * never shown, and a canceled run was walked back to running under exactly that shape. So what is
- * accepted is the status condition being `Op.notIn` over an array and nothing else at all — the
- * one shape whose `NOT IN` is certain to reach the statement. That is what
- * `AiRunStatusRecorder#buildUnsettledAiRunCondition()` builds, which is how the recorder's own
- * transition write goes through this hook rather than around it with `hooks: false`.
+ * **A bulk update that writes the status is refused unless its `where` is one this model can
+ * prove, and reading the caller's condition object is not how it is proved.** What the rule
+ * forbids is a run moving **out of** a terminal status, so an update whose condition cannot match
+ * a settled row cannot break it, whatever status it writes. Twice now a guard has tried to answer
+ * that by reading the object the caller handed over, and twice the object and the statement turned
+ * out to say different things. A key found inside it is not the proof: Sequelize compiles a
+ * column's condition as a unit, and `{ [Op.notIn]: [3, 4, 5], [Op.and]: [{ [Op.gte]: 1 }] }`
+ * compiles to `` (`ai_run_status_id` >= 1) `` alone, in either key order. The object's own shape
+ * is not the proof either: the same `Op.and` carried on a **prototype** answers no own symbol to a
+ * reader counting them and is still compiled into the statement, and a canceled run was walked
+ * back to running under exactly that shape.
  *
- * **The proof is strict, and anything short of it is the refusal.** A `where` that merely mentions
- * the status column proves nothing; one that excludes only some of the terminal statuses proves
- * nothing either; a condition stated with any operator but `Op.notIn`, or with `Op.notIn` and a
- * second key of any kind beside it, is one this class cannot read, and an unreadable proof is no
- * proof. A sibling Sequelize does keep — `Op.gte` beside `Op.notIn` emits both halves — is refused
- * with the rest, because sorting the siblings it keeps from the ones it drops would put this class
- * in the business of predicting a query compiler, and the prediction would be re-decided by every
- * Sequelize release. Each of them is refused by name exactly as every bulk status write was
- * before. Which statuses are terminal is read from `AiRunTerminalStatusInspector` — the same
+ * **So the condition is compiled, and what is compared is the text the query generator emits.**
+ * This model builds the one condition it can vouch for — the run addressed by its id, every
+ * terminal status stated as one the matched row must not carry — compiles it through the same
+ * query generator the statement will be compiled by, and accepts a `where` only when that `where`
+ * compiles to the same text, character for character. A status id that merely looks right does not
+ * survive the comparison, because the text being matched is not a pattern but a rendering this
+ * model produced out of `AiRunTerminalStatusInspector`'s own ids: `'3'` renders quoted, an
+ * exclusion on another column renders that column's name, and a subset, a superset or another
+ * order renders another list. Which statuses are terminal is read from that inspector — the same
  * answer `AiRunStatusRecorder` builds its `where` out of, so the proof and the thing being proved
  * can never come to disagree about what a terminal status is.
+ *
+ * **And the condition that was proved is the condition the statement is made under.** A caller's
+ * object is read twice — once by this hook, once when the query is generated — so something that
+ * answers differently the second time would be proved on one condition and run on another: a
+ * getter, or a `Proxy` whose `ownKeys` trap counts its calls. `options.where` is therefore
+ * replaced by the condition this model built and compiled, which Sequelize reads after the hook
+ * and generates the statement from (`sequelize/lib/model.js`, `update()`). It is a substitution
+ * and not a narrowing, and the comparison above is what makes it one: an accepted `where` compiled
+ * to exactly this condition, so there is nothing in it left to drop. For the only caller in this
+ * application — `AiRunStatusRecorder#buildUnsettledAiRunCondition()` — nothing changes but the
+ * identity of the object, which is how that write goes through this hook rather than around it
+ * with `hooks: false`.
+ *
+ * **What is refused is wider than what is unsafe, deliberately.** A `where` that excludes the same
+ * statuses in another order, or one that carries a further condition of its own, or one that
+ * addresses runs by anything but a single id, is refused although it would have been safe. Sorting
+ * the safe renderings from the unsafe ones would put this model back in the business of predicting
+ * a query compiler, which is the business both earlier guards failed at; refusing a safe condition
+ * costs a caller a refusal naming the class to go through, and accepting an unsafe one costs a
+ * settled run.
  *
  * **What neither hook closes.** `.upsert()` reaches `beforeUpsert` / `afterUpsert` and no per-row
  * hook, with no `individualHooks` option to turn into one; `.bulkCreate()` with `updateOnDuplicate`
@@ -99,9 +118,20 @@ const REFUSED_BULK_STATUS_UPDATE_MESSAGE = 'AiRun.update() writing AiRunStatusId
  * settled run.** It has been wrong twice. Once by claiming no status is reached by arithmetic,
  * which `increment` disproved. Once by omission that no list of this kind could have covered: the
  * `Op.notIn` a sibling operator hides, above, moved a settled run without going around the hook at
- * all — it went through it, carrying something the hook read as a proof. What bounds the guard is
- * therefore the strictness of that proof rather than the length of this list, and what has
- * established it both times is a probe run against the real table.
+ * all — it went through it, carrying something the hook read as a proof. What has established the
+ * list both times is a probe run against the real table, and not a reading of this file.
+ *
+ * **What the bulk guard itself does not see, stated rather than claimed closed.** It compares a
+ * rendering and then writes under its own object, and neither of those makes it a bound on what
+ * can move a settled run. It reads `options.where` at the position Sequelize 6.37.8 reads it back
+ * from, so a release that took the `where` somewhere else before generating the statement would
+ * un-pin the substitution silently — what then still holds is the weaker sentence, that the
+ * caller's `where` compiled to this model's condition at the instant the hook asked. A `where`
+ * this generator cannot compile is refused rather than read, so a release that renames
+ * `getWhereConditions()` turns every transition write in this service into that refusal — loudly,
+ * and in the first test that runs. And nothing here reads which run the id names: an update
+ * addressing an unsettled run it had no business addressing is accepted, because the rule this
+ * guard carries is about the status a run leaves and not about who may write it.
  *
  * @class AiRun
  * @extends {BaseAppRenchanModel}
@@ -234,6 +264,8 @@ export default class AiRun extends BaseAppRenchanModel {
 
     this.hasMany(this._.AiRunStep)
     this.hasMany(this._.AiRunFieldOutcome)
+    this.hasMany(this._.AiRunMedia)
+    this.hasMany(this._.AiRunCallbackDelivery)
   }
 
   /**
@@ -283,7 +315,24 @@ export default class AiRun extends BaseAppRenchanModel {
         return
       }
 
-      throw new Error(REFUSED_BULK_STATUS_UPDATE_MESSAGE)
+      const provenAiRunCondition = this.buildProvenUnsettledAiRunCondition({
+        where: options.where,
+      })
+
+      if (provenAiRunCondition === null) {
+        throw new Error(REFUSED_BULK_STATUS_UPDATE_MESSAGE)
+      }
+
+      /*
+       * `beforeBulkUpdate` has no return channel. Sequelize reads `options.where` back after
+       * the hook and builds the statement from it, so assigning here is the only way this
+       * model's own condition — rather than the caller's object — is what the UPDATE runs
+       * under. Without it the guarantee drops to the weaker sentence: the caller's `where`
+       * compiled to this condition at the instant the hook asked, which a `where` answering
+       * differently on a second read would satisfy while running something else.
+       */
+      // eslint-disable-next-line no-param-reassign
+      options.where = provenAiRunCondition
     })
   }
 
@@ -338,145 +387,184 @@ export default class AiRun extends BaseAppRenchanModel {
   }
 
   /**
-   * Check whether a bulk update writes the run status without proving it may.
+   * Check whether a bulk update names the run status among the values it writes.
    *
    * `beforeBulkUpdate` is handed the options rather than a row, and `options.attributes` holds the
-   * values the caller passed, keyed by attribute name. No row has been read at that point, so a
-   * status arriving here cannot be judged against the one it would replace — but the `where` the
-   * caller stated can be, and a `where` that excludes every terminal status matches no run that
-   * has settled, so the write it guards cannot move one out of a status a run never leaves.
-   *
-   * An update naming no status is not this rule's to refuse, and is answered first: it moves no
-   * status, so what its `where` says about statuses is beside the point.
+   * values the caller passed, keyed by attribute name. An update naming no status is not this
+   * rule's to refuse — it moves no status, so whatever its `where` says about statuses is beside
+   * the point — and this is the question that lets such a write past before any condition is read.
    *
    * @param {{
    *   options: *
    * }} params - Parameters.
-   * @returns {boolean} Whether the run status is being written under a condition that does not
-   * rule the forbidden move out.
+   * @returns {boolean} Whether the run status is among the values being written.
    */
   static writesAiRunStatusInBulk ({
     options,
   }) {
     const writtenFieldNames = Object.keys(options.attributes ?? {})
 
-    if (!writtenFieldNames.includes(AI_RUN_STATUS_ATTRIBUTE_NAME)) {
-      return false
-    }
-
-    return !this.excludesEveryTerminalAiRunStatus({
-      where: options.where,
-    })
+    return writtenFieldNames.includes(AI_RUN_STATUS_ATTRIBUTE_NAME)
   }
 
   /**
-   * Check whether a condition states that every terminal status is one the rows it matches do not
-   * carry.
+   * Build the condition a bulk status write may be made under, out of the one a caller stated.
    *
-   * Every one of them, and not merely one or two: a `where` excluding succeeded alone still
-   * matches a failed run, and moving that run is the same forbidden move under another name. Which
-   * statuses those are is asked of `AiRunTerminalStatusInspector`, the same question the row guard
-   * above asks, so a sixth terminal status reaches both at once.
+   * The answer is this model's own condition object — never the caller's — or null when the
+   * caller's states something else. What is compared is not the two objects but the two predicates
+   * the query generator makes of them, because the predicate is what the condition amounts to in
+   * the statement, and the object is what has twice been read to say something the predicate did
+   * not.
+   *
+   * Comparing a whole rendering, rather than looking for this model's exclusion inside the
+   * caller's, is what keeps a value from spelling the exclusion out: a string carrying the words
+   * `NOT IN (3, 4, 5)` renders inside quotes and as a condition on the column that held it, so a
+   * `where` carrying one renders as something this model never wrote.
    *
    * @param {{
    *   where: *
    * }} params - Parameters.
-   * @returns {boolean} Whether the condition excludes every terminal status.
+   * @returns {Record<string, *> | null} The condition to write under, or null when the caller
+   * stated one this model cannot prove.
    */
-  static excludesEveryTerminalAiRunStatus ({
+  static buildProvenUnsettledAiRunCondition ({
     where,
   }) {
-    const excludedAiRunStatusIds = this.extractExcludedAiRunStatusIds({
+    const aiRunId = this.extractAiRunId({
       where,
     })
 
-    const aiRunTerminalStatusInspector = this.createAiRunTerminalStatusInspector()
+    if (aiRunId === null) {
+      return null
+    }
 
-    return aiRunTerminalStatusInspector.terminalAiRunStatusIds
-      .every(it => excludedAiRunStatusIds.includes(it))
+    const unsettledAiRunCondition = this.buildUnsettledAiRunCondition({
+      aiRunId,
+    })
+
+    const provenWherePredicate = this.generateEmittedWherePredicate({
+      where: unsettledAiRunCondition,
+    })
+
+    if (provenWherePredicate === null) {
+      return null
+    }
+
+    const statedWherePredicate = this.generateEmittedWherePredicate({
+      where,
+    })
+
+    if (statedWherePredicate !== provenWherePredicate) {
+      return null
+    }
+
+    return unsettledAiRunCondition
   }
 
   /**
-   * Extract the statuses a condition states the rows it matches do not carry.
+   * Extract the run a condition addresses, when it addresses one by its id.
    *
-   * Only one spelling is read: the status column stated as `Op.notIn` over an array, with nothing
-   * else stated about that column in the same breath. A condition written any other way — a bare
-   * value, another operator, an `Op.notIn` with a second key beside it — may well exclude the
-   * terminal statuses too, and this answers that it excludes nothing at all, because a proof this
-   * class cannot read is not a proof. What follows from an empty answer is the refusal that stood
-   * here before, which is the safe side of the question to be wrong on.
+   * The value is read once and answered, so that the condition compared below and the condition
+   * written under are built out of the same read — a `where` whose `id` answers differently the
+   * second time renders differently and is refused by the comparison rather than accepted by it.
+   *
+   * What the id is held to is `AiRunKeyInspector`, the same question `AiRunStatusRecorder` holds
+   * its own `aiRunId` to before it builds the condition this one is compared against. A value that
+   * is no key — a `Sequelize.literal`, an object, a negative number — answers null, and what
+   * follows from null is the refusal.
    *
    * @param {{
    *   where: *
    * }} params - Parameters.
-   * @returns {Array<*>} The statuses stated as excluded, empty when the condition states none this
-   * class can read.
+   * @returns {*} The id, or null when the condition addresses no single run by one.
    */
-  static extractExcludedAiRunStatusIds ({
+  static extractAiRunId ({
     where,
   }) {
-    const aiRunStatusCondition = where?.[AI_RUN_STATUS_ATTRIBUTE_NAME]
+    const aiRunId = where?.id
       ?? null
 
-    if (aiRunStatusCondition === null) {
-      return []
+    if (aiRunId === null) {
+      return null
     }
+
+    const aiRunKeyInspector = this.createAiRunKeyInspector()
 
     if (
-      !this.statesOnlyNotIn({
-        condition: aiRunStatusCondition,
+      !aiRunKeyInspector.isRecordableKey({
+        key: aiRunId,
       })
     ) {
-      return []
+      return null
     }
 
-    const excludedAiRunStatusIds = aiRunStatusCondition[this.sequelizeOperators.notIn]
-
-    if (!Array.isArray(excludedAiRunStatusIds)) {
-      return []
-    }
-
-    return excludedAiRunStatusIds
+    return aiRunId
   }
 
   /**
-   * Check whether a condition on the status column states `Op.notIn` and nothing else.
+   * Create the inspector answering whether a value is a key of this feature.
    *
-   * **A sibling key is what makes this question worth asking.** Sequelize compiles a column's
-   * condition object as a unit, so what the caller wrote and what the database is asked are not
-   * the same thing: an `Op.and` or an `Op.or` beside an `Op.notIn` replaces it outright in the
-   * compiled statement, and an `Op.gte` beside it is kept. Reading the `Op.notIn` key on its own
-   * would therefore accept a `where` whose `NOT IN` the database never sees.
+   * @returns {AiRunKeyInspector} Inspector.
+   */
+  static createAiRunKeyInspector () {
+    return AiRunKeyInspector.create()
+  }
+
+  /**
+   * Build the one condition this model can prove matches no run that has settled.
    *
-   * So both halves are asked and either one failing is the refusal: no own string key, and exactly
-   * one own symbol, which must be `Op.notIn`. Between them the two halves also answer everything
-   * that is no operator object to begin with — an array and a string answer their own indices to
-   * `Object.keys()`, and a number, a boolean and an empty object answer no symbol.
-   *
-   * Refusing the siblings Sequelize keeps along with the ones it drops is deliberate: which is
-   * which belongs to a query compiler's version, and a guard that tracked it would be re-deciding
-   * this on every upgrade.
+   * The run is addressed by its id, and every terminal status is stated as one the matched row
+   * must not carry. Which statuses those are is read from `AiRunTerminalStatusInspector`, which is
+   * also where `AiRunStatusRecorder` reads them — written here as literals, this condition and the
+   * recorder's would agree right up until a sixth status was added to one of them, and the write
+   * the recorder makes would start being refused.
    *
    * @param {{
-   *   condition: *
+   *   aiRunId: *
    * }} params - Parameters.
-   * @returns {boolean} Whether the condition states `Op.notIn` alone.
+   * @returns {Record<string, *>} The condition.
    */
-  static statesOnlyNotIn ({
-    condition,
+  static buildUnsettledAiRunCondition ({
+    aiRunId,
   }) {
-    const ownFieldNames = Object.keys(condition)
+    const aiRunTerminalStatusInspector = this.createAiRunTerminalStatusInspector()
 
-    if (ownFieldNames.length > 0) {
-      return false
+    return {
+      id: aiRunId,
+      [AI_RUN_STATUS_ATTRIBUTE_NAME]: {
+        [this.sequelizeOperators.notIn]: aiRunTerminalStatusInspector.terminalAiRunStatusIds,
+      },
     }
+  }
 
-    const ownOperators = Object.getOwnPropertySymbols(condition)
-
-    if (ownOperators.length !== 1) {
-      return false
+  /**
+   * Generate the predicate Sequelize's own query generator makes of a condition.
+   *
+   * The generator is the model's own — the one that compiles the statement — so what a condition
+   * amounts to here is what it amounts to there, rather than what a reader of the object would
+   * make of it. The one difference is spelling and not meaning: an attribute is still named as the
+   * model names it, because `Model.update()` maps attribute names to column names after this hook
+   * has run, on whatever `where` the options carry by then. Both conditions are rendered by this
+   * one call, so a difference between the two renderings is a difference in what will be asked.
+   *
+   * **A condition it cannot compile answers null rather than throwing, and the failure is not
+   * logged.** Null is refused by the caller above, which is the safe side of the question to be
+   * wrong on; and the exception's message is built out of the `where`, which is a caller's text
+   * and is the one thing this feature keeps out of a log. What reports the event is the refusal
+   * the caller raises, which names this model and the class to go through instead.
+   *
+   * @param {{
+   *   where: *
+   * }} params - Parameters.
+   * @returns {string | null} The emitted predicate, or null when the condition cannot be compiled.
+   */
+  static generateEmittedWherePredicate ({
+    where,
+  }) {
+    try {
+      return this.queryGenerator.getWhereConditions(where, this.tableName, this)
+    } catch {
+      return null
     }
-
-    return ownOperators.includes(this.sequelizeOperators.notIn)
   }
 }

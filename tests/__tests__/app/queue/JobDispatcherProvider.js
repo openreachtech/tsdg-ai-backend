@@ -2,6 +2,8 @@ import {
   EventEmitter,
 } from 'node:events'
 
+import timersPromises from 'node:timers/promises'
+
 import {
   ProcessClerk,
 } from '@openreachtech/renchan-job-bullmq'
@@ -1543,6 +1545,578 @@ describe('JobDispatcherProvider', () => {
             tags: [
               'JobDispatcher',
               'FailedTeardown',
+            ],
+          })
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('.get:timersPromises', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const received = JobDispatcherProvider.timersPromises
+
+        expect(received)
+          .toBe(timersPromises) // same reference
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#awaitJobDispatcherWithinDeadline()', () => {
+    /*
+     * A build that answers is answered with, and the deadline is nothing but a timer the race
+     * leaves behind — the real one is used here, and the test ends before a five-second timer
+     * could fire, which is what says the timer is aborted rather than waited on.
+     */
+    describe('when the build answers first', () => {
+      const cases = [
+        {
+          input: {
+            jobDispatcherName: 'PsiJobDispatcher',
+          },
+          tally: {
+            teardown: () => null,
+          },
+        },
+        {
+          input: {
+            jobDispatcherName: 'ChiJobDispatcher',
+          },
+          tally: {
+            teardown: () => null,
+          },
+        },
+      ]
+
+      test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+        input,
+        tally,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+
+        const args = {
+          JobDispatcherCtor: {
+            name: input.jobDispatcherName,
+            createAsync: () => Promise.resolve(tally),
+          },
+          jobDispatcherPromise: Promise.resolve(tally),
+        }
+
+        const received = await provider.awaitJobDispatcherWithinDeadline(args)
+
+        expect(received)
+          .toBe(tally) // same reference
+      })
+    })
+
+    /*
+     * The build that never answers, which is what a BullMQ queue against a Redis that is not there
+     * is: `waitUntilReady()` resolves on `ready` and rejects on `end`, and ioredis carrying
+     * `maxRetriesPerRequest: null` retries forever and never ends. The ask is what is given up on.
+     *
+     * The clock is stood in for, because what is being asserted is the giving up and not the five
+     * seconds — and a test that waited them out would add five seconds to every run.
+     */
+    describe('when the deadline passes first', () => {
+      const cases = [
+        {
+          input: {
+            jobDispatcherName: 'OmegaJobDispatcher',
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: OmegaJobDispatcher',
+        },
+        {
+          input: {
+            jobDispatcherName: 'SigmaJobDispatcher',
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: SigmaJobDispatcher',
+        },
+      ]
+
+      test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+        input,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+
+        const args = {
+          JobDispatcherCtor: {
+            name: input.jobDispatcherName,
+            createAsync: () => new Promise(() => {}),
+          },
+          jobDispatcherPromise: new Promise(() => {}),
+        }
+
+        const received = () => provider.awaitJobDispatcherWithinDeadline(args)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#refuseJobDispatcherAtDeadline()', () => {
+    /*
+     * The deadline on its own: it waits the span this class declares and then refuses, naming the
+     * queue it could not reach. The span is asserted against the call the clock was made, which is
+     * the only place it is observable — a refusal says nothing about how long it waited.
+     */
+    describe('should refuse the queue it could not reach', () => {
+      const cases = [
+        {
+          input: {
+            jobDispatcherName: 'TauJobDispatcher',
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: TauJobDispatcher',
+        },
+        {
+          input: {
+            jobDispatcherName: 'RhoJobDispatcher',
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: RhoJobDispatcher',
+        },
+      ]
+
+      test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+        input,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        const setTimeoutSpy = jest.spyOn(timers, 'setTimeout')
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+
+        const abortController = new AbortController()
+        const args = {
+          JobDispatcherCtor: {
+            name: input.jobDispatcherName,
+            createAsync: () => new Promise(() => {}),
+          },
+          signal: abortController.signal,
+        }
+
+        const received = () => provider.refuseJobDispatcherAtDeadline(args)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+        expect(setTimeoutSpy)
+          .toHaveBeenCalledWith(
+            5000,
+            null,
+            {
+              signal: abortController.signal,
+            }
+          )
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#logUnreachedQueue()', () => {
+    /*
+     * The line a Redis outage leaves behind, which is the only record of it: the caller is handed
+     * an exception, and for the accept path that exception becomes the engine's own answer, which
+     * names nothing about queues.
+     */
+    describe('should write a line naming the queue and nothing else', () => {
+      const cases = [
+        {
+          input: {
+            JobDispatcherCtor: {
+              name: 'IotaJobDispatcher',
+            },
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: IotaJobDispatcher',
+        },
+        {
+          input: {
+            JobDispatcherCtor: {
+              name: 'KappaJobDispatcher',
+            },
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: KappaJobDispatcher',
+        },
+      ]
+
+      test.each(cases)('JobDispatcherCtor.name: $input.JobDispatcherCtor.name', ({
+        input,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+        const errorSpy = jest.spyOn(JobDispatcherProvider.mentsuLogger, 'error')
+
+        provider.logUnreachedQueue(input)
+
+        expect(errorSpy)
+          .toHaveBeenCalledWith({
+            message: expected,
+            tags: [
+              'JobDispatcher',
+              'UnreachedQueue',
+            ],
+          })
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#ensureJobDispatcher()', () => {
+    /*
+     * The finding this answers: a build against a Redis that is not there neither resolves nor
+     * rejects, so the ask pended with it — and every accept request past the idempotency read hung
+     * indefinitely, holding its socket, with no timeout and nothing to answer the client.
+     *
+     * Measured against a closed port with this repository's own connection options,
+     * `waitUntilReady()` was still pending after six seconds. The ask is now bounded.
+     */
+    describe('when the build has not answered by the deadline', () => {
+      const cases = [
+        {
+          input: {
+            jobDispatcherName: 'NuJobDispatcher',
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: NuJobDispatcher',
+        },
+        {
+          input: {
+            jobDispatcherName: 'XiJobDispatcher',
+          },
+          expected: 'JobDispatcherProvider gave up on a queue connection that would not open: XiJobDispatcher',
+        },
+      ]
+
+      test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+        input,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+
+        const args = {
+          JobDispatcherCtor: {
+            name: input.jobDispatcherName,
+            createAsync: () => new Promise(() => {}),
+          },
+        }
+
+        const received = () => provider.ensureJobDispatcher(args)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+
+    /*
+     * What the ask gives up on is itself and not the build: the entry stays in the pool and stays
+     * in flight, so a Redis that comes back is connected to by the build already running rather
+     * than by one more build per request that gave up.
+     */
+    describe('when an ask gave up on the build', () => {
+      const cases = [
+        {
+          input: {
+            jobDispatcherName: 'LambdaJobDispatcher',
+          },
+        },
+        {
+          input: {
+            jobDispatcherName: 'MuJobDispatcher',
+          },
+        },
+      ]
+
+      test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+        input,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+
+        const args = {
+          JobDispatcherCtor: {
+            name: input.jobDispatcherName,
+            createAsync: () => new Promise(() => {}),
+          },
+        }
+        await provider.ensureJobDispatcher(args)
+          .catch(() => null)
+
+        const received = provider.hasJobDispatcher(args)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#teardownJobDispatchersWithinDeadline()', () => {
+    /*
+     * The teardowns that answer are answered with, whole and in order, exactly as the unbounded
+     * teardown answered before the deadline was put around it.
+     */
+    describe('when the teardowns answer first', () => {
+      const cases = [
+        {
+          input: {
+            teardownResponses: [
+              'teardown-response-0011',
+              'teardown-response-0012',
+            ],
+          },
+          expected: [
+            'teardown-response-0011',
+            'teardown-response-0012',
+          ],
+        },
+        {
+          input: {
+            teardownResponses: [
+              'teardown-response-0013',
+            ],
+          },
+          expected: [
+            'teardown-response-0013',
+          ],
+        },
+      ]
+
+      test.each(cases)('teardownResponses.0: $input.teardownResponses.0', async ({
+        input,
+        expected,
+      }) => {
+        const provider = JobDispatcherProvider.create()
+        jest.spyOn(provider, 'teardownJobDispatchers')
+          .mockResolvedValue(input.teardownResponses)
+
+        const received = await provider.teardownJobDispatchersWithinDeadline()
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+
+    /*
+     * The teardown that never answers, which is a teardown awaiting a build that never connected.
+     * Giving up on it is what lets the exit above be taken.
+     */
+    describe('when the deadline passes first', () => {
+      const cases = [
+        {
+          input: {
+            ProviderCtor: JobDispatcherProvider,
+          },
+          expected: 'JobDispatcherProvider gave up on queue connections that would not close',
+        },
+        {
+          input: {
+            ProviderCtor: class UpsilonJobDispatcherProvider extends JobDispatcherProvider {},
+          },
+          expected: 'UpsilonJobDispatcherProvider gave up on queue connections that would not close',
+        },
+      ]
+
+      test.each(cases)('ProviderCtor: $input.ProviderCtor.name', async ({
+        input,
+        expected,
+      }) => {
+        const provider = input.ProviderCtor.create()
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+        jest.spyOn(provider, 'teardownJobDispatchers')
+          .mockReturnValue(new Promise(() => {}))
+
+        const received = () => provider.teardownJobDispatchersWithinDeadline()
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#abandonTeardownAtDeadline()', () => {
+    describe('should abandon the teardown it was given', () => {
+      const cases = [
+        {
+          input: {
+            ProviderCtor: JobDispatcherProvider,
+          },
+          expected: 'JobDispatcherProvider gave up on queue connections that would not close',
+        },
+        {
+          input: {
+            ProviderCtor: class ZetaJobDispatcherProvider extends JobDispatcherProvider {},
+          },
+          expected: 'ZetaJobDispatcherProvider gave up on queue connections that would not close',
+        },
+      ]
+
+      test.each(cases)('ProviderCtor: $input.ProviderCtor.name', async ({
+        input,
+        expected,
+      }) => {
+        const provider = input.ProviderCtor.create()
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        const setTimeoutSpy = jest.spyOn(timers, 'setTimeout')
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+
+        const abortController = new AbortController()
+        const args = {
+          signal: abortController.signal,
+        }
+
+        const received = () => provider.abandonTeardownAtDeadline(args)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+        expect(setTimeoutSpy)
+          .toHaveBeenCalledWith(
+            5000,
+            null,
+            {
+              signal: abortController.signal,
+            }
+          )
+      })
+    })
+  })
+})
+
+describe('JobDispatcherProvider', () => {
+  describe('#shutdownJobDispatchers()', () => {
+    /*
+     * The finding this answers, and the one the guard around the teardown did not: a teardown that
+     * never settles is not a rejection, so the guard waited with it and the exit below was never
+     * reached — measured, with Redis gone, as a process that took the signal and stayed up, having
+     * already lost the default `SIGINT` handling that attaching a handler removes.
+     *
+     * The teardown here never answers, and what is asserted is the exit on the far side of it,
+     * beside the line saying the connections were not all closed.
+     */
+    describe('when the teardown never answers', () => {
+      const cases = [
+        {
+          input: {
+            ProviderCtor: JobDispatcherProvider,
+          },
+          expected: 'JobDispatcherProvider the shutdown of the queue connections threw: Error',
+        },
+        {
+          input: {
+            ProviderCtor: class EtaJobDispatcherProvider extends JobDispatcherProvider {},
+          },
+          expected: 'EtaJobDispatcherProvider the shutdown of the queue connections threw: Error',
+        },
+      ]
+
+      test.each(cases)('ProviderCtor: $input.ProviderCtor.name', async ({
+        input,
+        expected,
+      }) => {
+        const processClerk = ProcessClerk.create()
+        const exitSpy = jest.spyOn(processClerk, 'exit')
+          .mockReturnValue(null)
+        const provider = input.ProviderCtor.create({
+          processClerk,
+        })
+        const errorSpy = jest.spyOn(JobDispatcherProvider.mentsuLogger, 'error')
+
+        const timers = {
+          /**
+           * Stand in for the clock, answering the moment it is asked.
+           *
+           * @returns {Promise<null>} Nothing.
+           */
+          setTimeout: async () => null,
+        }
+        jest.spyOn(JobDispatcherProvider, 'timersPromises', 'get')
+          .mockReturnValue(timers)
+        jest.spyOn(provider, 'teardownJobDispatchers')
+          .mockReturnValue(new Promise(() => {}))
+
+        await provider.shutdownJobDispatchers()
+
+        expect(exitSpy)
+          .toHaveBeenCalledWith()
+        expect(errorSpy)
+          .toHaveBeenCalledWith({
+            message: expected,
+            tags: [
+              'JobDispatcher',
+              'FailedShutdown',
             ],
           })
       })

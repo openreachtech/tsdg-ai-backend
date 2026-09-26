@@ -1,3 +1,5 @@
+import timersPromises from 'node:timers/promises'
+
 import {
   ProcessClerk,
 } from '@openreachtech/renchan-job-bullmq'
@@ -13,6 +15,31 @@ import {
 
 const FAILED_TEARDOWN_MESSAGE = 'a queue connection would not close'
 const FAILED_SHUTDOWN_MESSAGE = 'the shutdown of the queue connections threw'
+const UNREACHED_QUEUE_MESSAGE = 'gave up on a queue connection that would not open'
+const UNFINISHED_TEARDOWN_MESSAGE = 'gave up on queue connections that would not close'
+
+/*
+ * How long an accepted run waits on a queue connection before it is told the queue is unreachable.
+ *
+ * It is a bound on a request rather than a measure of how long Redis may take: the connection is
+ * opened once per process, so every run after the first is handed a dispatcher with nothing to
+ * wait for, and the one run that does wait is holding a socket open while it waits. Five seconds
+ * is long enough for a connection to a Redis that is there — the compose file's container answers
+ * in single-digit milliseconds — and short enough that a client's own timeout is not what ends the
+ * request.
+ */
+const JOB_DISPATCHER_BUILD_DEADLINE_MILLISECOND = 5000
+
+/*
+ * How long the teardown of every open queue connection is waited on before the process exits
+ * regardless.
+ *
+ * What it bounds is not a slow `close()` but a teardown waiting on a build that never connected,
+ * which never settles at all. An operator asked the process to stop; a connection that will not
+ * close is a line in a log, and is not a reason to leave a process running that has already lost
+ * its default signal handling.
+ */
+const QUEUE_SHUTDOWN_DEADLINE_MILLISECOND = 5000
 
 const FAILED_TEARDOWN_TAGS = [
   'JobDispatcher',
@@ -22,6 +49,11 @@ const FAILED_TEARDOWN_TAGS = [
 const FAILED_SHUTDOWN_TAGS = [
   'JobDispatcher',
   'FailedShutdown',
+]
+
+const UNREACHED_QUEUE_TAGS = [
+  'JobDispatcher',
+  'UnreachedQueue',
 ]
 
 const LOG_FILE_PATH = rootPath.to('logs/job-dispatcher-')
@@ -78,11 +110,32 @@ const mentsuLogger = MentsuLogger.create({
  * happen in the same synchronous step, so no `await` sits between them for a second caller to slip
  * through.
  *
- * **The shutdown owes the exit, so it takes it whatever the teardowns do.** Each dispatcher is
+ * **A build that cannot connect is given up on rather than waited out.**
+ * `BaseJobDispatcher.createAsync()` waits on BullMQ's `waitUntilReady()`, which resolves on
+ * `ready` and rejects on `end`; ioredis, carrying the `maxRetriesPerRequest: null` that BullMQ
+ * requires, retries a connection for as long as it takes and never ends. Against a Redis that is
+ * not there the build therefore neither succeeds nor fails — it pends, measured at six seconds
+ * and counting against a closed port — and the rejection handling above never fires, because
+ * nothing rejects. Every ask waiting on it pends with it, which for the accept path is a request
+ * that never answers and a socket held for the length of the outage. So an ask is raced against a
+ * deadline of its own, and a caller that reaches the deadline is handed a refusal naming the queue
+ * rather than left waiting.
+ *
+ * **The build is not cancelled when an ask gives up, and its entry is not removed.** ioredis goes
+ * on trying in the background, so there is one build per dispatcher class however many asks gave
+ * up on it, and a Redis that comes back is connected to without a second build being started; the
+ * first ask after that is handed the dispatcher. What the deadline costs is a Redis that is merely
+ * slow — an ask that would have been answered a moment later is refused, and the ask after it
+ * waits on the same build again.
+ *
+ * **The shutdown owes the exit, and a deadline is what makes it take it.** Each dispatcher is
  * closed on its own and a failure to close one is written down rather than thrown, so one stuck
- * connection does not leave the others open; and the whole teardown sits inside a guard, so the
- * exit below it is reached on every path. Attaching a `SIGINT` handler removes the one Node
- * installed, and what that handler replaced was a process that ended.
+ * connection does not leave the others open. A guard around the whole teardown was said here to
+ * make the exit reachable on every path, and it is not: a guard answers a rejection and has
+ * nothing to say to a promise that never settles, which is exactly what a teardown awaiting a
+ * build that never connected is — the process stayed up, having already lost the default `SIGINT`
+ * handling that attaching a handler removes. So the teardown is raced against a deadline too, and
+ * the exit is taken when either of them finishes first.
  */
 export default class JobDispatcherProvider {
   /**
@@ -160,6 +213,18 @@ export default class JobDispatcherProvider {
   }
 
   /**
+   * get: the promise-shaped timers of the standard library.
+   *
+   * Reached through a getter rather than referred to inside the methods that wait, so that the one
+   * place this class touches the clock is named and a test can stand something else in its place.
+   *
+   * @returns {typeof timersPromises} Timers.
+   */
+  static get timersPromises () {
+    return timersPromises
+  }
+
+  /**
    * Create the clerk this provider reaches the process's signals through.
    *
    * @returns {ProcessClerk} The clerk.
@@ -179,12 +244,17 @@ export default class JobDispatcherProvider {
 
   /**
    * Answer the one live dispatcher of a dispatcher class, building it the first time it is asked
-   * for.
+   * for, and giving up on a build that has not connected by the deadline.
+   *
+   * The build the ask gives up on stays in the pool and stays in flight, so what is given up is
+   * this ask and not the connection: the next ask waits on the same build, and the first one after
+   * it connects is handed the dispatcher.
    *
    * @param {{
    *   JobDispatcherCtor: JobDispatcherCtor
    * }} params - Parameters.
    * @returns {Promise<JobDispatcher>} The dispatcher.
+   * @throws {Error} When the build has neither connected nor failed by the deadline.
    * @public
    */
   async ensureJobDispatcher ({
@@ -200,8 +270,13 @@ export default class JobDispatcherProvider {
       })
     }
 
-    return this.extractJobDispatcherPromise({
+    const jobDispatcherPromise = this.extractJobDispatcherPromise({
       JobDispatcherCtor,
+    })
+
+    return this.awaitJobDispatcherWithinDeadline({
+      JobDispatcherCtor,
+      jobDispatcherPromise,
     })
   }
 
@@ -343,6 +418,98 @@ export default class JobDispatcherProvider {
   }
 
   /**
+   * Wait for a build to answer, and give up on waiting when the deadline passes.
+   *
+   * The deadline is a promise of its own, raced against the build, and it is aborted whichever way
+   * the race ends — so a build that answered first leaves no timer behind holding the process open.
+   * Aborting it makes it reject, and the race has already attached a handler to it, so that
+   * rejection is answered rather than left unhandled.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   *   jobDispatcherPromise: Promise<JobDispatcher>
+   * }} params - Parameters.
+   * @returns {Promise<JobDispatcher>} The dispatcher.
+   * @throws {Error} When the deadline passes first.
+   * @public
+   */
+  async awaitJobDispatcherWithinDeadline ({
+    JobDispatcherCtor,
+    jobDispatcherPromise,
+  }) {
+    const deadlineTerminator = new AbortController()
+
+    try {
+      return await Promise.race([
+        jobDispatcherPromise,
+        this.refuseJobDispatcherAtDeadline({
+          JobDispatcherCtor,
+          signal: deadlineTerminator.signal,
+        }),
+      ])
+    } finally {
+      deadlineTerminator.abort()
+    }
+  }
+
+  /**
+   * Refuse a queue connection that has not opened by the deadline.
+   *
+   * What the caller is handed is an exception rather than a null, on the rule this feature keeps
+   * throughout: a caller that asked for a dispatcher and was answered with nothing would carry on
+   * as though it had one. For the accept path that exception is what ends the request — with the
+   * engine's own answer, because the contract fixes no answer for a queue that cannot be reached.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   *   signal: AbortSignal
+   * }} params - Parameters.
+   * @returns {Promise<void>}
+   * @throws {Error} When the deadline passes, which is the whole of what it does.
+   * @public
+   */
+  async refuseJobDispatcherAtDeadline ({
+    JobDispatcherCtor,
+    signal,
+  }) {
+    await this.Ctor.timersPromises.setTimeout(
+      JOB_DISPATCHER_BUILD_DEADLINE_MILLISECOND,
+      null,
+      {
+        signal,
+      }
+    )
+
+    this.logUnreachedQueue({
+      JobDispatcherCtor,
+    })
+
+    throw new Error(`${this.Ctor.name} ${UNREACHED_QUEUE_MESSAGE}: ${JobDispatcherCtor.name}`)
+  }
+
+  /**
+   * Write the line a queue connection that would not open leaves behind.
+   *
+   * The dispatcher class names which queue it was, and nothing else is written: what an operator
+   * reading this needs is that Redis is not answering, and the exception's own message goes to the
+   * caller rather than into two places at once.
+   *
+   * @param {{
+   *   JobDispatcherCtor: JobDispatcherCtor
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logUnreachedQueue ({
+    JobDispatcherCtor,
+  }) {
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${UNREACHED_QUEUE_MESSAGE}: ${JobDispatcherCtor.name}`,
+      tags: UNREACHED_QUEUE_TAGS,
+    })
+  }
+
+  /**
    * Attach the handlers that close every open queue connection when the process is asked to stop.
    *
    * **Attaching twice attaches once.** A handler is removed from a process by its identity, and
@@ -440,16 +607,19 @@ export default class JobDispatcherProvider {
    * **Which is why the teardown cannot decide whether the exit happens.** A teardown that rejected
    * used to carry the rejection out of here, and the line below it never ran: the process was left
    * running with its default `SIGINT` handling already removed, so the signal that asked it to
-   * stop had made it unstoppable. The guard is what settles that — the failure is written down and
-   * the exit is taken, because a queue connection that would not close is not a reason to keep a
-   * process the operator asked to end.
+   * stop had made it unstoppable. The guard below answers that, and it answers only half of it —
+   * a rejection is caught, and a teardown that never settles is not a rejection. One that waits on
+   * a build that never connected never settles at all, and the guard waits with it, and the exit
+   * is not reached: measured, with Redis gone, as a process that took the signal and stayed up. So
+   * the wait is bounded as well as guarded, and between the two the exit is taken on both paths a
+   * teardown has.
    *
    * @returns {Promise<void>}
    * @public
    */
   async shutdownJobDispatchers () {
     try {
-      await this.teardownJobDispatchers()
+      await this.teardownJobDispatchersWithinDeadline()
     } catch (error) {
       this.logFailedShutdown({
         error,
@@ -460,11 +630,65 @@ export default class JobDispatcherProvider {
   }
 
   /**
+   * Close every open queue connection, and stop waiting when the deadline passes.
+   *
+   * The deadline throwing is what carries control back to the caller above, which writes the line
+   * and takes the exit. What is given up is the waiting and not the closing: a teardown still in
+   * flight goes on until the process ends, which is a moment later.
+   *
+   * @returns {Promise<Array<*>>} What each teardown answered.
+   * @throws {Error} When the teardowns have not all settled by the deadline.
+   * @public
+   */
+  async teardownJobDispatchersWithinDeadline () {
+    const deadlineTerminator = new AbortController()
+
+    try {
+      return await Promise.race([
+        this.teardownJobDispatchers(),
+        this.abandonTeardownAtDeadline({
+          signal: deadlineTerminator.signal,
+        }),
+      ])
+    } finally {
+      deadlineTerminator.abort()
+    }
+  }
+
+  /**
+   * Abandon a teardown that has not finished by the deadline.
+   *
+   * @param {{
+   *   signal: AbortSignal
+   * }} params - Parameters.
+   * @returns {Promise<void>}
+   * @throws {Error} When the deadline passes, which is the whole of what it does.
+   * @public
+   */
+  async abandonTeardownAtDeadline ({
+    signal,
+  }) {
+    await this.Ctor.timersPromises.setTimeout(
+      QUEUE_SHUTDOWN_DEADLINE_MILLISECOND,
+      null,
+      {
+        signal,
+      }
+    )
+
+    throw new Error(`${this.Ctor.name} ${UNFINISHED_TEARDOWN_MESSAGE}`)
+  }
+
+  /**
    * Close the queue connection of every dispatcher this provider built.
    *
    * Each is closed on its own and answers for itself, so the whole set is settled rather than
    * abandoned at the first one that would not close — `Promise.all` over promises that reject
    * stops waiting on the rest, and the rest are the connections nothing else is going to close.
+   *
+   * What it cannot answer for is a build still in flight: closing one means waiting for it first,
+   * and a build against a Redis that is not there does not answer. The deadline above is what
+   * bounds that, rather than anything here.
    *
    * @returns {Promise<Array<*>>} What each teardown answered, null in the place of one that threw
    * and of a dispatcher class no build ever succeeded for.
@@ -547,8 +771,13 @@ export default class JobDispatcherProvider {
   /**
    * Write the line a shutdown that threw outside any one teardown leaves behind.
    *
-   * Nothing reaches this today — every teardown answers for itself — and it is here because the
-   * exit below it must not depend on that staying true.
+   * The deadline is what reaches this in practice: every teardown answers for itself, so what is
+   * left for a shutdown to fail at is waiting on one that never answers.
+   *
+   * What the line carries is the error's class and not its message, on the rule this feature keeps
+   * throughout — so a shutdown abandoned at the deadline and one that threw for some other reason
+   * read alike here. What an operator learns from it is that the connections were not all closed
+   * before the process ended, which is the part that is the same either way.
    *
    * @param {{
    *   error: Error

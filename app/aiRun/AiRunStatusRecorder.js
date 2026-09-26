@@ -1249,10 +1249,14 @@ export default class AiRunStatusRecorder {
    *
    * **The model's own guard stays on, and the condition is what satisfies it.** `AiRun`'s
    * `beforeBulkUpdate` refuses a `Model.update()` that writes `AiRunStatusId` unless the `where`
-   * the caller stated already excludes every terminal status — an update that cannot match a
-   * settled run cannot move one out of a status a run never leaves, whatever status it writes.
-   * That is exactly the condition `#buildUnsettledAiRunCondition()` builds, so this write goes
-   * through the hook rather than around it with `hooks: false`. What is given up is the row-level
+   * the caller stated compiles to the condition the model itself builds for one unsettled run —
+   * an update that cannot match a settled run cannot move one out of a status a run never leaves,
+   * whatever status it writes. That is exactly the condition `#buildUnsettledAiRunCondition()`
+   * builds, so this write goes through the hook rather than around it with `hooks: false`, and
+   * the model then makes the write under its own copy of it rather than under the object handed
+   * over here. The two are built from one inspector's ids, which is what keeps them the same
+   * condition; were they to drift apart, this write would start being refused rather than
+   * quietly widening. What is given up is the row-level
    * `beforeUpdate` guard, which the instance write this replaced did reach — and which could never
    * have fired on this path, because the guard in front refuses a settled run before anything is
    * written. What replaces it is the stricter rule of the two: `beforeUpdate` refuses a status move
@@ -1260,8 +1264,10 @@ export default class AiRunStatusRecorder {
    * one, in the same statement that performs it.
    *
    * **The condition is what carries the guarantee, so it is never softened.** Take the status out
-   * of the `WHERE` and this becomes an unconditional bulk write — which `AiRun`'s hook now refuses
-   * outright, so the line that would undo the rule no longer reaches the table at all.
+   * of the `WHERE` and this becomes an unconditional bulk write — which `AiRun`'s hook refuses
+   * outright, so the line that would undo the rule does not reach the table at all. Restate the
+   * same exclusion in any other words and the hook refuses that too: what it accepts is one
+   * rendering, and this is the class that writes it.
    *
    * @param {{
    *   aiRunId: number

@@ -5,15 +5,16 @@ import {
 import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
 
 /**
- * AiProvider model
+ * AiRunCallbackDeliveryCategory model
  *
- * Master table holding one row per vendor the provider layer can speak to. The stub is a row
- * here like any other vendor, because it is the driver a default installation runs.
+ * Master table naming which callback a delivery attempt was for. One row this version, for the
+ * callback raised when a run reaches succeeded, failed or canceled; the deferred progress
+ * callback is a second row of this table rather than a second column of the delivery.
  *
- * @class AiProvider
+ * @class AiRunCallbackDeliveryCategory
  * @extends {BaseAppRenchanModel}
  */
-export default class AiProvider extends BaseAppRenchanModel {
+export default class AiRunCallbackDeliveryCategory extends BaseAppRenchanModel {
   /**
    * Define model attributes
    *
@@ -24,7 +25,7 @@ export default class AiProvider extends BaseAppRenchanModel {
     const factory = ModelAttributeFactory.create(DataTypes)
 
     return {
-      ...factory.ID_BIGINT,
+      ...factory.ID_INTEGER,
 
       name: {
         type: DataTypes.STRING(32),
@@ -64,8 +65,7 @@ export default class AiProvider extends BaseAppRenchanModel {
   static associate () {
     super.associate?.()
 
-    this.hasMany(this._.AiModel)
-    this.hasMany(this._.ProviderUploadedFile)
+    // noop
   }
 
   /**

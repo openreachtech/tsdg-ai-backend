@@ -73,6 +73,18 @@ const TLS_DECLARED_VALUE = 'true'
  * broker. Nothing in this service subscribes: a run reports its outcome by posting a callback to
  * the client's own URL (`#run-delivery`), not by publishing progress over a GraphQL subscription.
  * The shape belongs here the day something subscribes, and not before.
+ *
+ * **And no `retryStrategy` that gives up, deliberately.** A connection against a Redis that is not
+ * there retries for as long as it takes and never emits `end`, which is why BullMQ's
+ * `waitUntilReady()` neither resolves nor rejects — and a retry strategy returning nothing after a
+ * few attempts would turn that into the rejection a caller can answer. What rules it out is that
+ * these options are one shape for two roles: `AppJobEngine` hands the same hash to the API
+ * server's dispatchers and to the job daemon's workers, and a worker that stopped reconnecting
+ * after a blip would be a consumer that is up and listening to nothing, silently. So the bound
+ * sits on the side that needs one — `JobDispatcherProvider` gives up on an ask rather than on the
+ * connection, leaving ioredis to reconnect in the background. The day a worker wants a different
+ * retry policy from a dispatcher, it is a second option shape here and a second engine to read it,
+ * and not a change to this one.
  */
 export default class RedisConnection {
   /**

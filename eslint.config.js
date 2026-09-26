@@ -44,6 +44,15 @@ export default [
        * inline disable, for that one rule, with the reasoning beside it.
        */
       'app/tools/BaseAiModelProcessor.js',
+
+      /*
+       * The `beforeBulkUpdate` hook that keeps a settled run settled. Sequelize gives a bulk
+       * hook no return channel — it reads `options.where` back after the hook runs — so the
+       * only way the statement runs under this model's own condition, rather than under the
+       * caller's object, is to assign to it. The file carries one inline disable, for that
+       * one rule, with the reasoning beside it.
+       */
+      'sequelize/models/AiRun.js',
     ],
     rules: {
       'eslint-comments/no-use': 'off',

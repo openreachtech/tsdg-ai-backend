@@ -5,15 +5,19 @@ import {
 import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
 
 /**
- * AiProvider model
+ * AiRunCallbackDelivery model
  *
- * Master table holding one row per vendor the provider layer can speak to. The stub is a row
- * here like any other vendor, because it is the driver a default installation runs.
+ * One row per attempt at posting a callback to the client's registered URL. A row says whether
+ * the request arrived and never what came back: no response body is stored, so a client's own
+ * payload cannot reach this table and outlive the purge that removes it everywhere else.
  *
- * @class AiProvider
+ * A callback is retried where a model call is not, so attempts are counted here rather than
+ * collapsed into one row per run.
+ *
+ * @class AiRunCallbackDelivery
  * @extends {BaseAppRenchanModel}
  */
-export default class AiProvider extends BaseAppRenchanModel {
+export default class AiRunCallbackDelivery extends BaseAppRenchanModel {
   /**
    * Define model attributes
    *
@@ -26,21 +30,31 @@ export default class AiProvider extends BaseAppRenchanModel {
     return {
       ...factory.ID_BIGINT,
 
-      name: {
-        type: DataTypes.STRING(32),
-        allowNull: false,
-        unique: true,
-      },
-      displayName: {
-        type: DataTypes.STRING(191),
+      // ForeignKey must start with upper case.
+      AiRunId: {
+        type: DataTypes.BIGINT,
         allowNull: false,
       },
-      displayOrder: {
+      // ForeignKey must start with upper case.
+      // Which callback this attempt was for. One kind this version, and a second one is a row of
+      // the master rather than a column here.
+      AiRunCallbackDeliveryCategoryId: {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
-      isActive: {
-        type: DataTypes.BOOLEAN,
+      // Which try this was, counted within its own run and callback kind.
+      attemptIndex: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
+      // Null when the request never completed - a connection refused, a timeout, a host that
+      // never answered. The attempt happened and is recorded; there was no status to record.
+      httpStatusCode: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      attemptedAt: {
+        type: DataTypes.DATE(3),
         allowNull: false,
       },
     }
@@ -64,8 +78,8 @@ export default class AiProvider extends BaseAppRenchanModel {
   static associate () {
     super.associate?.()
 
-    this.hasMany(this._.AiModel)
-    this.hasMany(this._.ProviderUploadedFile)
+    this.belongsTo(this._.AiRun)
+    this.belongsTo(this._.AiRunCallbackDeliveryCategory)
   }
 
   /**

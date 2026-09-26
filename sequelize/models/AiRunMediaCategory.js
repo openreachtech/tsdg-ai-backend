@@ -5,15 +5,17 @@ import {
 import BaseAppRenchanModel from '../baseModel/BaseAppRenchanModel.js'
 
 /**
- * AiProvider model
+ * AiRunMediaCategory model
  *
- * Master table holding one row per vendor the provider layer can speak to. The stub is a row
- * here like any other vendor, because it is the driver a default installation runs.
+ * Master table naming the kinds of file a request may hand over. Image, video and audio all have
+ * a row, and only image is handled this version: a request naming one of the other two resolves
+ * to a row here and is refused by that name, rather than falling through as a value nobody
+ * recognizes. `isActive` is what says which kinds this version handles.
  *
- * @class AiProvider
+ * @class AiRunMediaCategory
  * @extends {BaseAppRenchanModel}
  */
-export default class AiProvider extends BaseAppRenchanModel {
+export default class AiRunMediaCategory extends BaseAppRenchanModel {
   /**
    * Define model attributes
    *
@@ -24,7 +26,7 @@ export default class AiProvider extends BaseAppRenchanModel {
     const factory = ModelAttributeFactory.create(DataTypes)
 
     return {
-      ...factory.ID_BIGINT,
+      ...factory.ID_INTEGER,
 
       name: {
         type: DataTypes.STRING(32),
@@ -64,8 +66,7 @@ export default class AiProvider extends BaseAppRenchanModel {
   static associate () {
     super.associate?.()
 
-    this.hasMany(this._.AiModel)
-    this.hasMany(this._.ProviderUploadedFile)
+    // noop
   }
 
   /**

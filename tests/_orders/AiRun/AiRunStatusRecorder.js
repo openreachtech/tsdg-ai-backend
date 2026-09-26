@@ -30,6 +30,11 @@ const {
  * same column. Every id in that block names a run nothing creates — the guard under test reads the
  * condition and never the table — so the block is listed here to keep it spoken for, not because a
  * row of it exists.
+ *
+ * `10340001` upward belongs to that feature's second audit round, and is split the same way. The
+ * conditions in `tests/__tests__/sequelize/models/AiRun.js` name ids up to `10340099` and create
+ * nothing; `10340101` upward is this file's, and those rows are created here — the settled runs
+ * the model guard is asked about with a condition that reads one way and compiles another.
  */
 
 describe('AiRunStatusRecorder', () => {
@@ -1813,7 +1818,7 @@ describe('AiRun', () => {
               AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where excludes every terminal status. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
         {
           input: {
@@ -1839,7 +1844,7 @@ describe('AiRun', () => {
               resultBody: '{"fields":[{"path":"a result the run never settled"}]}',
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where excludes every terminal status. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
         {
           input: {
@@ -1864,7 +1869,7 @@ describe('AiRun', () => {
               AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
             },
           },
-          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where excludes every terminal status. Move the run through AiRunStatusRecorder.',
+          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
         },
       ]
 
@@ -1982,6 +1987,346 @@ describe('AiRun', () => {
 
         expect(received)
           .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.setupHooks()', () => {
+    /*
+     * The condition that reads one way and compiles another, which is how a canceled run was
+     * revived a second time.
+     *
+     * A guard counting the keys of the status condition saw one `Op.notIn` and nothing else, and
+     * accepted. Sequelize reaches `Op.and` with a plain property read, which walks the prototype
+     * chain, so what the database was asked carried no `NOT IN` at all — leaving the update free
+     * to move the settled run its id named. The first case below is that shape.
+     *
+     * Nothing is counted now: the condition is compiled, and the emitted predicate is compared
+     * with the one this model builds for an unsettled run. A prototype-carried sibling and an
+     * own-key one are the same answer to that question, because both reach the statement and
+     * neither emits the exclusion. The three runs are each settled, which is the move the refusal
+     * is here for.
+     */
+    describe('when a bulk update states a status condition that compiles to something else', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10340101,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+              runKey: 'run-key-10340101',
+              requestKey: 'request-key-10340101',
+              requestBodyHash: 'request-body-hash-10340101',
+              externalRef: 'external-ref-10340101',
+              subjectLabel: 'Subject label of run 10340101',
+              correlationId: 'correlation-id-10340101',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10340101',
+              acceptedAt: new Date('2026-10-09T01:01:01.001Z'),
+              startedAt: new Date('2026-10-09T01:01:02.002Z'),
+              finishedAt: new Date('2026-10-09T01:01:03.003Z'),
+              canceledAt: new Date('2026-10-09T01:01:03.003Z'),
+            },
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('2026-10-09T01:01:09.009Z'),
+            },
+            where: {
+              id: 10340101,
+              AiRunStatusId: Object.create(
+                {
+                  [Op.and]: [
+                    {
+                      [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — inherited, and compiled all the same
+                    },
+                  ],
+                },
+                {
+                  [Op.notIn]: {
+                    value: [
+                      3, // AI_RUN_STATUS.SUCCEEDED.ID
+                      4, // AI_RUN_STATUS.FAILED.ID
+                      5, // AI_RUN_STATUS.CANCELED.ID
+                    ],
+                    enumerable: true,
+                  },
+                }
+              ),
+            },
+          },
+          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10340102,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+              runKey: 'run-key-10340102',
+              requestKey: 'request-key-10340102',
+              requestBodyHash: 'request-body-hash-10340102',
+              externalRef: 'external-ref-10340102',
+              subjectLabel: 'Subject label of run 10340102',
+              correlationId: 'correlation-id-10340102',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10340102',
+              acceptedAt: new Date('2026-10-09T02:02:01.001Z'),
+              startedAt: new Date('2026-10-09T02:02:02.002Z'),
+              finishedAt: new Date('2026-10-09T02:02:03.003Z'),
+              resultBody: '{"fields":[{"fieldPath":"subject.beta"}]}',
+            },
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('2026-10-09T02:02:09.009Z'),
+            },
+            where: {
+              id: 10340102,
+              AiRunStatusId: {
+                [Op.notIn]: [
+                  3, // AI_RUN_STATUS.SUCCEEDED.ID
+                  4, // AI_RUN_STATUS.FAILED.ID
+                  5, // AI_RUN_STATUS.CANCELED.ID
+                ],
+                [Op.and]: [
+                  {
+                    [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — stated as an own key this time
+                  },
+                ],
+              },
+            },
+          },
+          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+        {
+          input: {
+            aiRunRow: {
+              id: 10340103,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+              runKey: 'run-key-10340103',
+              requestKey: 'request-key-10340103',
+              requestBodyHash: 'request-body-hash-10340103',
+              externalRef: 'external-ref-10340103',
+              subjectLabel: 'Subject label of run 10340103',
+              correlationId: 'correlation-id-10340103',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10340103',
+              acceptedAt: new Date('2026-10-09T03:03:01.001Z'),
+              startedAt: new Date('2026-10-09T03:03:02.002Z'),
+              finishedAt: new Date('2026-10-09T03:03:03.003Z'),
+              failureReasonCode: AI_RUN_FAILURE_REASON_CODE.OUTPUT_INVALID,
+            },
+            values: {
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              startedAt: new Date('2026-10-09T03:03:09.009Z'),
+            },
+            where: {
+              id: 10340103,
+              AiRunStatusId: Object.create(
+                {
+                  [Op.or]: [
+                    {
+                      [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — the other sibling, also inherited
+                    },
+                  ],
+                },
+                {
+                  [Op.notIn]: {
+                    value: [
+                      3, // AI_RUN_STATUS.SUCCEEDED.ID
+                      4, // AI_RUN_STATUS.FAILED.ID
+                      5, // AI_RUN_STATUS.CANCELED.ID
+                    ],
+                    enumerable: true,
+                  },
+                }
+              ),
+            },
+          },
+          expected: 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunRow.id', async ({
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const received = () => AiRun.update(
+          input.values,
+          {
+            where: input.where,
+          }
+        )
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.setupHooks()', () => {
+    /*
+     * The condition that answers one thing when it is read and another when it is compiled.
+     *
+     * A caller's `where` is read twice — once by the guard, once when the statement is generated —
+     * so an exclusion behind a getter can show the guard the three terminal statuses and show the
+     * compiler a list excluding nothing. No reading of the object closes that, because both
+     * readers are handed the same two-faced object.
+     *
+     * What closes it is the substitution: an accepted `where` is replaced by the condition the
+     * model built and compiled, so the second answer below is never asked for. The run is canceled,
+     * that condition matches no canceled run, and the rows it moved are therefore none — which is
+     * the assertion. A guard that refused would throw here instead, and a substitution that did not
+     * take would compile the second answer, match the run and move it.
+     */
+    describe('when the condition answers the guard and the statement differently', () => {
+      test('should write under the condition the model built', async () => {
+        const aiRunRow = { // Arrange
+          id: 10340104,
+          ApiClientId: 10000001,
+          AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+          AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+          runKey: 'run-key-10340104',
+          requestKey: 'request-key-10340104',
+          requestBodyHash: 'request-body-hash-10340104',
+          externalRef: 'external-ref-10340104',
+          subjectLabel: 'Subject label of run 10340104',
+          correlationId: 'correlation-id-10340104',
+          callbackUrl: 'https://signing.client.development.invalid/callbacks/10340104',
+          acceptedAt: new Date('2026-10-09T04:04:01.001Z'),
+          startedAt: new Date('2026-10-09T04:04:02.002Z'),
+          finishedAt: new Date('2026-10-09T04:04:03.003Z'),
+          canceledAt: new Date('2026-10-09T04:04:03.003Z'),
+        }
+        await AiRun.create(aiRunRow)
+
+        const excludedAiRunStatusIdsAnswers = [
+          [
+            3, // AI_RUN_STATUS.SUCCEEDED.ID — what the first reader is shown
+            4, // AI_RUN_STATUS.FAILED.ID
+            5, // AI_RUN_STATUS.CANCELED.ID
+          ],
+          [
+            0, // what the reader after it would be shown, excluding no status at all
+          ],
+        ]
+        const args = {
+          values: {
+            AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+            startedAt: new Date('2026-10-09T04:04:09.009Z'),
+          },
+          options: {
+            where: {
+              id: 10340104,
+              AiRunStatusId: {
+                get [Op.notIn] () {
+                  return excludedAiRunStatusIdsAnswers.shift()
+                },
+              },
+            },
+          },
+        }
+        const expected = [
+          0, // the rows the write moved
+        ]
+
+        const received = await AiRun.update(args.values, args.options) // Act
+
+        expect(received) // Assert
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AiRun', () => {
+  describe('.setupHooks()', () => {
+    /*
+     * The same two-faced condition wearing a `Proxy`, which lies about which keys it owns rather
+     * than about what one of them holds.
+     *
+     * The trap answers the exclusion alone the first time it is asked and the truth afterwards, so
+     * a guard enumerating the condition's keys would see the exclusion standing on its own and
+     * accept. Nothing enumerates it: the condition is compiled, the compiler asks the trap more
+     * than once, and what is compared is therefore a predicate built out of the sibling — which is
+     * not the one this model builds, and is the refusal.
+     */
+    describe('when the condition hides a sibling operator from whoever asks first', () => {
+      test('should refuse the bulk status write', async () => {
+        const aiRunRow = { // Arrange
+          id: 10340105,
+          ApiClientId: 10000001,
+          AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+          AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+          runKey: 'run-key-10340105',
+          requestKey: 'request-key-10340105',
+          requestBodyHash: 'request-body-hash-10340105',
+          externalRef: 'external-ref-10340105',
+          subjectLabel: 'Subject label of run 10340105',
+          correlationId: 'correlation-id-10340105',
+          callbackUrl: 'https://signing.client.development.invalid/callbacks/10340105',
+          acceptedAt: new Date('2026-10-09T05:05:01.001Z'),
+          startedAt: new Date('2026-10-09T05:05:02.002Z'),
+          finishedAt: new Date('2026-10-09T05:05:03.003Z'),
+          canceledAt: new Date('2026-10-09T05:05:03.003Z'),
+        }
+        await AiRun.create(aiRunRow)
+
+        const aiRunStatusCondition = {
+          [Op.notIn]: [
+            3, // AI_RUN_STATUS.SUCCEEDED.ID
+            4, // AI_RUN_STATUS.FAILED.ID
+            5, // AI_RUN_STATUS.CANCELED.ID
+          ],
+          [Op.and]: [
+            {
+              [Op.gte]: 1, // AI_RUN_STATUS.QUEUED.ID — the sibling the trap holds back
+            },
+          ],
+        }
+        const ownKeysAnswers = [
+          [
+            Op.notIn, // what the first asker is shown
+          ],
+          [
+            Op.notIn, // what every asker after it is shown
+            Op.and,
+          ],
+        ]
+        const args = {
+          values: {
+            AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+            startedAt: new Date('2026-10-09T05:05:09.009Z'),
+          },
+          options: {
+            where: {
+              id: 10340105,
+              AiRunStatusId: new Proxy(aiRunStatusCondition, {
+                ownKeys: () => ownKeysAnswers.shift(),
+                getOwnPropertyDescriptor: (target, key) => ({
+                  ...Reflect.getOwnPropertyDescriptor(target, key),
+                  configurable: true,
+                  enumerable: true,
+                }),
+              }),
+            },
+          },
+        }
+        const expected = 'AiRun.update() writing AiRunStatusId is refused unless its where compiles to the condition this model builds for one unsettled run. Move the run through AiRunStatusRecorder.'
+
+        const received = () => AiRun.update(args.values, args.options) // Act
+
+        await expect(received) // Assert
+          .rejects
+          .toThrow(expected)
       })
     })
   })
@@ -4557,11 +4902,12 @@ describe('AiRunStatusRecorder', () => {
      * The transition write goes through `AiRun`'s own guard now, rather than around it.
      *
      * It used to be made with `hooks: false`, because `beforeBulkUpdate` refused any bulk write
-     * naming the status. The model reads the `where` instead: a condition excluding every terminal
-     * status matches no settled run, so it cannot move one out of a status a run never leaves. The
-     * spy is on `AiRun.excludesEveryTerminalAiRunStatus()`, which nothing but that hook reaches —
-     * so a call to it is the hook having run, and what it was handed is the condition this class
-     * built. The count beside it says the write still landed with the guard in the way.
+     * naming the status. The model compiles the `where` instead, and accepts it when it compiles
+     * to the condition the model itself builds for one unsettled run — which is the condition this
+     * class builds. The spy is on `AiRun.buildProvenUnsettledAiRunCondition()`, which nothing but
+     * that hook reaches, so a call to it is the hook having run and what it was handed is what
+     * this class stated. The count beside it says the write still landed with the guard in the
+     * way, which is the half that would break the moment the two conditions stopped matching.
      */
     describe('should let the model guard read the condition and still land the write', () => {
       const cases = [
@@ -4653,7 +4999,7 @@ describe('AiRunStatusRecorder', () => {
         await AiRun.create(input.aiRunRow) // Arrange
 
         const recorder = AiRunStatusRecorder.create()
-        const excludesEveryTerminalAiRunStatusSpy = jest.spyOn(AiRun, 'excludesEveryTerminalAiRunStatus')
+        const buildProvenUnsettledAiRunConditionSpy = jest.spyOn(AiRun, 'buildProvenUnsettledAiRunCondition')
         const args = {
           aiRunId: input.aiRunRow.id,
           values: input.values,
@@ -4663,7 +5009,7 @@ describe('AiRunStatusRecorder', () => {
 
         expect(received) // Assert
           .toBe(expected.affectedAiRunCount)
-        expect(excludesEveryTerminalAiRunStatusSpy)
+        expect(buildProvenUnsettledAiRunConditionSpy)
           .toHaveBeenCalledWith(expected.guardArguments)
       })
     })

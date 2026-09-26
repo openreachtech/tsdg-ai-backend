@@ -234,6 +234,14 @@ export default class BaseAiRunPostRenderer extends BasePostRenderer {
    * as long as the negotiation took. Once the process has one, every later run is handed the same
    * one and nothing is negotiated at all.
    *
+   * **A queue that cannot be reached ends the request rather than holding it.** The wait has a
+   * deadline of the provider's, so a Redis that is not there is answered within it — and the
+   * answer is an exception, which reaches the engine and becomes its own `500`, because the
+   * contract fixes no status for a request that was refused by the machinery behind it rather than
+   * by anything the client sent. No run is written on that path: this happens before the
+   * transaction is opened, so the caller may send the same idempotency key again once the queue is
+   * back.
+   *
    * @param {RenderAcceptedRunParams} params - Parameters.
    * @returns {Promise<RestfulApiType.RenderResponse>} Response.
    */
@@ -315,10 +323,16 @@ export default class BaseAiRunPostRenderer extends BasePostRenderer {
    * the process stops. The share is the one object in a request's reach whose lifetime is the
    * process's.
    *
+   * Nothing is caught here. A build that has not connected by the provider's deadline raises, and
+   * a request that cannot enqueue the run it is about to accept has nothing to answer with that
+   * would be true — accepting a run whose job is never sent would promise a callback that never
+   * comes.
+   *
    * @param {{
    *   context: *
    * }} params - Parameters.
    * @returns {Promise<*>} The dispatcher.
+   * @throws {Error} When the queue could not be reached in time.
    */
   async ensureJobDispatcher ({
     context,
