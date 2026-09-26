@@ -2,11 +2,16 @@ import AiRunsGetRenderer from '../../../../../../../server/restfulapi/renderers/
 
 import {
   BaseGetRenderer,
+  DeepBulkClassLoader,
 } from '@openreachtech/renchan'
+
+import AppRestfulApiServerEngine from '../../../../../../../server/restfulapi/AppRestfulApiServerEngine.js'
 
 import AiRunPageResponseBuilder from '../../../../../../../app/aiRun/AiRunPageResponseBuilder.js'
 import AiRunsQueryInputAdapter from '../../../../../../../app/adapter/forRenderer/AiRunsQueryInputAdapter.js'
 import AiRunsQueryInputValidator from '../../../../../../../app/validator/forRenderer/AiRunsQueryInputValidator.js'
+
+import rootPath from '../../../../../../../app/globals/root-path.js'
 
 /*
  * The route section 13 declares, read end to end against the development seeders.
@@ -56,6 +61,48 @@ describe('AiRunsGetRenderer', () => {
 
         expect(received)
           .toBe('get')
+      })
+    })
+  })
+})
+
+describe('AiRunsGetRenderer', () => {
+  /*
+   * The two describes above say what this class answers. Neither says that anything mounts it.
+   *
+   * **The REST layer has no barrel**: `RestfulApiRoutesBuilder` walks everything under the
+   * engine's `config.renderersPath` and builds one route per class it finds, so this route exists
+   * because of *where the file sits* and nothing else. Move the file, rename the folder, or point
+   * the engine somewhere else, and the route leaves the server with every assertion in this file
+   * still green. That link between two project-owned facts — the path the engine is configured
+   * with, and the place this renderer lives — is what is pinned here, and it was pinned by
+   * nothing before.
+   *
+   * **It stops at the file list on purpose, and not because the step after it is broken.** That
+   * step — `DeepBulkClassLoader#loadClasses()` importing each file — works: the server boots and
+   * reports its three listeners, this route among them. What a unit test adds beyond that is a
+   * guard against the file being moved out from under the folder scan, which is cheap here and
+   * needs no process. Proving the mount itself is the running server's job, not this file's.
+   *
+   * **An earlier draft of this note called the import a defect of `@openreachtech/renchan`.** It
+   * is not. The package hands `import()` an absolute path, which is a usable URL on POSIX and not
+   * on Windows — a deliberate choice for the platform this project runs on. The draft was written
+   * from a Windows shell, which is now forbidden by the environment rule for this and four other
+   * findings of the same shape.
+   */
+  describe('route registration', () => {
+    describe('when the engine lists the files it mounts renderers from', () => {
+      test('should hold this renderer', () => {
+        const expected = rootPath.to('server/restfulapi/renderers/v1/get/AiRunsGetRenderer.js')
+
+        const loader = DeepBulkClassLoader.create({
+          poolPath: AppRestfulApiServerEngine.config.renderersPath,
+        })
+
+        const actual = loader.loadFileNames()
+
+        expect(actual)
+          .toContain(expected)
       })
     })
   })
