@@ -800,6 +800,19 @@ describe('AiRunMediaWorkspace', () => {
      * photograph. The pre-existing bytes are read back to show the file was left alone rather than
      * merely that the call failed.
      */
+    /*
+     * **The planted directory is created `0o700` on purpose, and the case does not work without
+     * it.** `#confirmOwnWorkspaceDirectory()` refuses a workspace granting any permission beyond
+     * its owner, so a directory left at the umask default — `0o755` on a typical Linux — is
+     * refused before `writeMediumFile()` ever reaches the file, and this case would assert the
+     * wrong refusal. Planting it the way the class itself creates one is what leaves `EEXIST` as
+     * the only thing left to refuse.
+     *
+     * **It is written down because one platform cannot see it.** Where `process.getuid` does not
+     * exist, `#isOwnPrivateDirectory()` answers true before it reads the mode at all, so this
+     * case passes on Windows whatever the planted directory's permissions are. It was CI on Linux
+     * that found it.
+     */
     describe('should refuse a file already at the path', () => {
       const cases = [
         {
@@ -839,7 +852,9 @@ describe('AiRunMediaWorkspace', () => {
           recursive: true,
           force: true,
         })
-        await fsPromises.mkdir(plantedWorkspacePath)
+        await fsPromises.mkdir(plantedWorkspacePath, {
+          mode: 0o700,
+        })
         const plantedFilePath = path.join(plantedWorkspacePath, `medium-${params.aiRunMediaId}`)
         await fsPromises.writeFile(plantedFilePath, expected)
         const workspace = AiRunMediaWorkspace.create(factoryParams)
