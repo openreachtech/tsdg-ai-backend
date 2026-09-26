@@ -1,318 +1,497 @@
 import AssetMediaExtractionPostRenderer from '../../../server/restfulapi/renderers/v1/post/AssetMediaExtractionPostRenderer.js'
 
 import AiRunAcceptor from '../../../app/aiRun/AiRunAcceptor.js'
-import AiRunJobDispatchRegistrar from '../../../app/aiRun/AiRunJobDispatchRegistrar.js'
+import AiRunRateLimitInspector from '../../../app/aiRun/AiRunRateLimitInspector.js'
 import RunKeyGenerator from '../../../app/aiRun/RunKeyGenerator.js'
 
 /*
- * The three members of the stub route that write, read against the real database.
+ * The one member of this route that writes, read against the real database.
  *
- * **What a client actually receives is here, not in the sibling `__tests__` file.** The accepted
- * response carries a run key and nothing else, so a test that stopped at the `202` would say nothing
- * about the screen the fourth use case is about. Each case below reads the run back through the
- * acceptor's own finder — code that is itself under test — and asserts the result body the run was
- * settled with, which is the body `GET /v1/ai-runs/:runKey` then hands the client.
+ * **What a client receives, and what is left behind afterwards, are asserted apart.** The accepted
+ * response carries a run key and three other fields; the run it names is a row that has to still be
+ * queued when the request ends, because nothing in this service has read a photo yet. The stub that
+ * stood here settled that row inside the request, so the case asserting it is *not* settled is the
+ * one that would have failed against the code this replaced - `AiRunStatusId` succeeded, a
+ * `finishedAt` and a `resultBody`, all written before the caller was answered.
  *
- * **The two cases name different photos, and that is the point of there being two.** The same schema
- * and the same asset answer two different bodies because the media differ, and each body is written
- * out as a literal, so the answer is pinned across processes rather than merely consistent within
- * one.
+ * **The job is dispatched, and it is dispatched after the commit.** The dispatcher this service
+ * hands the registration sends nothing - there is no `run-asset-media-extraction` queue until the
+ * worker checkpoint builds one - but the registration itself is real, so the call can be asserted
+ * and the run it names read back. A dispatch naming a run the transaction never committed is the
+ * failure that registration exists to prevent.
+ *
+ * **The rate-limit refusal is the last acceptance criterion of section 20**, in the half of it that
+ * is checkable: "a client that has exceeded its rate limit is refused, and no run is created". The
+ * other half - "and no model is called" - is vacuous here, in a class that calls no model on any
+ * path, and no case below pretends to assert it.
+ *
+ * The refusal cases stand on the development seeder's own runs inside 2026-09-10, where the three
+ * seeded clients hold six, three and two runs and nothing any test writes ever lands; the accepted
+ * cases are dated 2026-10-12, clear of that day, so the runs they create cannot move a count the
+ * read-only tests assert. Every run below is created through the acceptor and takes its id from the
+ * auto-increment, which is why this file sits above every file writing an explicit id.
  */
 
 describe('AssetMediaExtractionPostRenderer', () => {
   describe('#render()', () => {
     describe('when the key is arriving for the first time', () => {
-      const cases = [
-        {
-          override: {
-            runKey: 'run-key-stub-10600001',
-          },
-          input: {
-            body: {
-              externalRef: 'external-ref-10600001',
-              subjectLabel: 'Subject label of stub run 10600001',
-              correlationId: 'correlation-id-10600001',
-              callbackUrl: 'https://signing.client.development.invalid/callbacks/10600001',
+      describe('should answer with the run it accepted', () => {
+        const cases = [
+          {
+            override: {
+              runKey: 'run-key-10620001',
             },
-            context: {
-              apiClientId: 10000001,
-              now: new Date('2026-09-25T01:01:01.001Z'),
-            },
-            request: {
-              expressRequest: {
-                headers: {
-                  'idempotency-key': 'request-key-10600001',
+            input: {
+              body: {
+                externalRef: 'external-ref-10620001',
+                subjectLabel: 'Subject label of run 10620001',
+                correlationId: 'correlation-id-10620001',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620001',
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-10-12T01:01:01.001Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620001',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620001","subjectLabel":"Subject label of run 10620001","correlationId":"correlation-id-10620001","callbackUrl":"https://signing.client.development.invalid/callbacks/10620001","asset":{"categorySlugs":["residential"],"province":"Ha Noi"},"fieldSchema":[{"path":"attributes.wallMaterial","label":"Wall material","valueKind":"text","isRequired":true}],"media":[{"mediaKey":"media-key-10620001","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10620001.jpg","mimeType":"image/jpeg","byteSize":120001}],"mediaSignature":"media-signature-10620001"}',
                 },
-                rawBody: '{"externalRef":"external-ref-10600001","subjectLabel":"Subject label of stub run 10600001","correlationId":"correlation-id-10600001","callbackUrl":"https://signing.client.development.invalid/callbacks/10600001","asset":{"categorySlugs":["residential"],"province":"Ha Noi"},"fieldSchema":[{"path":"attributes.wallMaterial","label":"Wall material","valueKind":"text","isRequired":true},{"path":"attributes.legalStatusSlug","label":"Legal status","valueKind":"select","isRequired":true,"options":["full-title","pending-title","no-title"]}],"media":[{"mediaKey":"media-key-10600001","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10600001.jpg","mimeType":"image/jpeg","byteSize":120001},{"mediaKey":"media-key-10600003","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10600003.jpg","mimeType":"image/jpeg","byteSize":120001}],"mediaSignature":"media-signature-10600001"}',
               },
             },
-          },
-          expected: {
-            response: expect.objectContaining({
+            expected: expect.objectContaining({
               statusCode: 202,
               error: null,
               content: {
-                runKey: 'run-key-stub-10600001',
+                runKey: 'run-key-10620001',
                 runCategoryName: 'asset-media-extraction',
                 statusName: 'queued',
-                acceptedAt: new Date('2026-09-25T01:01:01.001Z'),
+                acceptedAt: new Date('2026-10-12T01:01:01.001Z'),
               },
             }),
-            settledAiRun: expect.objectContaining({
-              runKey: 'run-key-stub-10600001',
-              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
-              finishedAt: new Date('2026-09-25T01:01:01.001Z'),
-              resultBody: '{"fields":[{"path":"attributes.wallMaterial","value":"concrete","fieldStateName":"derived","suggestionConfidence":0.8,"reason":"Read \\"Wall material\\" from 2 of the photos sent, for an asset in Ha Noi.","sourceMediaKeys":["media-key-10600001","media-key-10600003"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}}],"missingFieldPaths":["attributes.legalStatusSlug"],"unreadableMediaKeys":[],"mediaSignature":"media-signature-10600001"}',
-            }),
           },
-        },
-        {
-          override: {
-            runKey: 'run-key-stub-10600002',
-          },
-          input: {
-            body: {
-              externalRef: 'external-ref-10600002',
-              subjectLabel: 'Subject label of stub run 10600002',
-              correlationId: 'correlation-id-10600002',
-              callbackUrl: 'https://signing.client.development.invalid/callbacks/10600002',
+          {
+            override: {
+              runKey: 'run-key-10620002',
             },
-            context: {
-              apiClientId: 10000002,
-              now: new Date('2026-09-25T02:02:02.002Z'),
-            },
-            request: {
-              expressRequest: {
-                headers: {
-                  'idempotency-key': 'request-key-10600002',
+            input: {
+              body: {
+                externalRef: 'external-ref-10620002',
+                subjectLabel: 'Subject label of run 10620002',
+                correlationId: 'correlation-id-10620002',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620002',
+              },
+              context: {
+                apiClientId: 10000002,
+                now: new Date('2026-10-12T02:02:02.002Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620002',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620002","subjectLabel":"Subject label of run 10620002","correlationId":"correlation-id-10620002","callbackUrl":"https://rotating.client.development.invalid/callbacks/10620002","asset":{"categorySlugs":["commercial"],"province":"Da Nang"},"fieldSchema":[{"path":"attributes.floorCount","label":"Floor count","valueKind":"number","isRequired":false,"unit":"floor"}],"media":[{"mediaKey":"media-key-10620002","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10620002.jpg","mimeType":"image/png","byteSize":230002}],"mediaSignature":"media-signature-10620002"}',
                 },
-                rawBody: '{"externalRef":"external-ref-10600002","subjectLabel":"Subject label of stub run 10600002","correlationId":"correlation-id-10600002","callbackUrl":"https://signing.client.development.invalid/callbacks/10600002","asset":{"categorySlugs":["residential"],"province":"Ha Noi"},"fieldSchema":[{"path":"attributes.wallMaterial","label":"Wall material","valueKind":"text","isRequired":true},{"path":"attributes.legalStatusSlug","label":"Legal status","valueKind":"select","isRequired":true,"options":["full-title","pending-title","no-title"]}],"media":[{"mediaKey":"media-key-10600004","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10600004.jpg","mimeType":"image/jpeg","byteSize":120001},{"mediaKey":"media-key-10600005","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10600005.jpg","mimeType":"image/jpeg","byteSize":120001},{"mediaKey":"media-key-10600006","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10600006.jpg","mimeType":"image/jpeg","byteSize":120001}],"mediaSignature":"media-signature-10600002"}',
               },
             },
-          },
-          expected: {
-            response: expect.objectContaining({
+            expected: expect.objectContaining({
               statusCode: 202,
               error: null,
               content: {
-                runKey: 'run-key-stub-10600002',
+                runKey: 'run-key-10620002',
                 runCategoryName: 'asset-media-extraction',
                 statusName: 'queued',
-                acceptedAt: new Date('2026-09-25T02:02:02.002Z'),
+                acceptedAt: new Date('2026-10-12T02:02:02.002Z'),
               },
             }),
-            settledAiRun: expect.objectContaining({
-              runKey: 'run-key-stub-10600002',
-              AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
-              finishedAt: new Date('2026-09-25T02:02:02.002Z'),
-              resultBody: '{"fields":[{"path":"attributes.wallMaterial","value":"concrete","fieldStateName":"derived","suggestionConfidence":0.8,"reason":"Read \\"Wall material\\" from 1 of the photos sent, for an asset in Ha Noi.","sourceMediaKeys":["media-key-10600006"],"agreement":{"agreedReadingCount":3,"totalReadingCount":3}},{"path":"attributes.legalStatusSlug","value":"pending-title","fieldStateName":"derived","suggestionConfidence":0.53,"reason":"Read \\"Legal status\\" from 3 of the photos sent, for an asset in Ha Noi.","sourceMediaKeys":["media-key-10600004","media-key-10600005","media-key-10600006"],"agreement":{"agreedReadingCount":2,"totalReadingCount":3}}],"missingFieldPaths":[],"unreadableMediaKeys":[],"mediaSignature":"media-signature-10600002"}',
-            }),
           },
-        },
-      ]
+        ]
 
-      test.each(cases)('externalRef: $input.body.externalRef', async ({
-        override,
-        input,
-        expected,
-      }) => {
-        const renderer = AssetMediaExtractionPostRenderer.create()
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          override,
+          input,
+          expected,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
 
-        const runKeyGenerator = RunKeyGenerator.create()
-        jest.spyOn(runKeyGenerator, 'generateRunKey')
-          .mockReturnValue(override.runKey)
-        const aiRunAcceptor = AiRunAcceptor.create({
-          runKeyGenerator,
+          const runKeyGenerator = RunKeyGenerator.create()
+          jest.spyOn(runKeyGenerator, 'generateRunKey')
+            .mockReturnValue(override.runKey)
+          jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunAcceptor')
+            .mockReturnValue(AiRunAcceptor.create({
+              runKeyGenerator,
+            }))
+
+          const received = await renderer.render(input)
+
+          expect(received)
+            .toEqual(expected)
         })
-        jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunAcceptor')
-          .mockReturnValue(aiRunAcceptor)
+      })
 
-        const findAiRunArgs = {
-          apiClientId: input.context.apiClientId,
-          requestKey: input.request.expressRequest.headers['idempotency-key'],
-        }
+      describe('should leave the run queued and unsettled', () => {
+        const cases = [
+          {
+            override: {
+              runKey: 'run-key-10620003',
+            },
+            input: {
+              body: {
+                externalRef: 'external-ref-10620003',
+                subjectLabel: 'Subject label of run 10620003',
+                correlationId: 'correlation-id-10620003',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620003',
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-10-12T03:03:03.003Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620003',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620003","subjectLabel":"Subject label of run 10620003","correlationId":"correlation-id-10620003","callbackUrl":"https://signing.client.development.invalid/callbacks/10620003","asset":{"categorySlugs":["residential"],"province":"Hai Phong"},"fieldSchema":[{"path":"attributes.roofMaterial","label":"Roof material","valueKind":"text","isRequired":true}],"media":[{"mediaKey":"media-key-10620003","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10620003.jpg","mimeType":"image/jpeg","byteSize":340003}],"mediaSignature":"media-signature-10620003"}',
+                },
+              },
+            },
+            expected: expect.objectContaining({
+              runKey: 'run-key-10620003',
+              AiRunStatusId: 1, // AI_RUN_STATUS.QUEUED.ID
+              acceptedAt: new Date('2026-10-12T03:03:03.003Z'),
+              startedAt: null,
+              finishedAt: null,
+              resultBody: null,
+              failureReasonCode: null,
+            }),
+          },
+          {
+            override: {
+              runKey: 'run-key-10620004',
+            },
+            input: {
+              body: {
+                externalRef: 'external-ref-10620004',
+                subjectLabel: 'Subject label of run 10620004',
+                correlationId: 'correlation-id-10620004',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620004',
+              },
+              context: {
+                apiClientId: 10000002,
+                now: new Date('2026-10-12T04:04:04.004Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620004',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620004","subjectLabel":"Subject label of run 10620004","correlationId":"correlation-id-10620004","callbackUrl":"https://rotating.client.development.invalid/callbacks/10620004","asset":{"categorySlugs":["land"],"province":"Can Tho"},"fieldSchema":[{"path":"attributes.legalStatusSlug","label":"Legal status","valueKind":"select","isRequired":true,"options":["full-title","pending-title"]}],"media":[],"mediaSignature":"media-signature-10620004"}',
+                },
+              },
+            },
+            expected: expect.objectContaining({
+              runKey: 'run-key-10620004',
+              AiRunStatusId: 1, // AI_RUN_STATUS.QUEUED.ID
+              acceptedAt: new Date('2026-10-12T04:04:04.004Z'),
+              startedAt: null,
+              finishedAt: null,
+              resultBody: null,
+              failureReasonCode: null,
+            }),
+          },
+        ]
 
-        const received = await renderer.render(input)
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          override,
+          input,
+          expected,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
 
-        const settledAiRun = await aiRunAcceptor.findAiRun(findAiRunArgs)
-        expect(received)
-          .toEqual(expected.response)
-        expect(settledAiRun) // The run the caller was handed a key to, as it now stands
-          .toEqual(expected.settledAiRun)
+          const runKeyGenerator = RunKeyGenerator.create()
+          jest.spyOn(runKeyGenerator, 'generateRunKey')
+            .mockReturnValue(override.runKey)
+          const aiRunAcceptor = AiRunAcceptor.create({
+            runKeyGenerator,
+          })
+          jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunAcceptor')
+            .mockReturnValue(aiRunAcceptor)
+          const findAiRunArgs = {
+            apiClientId: input.context.apiClientId,
+            requestKey: input.request.expressRequest.headers['idempotency-key'],
+          }
+
+          await renderer.render(input)
+
+          const received = await aiRunAcceptor.findAiRun(findAiRunArgs)
+          expect(received)
+            .toEqual(expected)
+        })
+      })
+
+      describe('should dispatch the run job once the transaction has committed', () => {
+        const cases = [
+          {
+            override: {
+              runKey: 'run-key-10620005',
+            },
+            input: {
+              body: {
+                externalRef: 'external-ref-10620005',
+                subjectLabel: 'Subject label of run 10620005',
+                correlationId: 'correlation-id-10620005',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620005',
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-10-12T05:05:05.005Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620005',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620005","subjectLabel":"Subject label of run 10620005","correlationId":"correlation-id-10620005","callbackUrl":"https://signing.client.development.invalid/callbacks/10620005","asset":{"categorySlugs":["residential"],"province":"Hue"},"fieldSchema":[{"path":"attributes.wallMaterial","label":"Wall material","valueKind":"text","isRequired":false}],"media":[{"mediaKey":"media-key-10620005","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10620005.jpg","mimeType":"image/jpeg","byteSize":450005}],"mediaSignature":"media-signature-10620005"}',
+                },
+              },
+            },
+          },
+          {
+            override: {
+              runKey: 'run-key-10620006',
+            },
+            input: {
+              body: {
+                externalRef: 'external-ref-10620006',
+                subjectLabel: 'Subject label of run 10620006',
+                correlationId: 'correlation-id-10620006',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620006',
+              },
+              context: {
+                apiClientId: 10000002,
+                now: new Date('2026-10-12T06:06:06.006Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620006',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620006","subjectLabel":"Subject label of run 10620006","correlationId":"correlation-id-10620006","callbackUrl":"https://rotating.client.development.invalid/callbacks/10620006","asset":{"categorySlugs":["commercial"],"province":"Nha Trang"},"fieldSchema":[{"path":"attributes.floorCount","label":"Floor count","valueKind":"number","isRequired":true,"unit":"floor"}],"media":[{"mediaKey":"media-key-10620006","mediaCategoryName":"photo","url":"https://storage.client.development.invalid/media-key-10620006.jpg","mimeType":"image/webp","byteSize":560006}],"mediaSignature":"media-signature-10620006"}',
+                },
+              },
+            },
+          },
+        ]
+
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          override,
+          input,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
+
+          const runKeyGenerator = RunKeyGenerator.create()
+          jest.spyOn(runKeyGenerator, 'generateRunKey')
+            .mockReturnValue(override.runKey)
+          const aiRunAcceptor = AiRunAcceptor.create({
+            runKeyGenerator,
+          })
+          jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunAcceptor')
+            .mockReturnValue(aiRunAcceptor)
+          const dispatchJobSpy = jest.spyOn(
+            AssetMediaExtractionPostRenderer.unbuiltQueueJobDispatcher,
+            'dispatchJob'
+          )
+          const findAiRunArgs = {
+            apiClientId: input.context.apiClientId,
+            requestKey: input.request.expressRequest.headers['idempotency-key'],
+          }
+
+          await renderer.render(input)
+
+          const acceptedAiRun = await aiRunAcceptor.findAiRun(findAiRunArgs)
+          const expected = {
+            body: {
+              aiRunId: acceptedAiRun.id,
+            },
+            keepsConnection: true,
+          }
+          expect(dispatchJobSpy)
+            .toHaveBeenCalledWith(expected)
+        })
       })
     })
-  })
-})
 
-describe('AssetMediaExtractionPostRenderer', () => {
-  describe('#saveAcceptedAiRun()', () => {
-    const cases = [
-      {
-        override: {
-          runKey: 'run-key-stub-10600003',
-        },
-        input: {
-          context: {
-            apiClientId: 10000001,
-            now: new Date('2026-09-25T03:03:03.003Z'),
-          },
-          input: {
-            requestKey: 'request-key-10600003',
-            externalRef: 'external-ref-10600003',
-            subjectLabel: 'Subject label of stub run 10600003',
-            correlationId: 'correlation-id-10600003',
-            callbackUrl: 'https://signing.client.development.invalid/callbacks/10600003',
-          },
-          rawBody: '{"externalRef":"external-ref-10600003","media":[],"mediaSignature":"media-signature-10600003"}',
-          requestBodyHash: 'request-body-hash-10600003',
-        },
-        expected: {
-          settleArgs: {
-            aiRunId: expect.any(Number),
-            rawBody: '{"externalRef":"external-ref-10600003","media":[],"mediaSignature":"media-signature-10600003"}',
-            finishedAt: new Date('2026-09-25T03:03:03.003Z'),
-          },
-        },
-      },
-      {
-        override: {
-          runKey: 'run-key-stub-10600004',
-        },
-        input: {
-          context: {
-            apiClientId: 10000002,
-            now: new Date('2026-09-25T04:04:04.004Z'),
-          },
-          input: {
-            requestKey: 'request-key-10600004',
-            externalRef: 'external-ref-10600004',
-            subjectLabel: 'Subject label of stub run 10600004',
-            correlationId: 'correlation-id-10600004',
-            callbackUrl: 'https://signing.client.development.invalid/callbacks/10600004',
-          },
-          rawBody: '{"externalRef":"external-ref-10600004","media":[],"mediaSignature":"media-signature-10600004"}',
-          requestBodyHash: 'request-body-hash-10600004',
-        },
-        expected: {
-          settleArgs: {
-            aiRunId: expect.any(Number),
-            rawBody: '{"externalRef":"external-ref-10600004","media":[],"mediaSignature":"media-signature-10600004"}',
-            finishedAt: new Date('2026-09-25T04:04:04.004Z'),
-          },
-        },
-      },
-    ]
-
-    test.each(cases)('requestKey: $input.input.requestKey', async ({
-      override,
-      input,
-      expected,
-    }) => {
-      const renderer = AssetMediaExtractionPostRenderer.create()
-      const settleStubAiRunSpy = jest.spyOn(renderer, 'settleStubAiRun')
-        .mockResolvedValue(true)
-
-      const runKeyGenerator = RunKeyGenerator.create()
-      jest.spyOn(runKeyGenerator, 'generateRunKey')
-        .mockReturnValue(override.runKey)
-      const args = {
-        aiRunAcceptor: AiRunAcceptor.create({
-          runKeyGenerator,
-        }),
-        aiRunJobDispatchRegistrar: AiRunJobDispatchRegistrar.create({
-          jobDispatcher: AssetMediaExtractionPostRenderer.stubJobDispatcher,
-        }),
-        context: input.context,
-        input: input.input,
-        rawBody: input.rawBody,
-        requestBodyHash: input.requestBodyHash,
-      }
-
-      const acceptedAiRun = await renderer.saveAcceptedAiRun(args)
-      const received = acceptedAiRun.runKey
-
-      expect(received)
-        .toBe(override.runKey)
-      expect(settleStubAiRunSpy)
-        .toHaveBeenCalledWith(expected.settleArgs)
-    })
-  })
-})
-
-describe('AssetMediaExtractionPostRenderer', () => {
-  describe('#settleStubAiRun()', () => {
-    const cases = [
-      {
-        override: {
-          runKey: 'run-key-stub-10600005',
-        },
-        input: {
-          acceptArgs: {
-            apiClientId: 10000001,
-            aiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+    describe('when the client has exceeded its rate limit', () => {
+      describe('should refuse the request', () => {
+        const cases = [
+          {
             input: {
-              requestKey: 'request-key-10600005',
-              externalRef: 'external-ref-10600005',
-              subjectLabel: 'Subject label of stub run 10600005',
-              correlationId: 'correlation-id-10600005',
-              callbackUrl: 'https://signing.client.development.invalid/callbacks/10600005',
+              aiRunRateLimitInspectorArgs: {
+                maximumAcceptedAiRunCount: 1,
+                windowSecondCount: 86400,
+              },
+              body: {
+                externalRef: 'external-ref-10620011',
+                subjectLabel: 'Subject label of refused request 10620011',
+                correlationId: 'correlation-id-10620011',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620011',
+              },
+              context: {
+                apiClientId: 10000001, // Six runs seeded inside the window
+                now: new Date('2026-09-10T12:00:00.000Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620011',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620011","subjectLabel":"Subject label of refused request 10620011","correlationId":"correlation-id-10620011","callbackUrl":"https://signing.client.development.invalid/callbacks/10620011","asset":{"categorySlugs":["residential"],"province":"Ha Noi"},"fieldSchema":[],"media":[],"mediaSignature":"media-signature-10620011"}',
+                },
+              },
             },
-            rawBody: '{"externalRef":"external-ref-10600005","media":[],"mediaSignature":"media-signature-10600005"}',
-            requestBodyHash: 'request-body-hash-10600005',
-            acceptedAt: new Date('2026-09-25T05:05:05.005Z'),
+            expected: expect.objectContaining({
+              statusCode: 429,
+              error: {
+                message: 'Rate limit exceeded',
+              },
+            }),
           },
-          rawBody: '{"externalRef":"external-ref-10600005","media":[],"mediaSignature":"media-signature-10600005"}',
-          finishedAt: new Date('2026-09-25T05:05:05.505Z'),
-        },
-      },
-      {
-        override: {
-          runKey: 'run-key-stub-10600006',
-        },
-        input: {
-          acceptArgs: {
-            apiClientId: 10000002,
-            aiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+          {
             input: {
-              requestKey: 'request-key-10600006',
-              externalRef: 'external-ref-10600006',
-              subjectLabel: 'Subject label of stub run 10600006',
-              correlationId: 'correlation-id-10600006',
-              callbackUrl: 'https://signing.client.development.invalid/callbacks/10600006',
+              aiRunRateLimitInspectorArgs: {
+                maximumAcceptedAiRunCount: 2,
+                windowSecondCount: 86400,
+              },
+              body: {
+                externalRef: 'external-ref-10620012',
+                subjectLabel: 'Subject label of refused request 10620012',
+                correlationId: 'correlation-id-10620012',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620012',
+              },
+              context: {
+                apiClientId: 10000002, // Three runs seeded inside the window
+                now: new Date('2026-09-10T12:00:00.000Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620012',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620012","subjectLabel":"Subject label of refused request 10620012","correlationId":"correlation-id-10620012","callbackUrl":"https://rotating.client.development.invalid/callbacks/10620012","asset":{"categorySlugs":["land"],"province":"Da Lat"},"fieldSchema":[],"media":[],"mediaSignature":"media-signature-10620012"}',
+                },
+              },
             },
-            rawBody: '{"externalRef":"external-ref-10600006","media":[],"mediaSignature":"media-signature-10600006"}',
-            requestBodyHash: 'request-body-hash-10600006',
-            acceptedAt: new Date('2026-09-25T06:06:06.006Z'),
+            expected: expect.objectContaining({
+              statusCode: 429,
+              error: {
+                message: 'Rate limit exceeded',
+              },
+            }),
           },
-          rawBody: '{"externalRef":"external-ref-10600006","media":[],"mediaSignature":"media-signature-10600006"}',
-          finishedAt: new Date('2026-09-25T06:06:06.606Z'),
-        },
-      },
-    ]
+        ]
 
-    test.each(cases)('requestKey: $input.acceptArgs.input.requestKey', async ({
-      override,
-      input,
-    }) => {
-      const renderer = AssetMediaExtractionPostRenderer.create()
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          input,
+          expected,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
+          jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunRateLimitInspector')
+            .mockReturnValue(AiRunRateLimitInspector.create(input.aiRunRateLimitInspectorArgs))
+          const renderArgs = {
+            body: input.body,
+            context: input.context,
+            request: input.request,
+          }
 
-      const runKeyGenerator = RunKeyGenerator.create()
-      jest.spyOn(runKeyGenerator, 'generateRunKey')
-        .mockReturnValue(override.runKey)
-      const aiRunAcceptor = AiRunAcceptor.create({
-        runKeyGenerator,
+          const received = await renderer.render(renderArgs)
+
+          expect(received)
+            .toEqual(expected)
+        })
       })
-      const acceptedAiRun = await aiRunAcceptor.saveAiRun(input.acceptArgs)
-      const args = {
-        aiRunId: acceptedAiRun.id,
-        rawBody: input.rawBody,
-        finishedAt: input.finishedAt,
-      }
 
-      const received = await renderer.settleStubAiRun(args)
+      describe('should create no run', () => {
+        const cases = [
+          {
+            input: {
+              aiRunRateLimitInspectorArgs: {
+                maximumAcceptedAiRunCount: 1,
+                windowSecondCount: 86400,
+              },
+              body: {
+                externalRef: 'external-ref-10620013',
+                subjectLabel: 'Subject label of refused request 10620013',
+                correlationId: 'correlation-id-10620013',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10620013',
+              },
+              context: {
+                apiClientId: 10000001,
+                now: new Date('2026-09-10T12:00:00.000Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620013',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620013","subjectLabel":"Subject label of refused request 10620013","correlationId":"correlation-id-10620013","callbackUrl":"https://signing.client.development.invalid/callbacks/10620013","asset":{"categorySlugs":["residential"],"province":"Ha Noi"},"fieldSchema":[],"media":[],"mediaSignature":"media-signature-10620013"}',
+                },
+              },
+            },
+          },
+          {
+            input: {
+              aiRunRateLimitInspectorArgs: {
+                maximumAcceptedAiRunCount: 2,
+                windowSecondCount: 86400,
+              },
+              body: {
+                externalRef: 'external-ref-10620014',
+                subjectLabel: 'Subject label of refused request 10620014',
+                correlationId: 'correlation-id-10620014',
+                callbackUrl: 'https://rotating.client.development.invalid/callbacks/10620014',
+              },
+              context: {
+                apiClientId: 10000002,
+                now: new Date('2026-09-10T12:00:00.000Z'),
+              },
+              request: {
+                expressRequest: {
+                  headers: {
+                    'idempotency-key': 'request-key-10620014',
+                  },
+                  rawBody: '{"externalRef":"external-ref-10620014","subjectLabel":"Subject label of refused request 10620014","correlationId":"correlation-id-10620014","callbackUrl":"https://rotating.client.development.invalid/callbacks/10620014","asset":{"categorySlugs":["land"],"province":"Da Lat"},"fieldSchema":[],"media":[],"mediaSignature":"media-signature-10620014"}',
+                },
+              },
+            },
+          },
+        ]
 
-      expect(received)
-        .toBeTruthy()
+        test.each(cases)('externalRef: $input.body.externalRef', async ({
+          input,
+        }) => {
+          const renderer = AssetMediaExtractionPostRenderer.create()
+          jest.spyOn(AssetMediaExtractionPostRenderer, 'createAiRunRateLimitInspector')
+            .mockReturnValue(AiRunRateLimitInspector.create(input.aiRunRateLimitInspectorArgs))
+          const aiRunAcceptor = AiRunAcceptor.create()
+          const findAiRunArgs = {
+            apiClientId: input.context.apiClientId,
+            requestKey: input.request.expressRequest.headers['idempotency-key'],
+          }
+          const renderArgs = {
+            body: input.body,
+            context: input.context,
+            request: input.request,
+          }
+
+          await renderer.render(renderArgs)
+
+          const received = await aiRunAcceptor.findAiRun(findAiRunArgs)
+          expect(received)
+            .toBeNull()
+        })
+      })
     })
   })
 })

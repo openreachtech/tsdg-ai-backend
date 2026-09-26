@@ -11,6 +11,13 @@
  * run — each of its cases carries an idempotency key of its own, in `#asset-media-extraction`'s
  * own block — so its position relative to the three recorders below states nothing.
  *
+ * It does read the seeded runs, without writing one: its rate-limit cases count how many runs a
+ * seeded client already has inside 2026-09-10, which is the day the `ai_runs` fixture was seeded on
+ * and the day no test in this repository writes into. The runs it creates itself are accepted on
+ * 2026-10-12, well clear of that day, so nothing it writes can move a count it or any read-only
+ * test asserts. A file added anywhere that accepts a run on 2026-09-10 breaks that, and is the one
+ * change this paragraph exists to catch.
+ *
  * **The three recorders below are order-independent, and deliberately so.** Each creates the
  * `ai_runs` rows it stands on, in its own id block — `1021xxxx`, `1022xxxx`, `1023xxxx` — and
  * borrows none. Their position here carries no meaning and states no dependency.
