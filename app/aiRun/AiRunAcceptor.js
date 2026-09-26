@@ -119,6 +119,12 @@ export default class AiRunAcceptor {
   /**
    * Save the run a request creates, queued and not yet started.
    *
+   * **The transaction is the caller's, and optional.** A caller that must know when the row became
+   * visible — because it enqueues the work off that commit — opens a transaction and hands it in;
+   * a caller that has nothing hanging off the commit passes nothing and writes as it always did.
+   * Either way this class only enlists the write it was asked for: which transaction exists, when
+   * it commits and what happens then are decided above it.
+   *
    * @param {SaveAiRunParams} params - Parameters.
    * @returns {Promise<*>} The saved run.
    * @public
@@ -130,24 +136,30 @@ export default class AiRunAcceptor {
     rawBody,
     requestBodyHash,
     acceptedAt,
+    transaction = null,
   }) {
     const runKey = this.runKeyGenerator.generateRunKey()
 
     return /** @type {*} */ (
-      this.Ctor.AiRunCtor.create({
-        ApiClientId: apiClientId,
-        AiRunCategoryId: aiRunCategoryId,
-        AiRunStatusId: AI_RUN_STATUS.QUEUED.ID,
-        runKey,
-        requestKey: input.requestKey,
-        requestBodyHash,
-        externalRef: input.externalRef,
-        subjectLabel: input.subjectLabel,
-        correlationId: input.correlationId,
-        callbackUrl: input.callbackUrl,
-        requestBody: rawBody,
-        acceptedAt,
-      })
+      this.Ctor.AiRunCtor.create(
+        {
+          ApiClientId: apiClientId,
+          AiRunCategoryId: aiRunCategoryId,
+          AiRunStatusId: AI_RUN_STATUS.QUEUED.ID,
+          runKey,
+          requestKey: input.requestKey,
+          requestBodyHash,
+          externalRef: input.externalRef,
+          subjectLabel: input.subjectLabel,
+          correlationId: input.correlationId,
+          callbackUrl: input.callbackUrl,
+          requestBody: rawBody,
+          acceptedAt,
+        },
+        {
+          transaction,
+        }
+      )
     )
   }
 }
@@ -170,6 +182,7 @@ export default class AiRunAcceptor {
  *   rawBody: string
  *   requestBodyHash: string
  *   acceptedAt: Date
+ *   transaction?: Transaction | null
  * }} SaveAiRunParams
  */
 
@@ -181,4 +194,8 @@ export default class AiRunAcceptor {
  *   correlationId: string
  *   callbackUrl: string
  * }} AiRunCommonFieldsInput
+ */
+
+/**
+ * @typedef {import('sequelize').Transaction} Transaction
  */

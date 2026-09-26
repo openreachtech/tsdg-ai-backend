@@ -1,0 +1,25 @@
+# Every text file is stored and checked out with LF endings.
+#
+# This repository's lint already refuses CRLF in the files it reads, and that catch has been
+# enough for source and tests. It is not enough on its own: eslint reads no `.env` file, no
+# `.cjs` seeder is exempt but no linter reads a `.gitignore` or a `.sql` either, and an editor
+# writing CRLF into one of those leaves no trace until something downstream reads the file
+# byte for byte.
+#
+# `text=auto eol=lf` closes that: git normalizes on the way in whatever an editor wrote, so a
+# CRLF line cannot reach a commit even where no linter is looking. Binary files are named
+# explicitly so none of them is touched.
+
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.sqlite3 binary

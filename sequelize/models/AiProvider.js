@@ -65,6 +65,7 @@ export default class AiProvider extends BaseAppRenchanModel {
     super.associate?.()
 
     this.hasMany(this._.AiModel)
+    this.hasMany(this._.ProviderUploadedFile)
   }
 
   /**

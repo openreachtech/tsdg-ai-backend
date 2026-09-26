@@ -192,6 +192,36 @@ describe('AiRunKeyInspector', () => {
           label: 'a long run of digits, which no length bound used to stop',
         },
         {
+          /*
+           * The number spelling of one exponent further up, which `Number.isInteger()` calls a
+           * whole number and which JavaScript spells `'1e+21'` — five characters, inside the
+           * nineteen the bound allows, and a path segment of `medium-1e+21` rather than of digits.
+           * The length bound admitted it; holding the number to the same alphabet the text is held
+           * to is what refuses it.
+           */
+          params: {
+            key: 1e21,
+          },
+          label: 'a number whose spelling carries an exponent rather than digits',
+        },
+        {
+          /*
+           * A key the pattern cannot fault, and one a `Number` cannot hold: it reads back as
+           * 9007199254740992, which is the key one below it. Two media declaring these two would
+           * have built one file path, and the second would have overwritten the first.
+           */
+          params: {
+            key: '9007199254740993',
+          },
+          label: 'a key reading back as the number of the key below it',
+        },
+        {
+          params: {
+            key: '9223372036854775807',
+          },
+          label: 'the largest a signed BIGINT holds, which a number cannot spell back',
+        },
+        {
           params: {
             key: 'read from the medium: the owner is a sample person',
           },
@@ -233,13 +263,21 @@ describe('AiRunKeyInspector', () => {
 
 describe('AiRunKeyInspector', () => {
   describe('#generateComparableKey()', () => {
+    /*
+     * The bound is a bijection and not a magnitude, which is what these two state.
+     *
+     * Both are keys a `Number` holds exactly and spells back, and one of them is above 2^53 - so
+     * "everything above 2^53 is refused" would be the wrong sentence to read out of the refusals
+     * above. What is refused is a key that reads back as some other key's number; these read back
+     * as their own.
+     */
     describe('should answer the number for a key at the bound', () => {
       const cases = [
         {
           params: {
-            key: '9223372036854775807',
+            key: '18014398509481984',
           },
-          label: 'nineteen digits, the largest a signed BIGINT holds',
+          label: 'seventeen digits, above 2^53 and held exactly',
         },
         {
           params: {
@@ -325,6 +363,204 @@ describe('AiRunKeyInspector', () => {
         const inspector = AiRunKeyInspector.create() // Arrange
 
         const actual = inspector.isRecordableKey(params) // Act
+
+        expect(actual) // Assert
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('AiRunKeyInspector', () => {
+  describe('#namesRow()', () => {
+    /*
+     * The number spelling, held to the same alphabet the text spelling is held to.
+     *
+     * `Number.isInteger()` plus a length bound admitted `1e21`, whose spelling is `'1e+21'`. A
+     * caller building a path segment out of a key was told by the workspace class's own docblock
+     * that a segment is always digits, and for that one value it was not.
+     */
+    describe('should refuse a number whose spelling is not digits', () => {
+      const cases = [
+        {
+          params: {
+            key: 1e21,
+          },
+          label: 'a number spelled with an exponent',
+        },
+        {
+          params: {
+            key: 1e20,
+          },
+          label: 'a number of twenty-one digits',
+        },
+        {
+          params: {
+            key: 2.5,
+          },
+          label: 'a number that is not whole',
+        },
+        {
+          params: {
+            key: 0,
+          },
+          label: 'zero, which no row carries',
+        },
+        {
+          params: {
+            key: -1,
+          },
+          label: 'a negative number',
+        },
+        {
+          params: {
+            key: Number.NaN,
+          },
+          label: 'a number that is no number',
+        },
+        {
+          params: {
+            key: Number.POSITIVE_INFINITY,
+          },
+          label: 'a number without end',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+      }) => {
+        const inspector = AiRunKeyInspector.create() // Arrange
+
+        const actual = inspector.namesRow(params) // Act
+
+        expect(actual) // Assert
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('AiRunKeyInspector', () => {
+  describe('#namesRow()', () => {
+    describe('should accept a number spelled in digits', () => {
+      const cases = [
+        {
+          params: {
+            key: 1,
+          },
+        },
+        {
+          params: {
+            key: 10010001,
+          },
+        },
+        {
+          params: {
+            key: 9007199254740992,
+          },
+        },
+      ]
+
+      test.each(cases)('key: $params.key', ({
+        params,
+      }) => {
+        const inspector = AiRunKeyInspector.create() // Arrange
+
+        const actual = inspector.namesRow(params) // Act
+
+        expect(actual) // Assert
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('AiRunKeyInspector', () => {
+  describe('#namesRowExactly()', () => {
+    /*
+     * A key that reads back as another key's number is the collision this refuses: two media
+     * declaring `'9007199254740992'` and `'9007199254740993'` would have built one file path.
+     */
+    describe('should refuse text that does not spell back the number it names', () => {
+      const cases = [
+        {
+          params: {
+            keyText: '9007199254740993',
+          },
+          label: 'a key reading back as the number of the key below it',
+        },
+        {
+          params: {
+            keyText: '9223372036854775807',
+          },
+          label: 'the largest a signed BIGINT holds',
+        },
+        {
+          params: {
+            keyText: '1152921504606846976',
+          },
+          label: 'nineteen digits a double rounds on the way back',
+        },
+        {
+          params: {
+            keyText: '007',
+          },
+          label: 'a key written with a leading zero',
+        },
+        {
+          params: {
+            keyText: 'read from the medium: the owner is a sample person',
+          },
+          label: 'text that names no number',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        params,
+      }) => {
+        const inspector = AiRunKeyInspector.create() // Arrange
+
+        const actual = inspector.namesRowExactly(params) // Act
+
+        expect(actual) // Assert
+          .toBeFalsy()
+      })
+    })
+  })
+})
+
+describe('AiRunKeyInspector', () => {
+  describe('#namesRowExactly()', () => {
+    describe('should accept text spelling back the number it names', () => {
+      const cases = [
+        {
+          params: {
+            keyText: '1',
+          },
+        },
+        {
+          params: {
+            keyText: '10440019',
+          },
+        },
+        {
+          params: {
+            keyText: '9007199254740992',
+          },
+        },
+        {
+          params: {
+            keyText: '18014398509481984',
+          },
+        },
+      ]
+
+      test.each(cases)('keyText: $params.keyText', ({
+        params,
+      }) => {
+        const inspector = AiRunKeyInspector.create() // Arrange
+
+        const actual = inspector.namesRowExactly(params) // Act
 
         expect(actual) // Assert
           .toBeTruthy()

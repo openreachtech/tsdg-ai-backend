@@ -1,6 +1,7 @@
 import BaseAiRunPostRenderer from '../../../server/restfulapi/renderers/BaseAiRunPostRenderer.js'
 
 import AiRunAcceptor from '../../../app/aiRun/AiRunAcceptor.js'
+import AiRunJobDispatchRegistrar from '../../../app/aiRun/AiRunJobDispatchRegistrar.js'
 import RunKeyGenerator from '../../../app/aiRun/RunKeyGenerator.js'
 
 describe('BaseAiRunPostRenderer', () => {
@@ -89,6 +90,10 @@ describe('BaseAiRunPostRenderer', () => {
           .mockReturnValue({
             ID: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
             NAME: 'asset-media-extraction',
+          })
+        jest.spyOn(renderer, 'ensureJobDispatcher')
+          .mockResolvedValue({
+            dispatchJob: jest.fn(),
           })
 
         const runKeyGenerator = RunKeyGenerator.create()
@@ -642,6 +647,10 @@ describe('BaseAiRunPostRenderer', () => {
           ID: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
           NAME: 'asset-media-extraction',
         })
+      jest.spyOn(renderer, 'ensureJobDispatcher')
+        .mockResolvedValue({
+          dispatchJob: jest.fn(),
+        })
 
       const runKeyGenerator = RunKeyGenerator.create()
       jest.spyOn(runKeyGenerator, 'generateRunKey')
@@ -655,6 +664,109 @@ describe('BaseAiRunPostRenderer', () => {
 
       expect(received)
         .toEqual(expected)
+    })
+  })
+})
+
+describe('BaseAiRunPostRenderer', () => {
+  /*
+   * The wiring this feature adds, seen from the renderer's side: the run is written and its job is
+   * registered against the same transaction, so a dispatch leaves this process once — after the
+   * commit that made the run readable — carrying the id of the run that was actually written.
+   *
+   * Which transaction the dispatch hangs off, and that a rollback sends none, is
+   * `AiRunJobDispatchRegistrar`'s own promise and is proved in its own file. What is proved here is
+   * only that the renderer hands it the right run, through a real transaction and a real write.
+   *
+   * The dispatcher is the one thing not real, and must be: a real one opens a BullMQ queue against
+   * Redis, and `npm run test` is runnable with nothing but Node installed.
+   */
+  describe('#saveAcceptedAiRun()', () => {
+    const cases = [
+      {
+        override: {
+          runKey: 'run-key-registered-0001',
+        },
+        input: {
+          context: {
+            apiClientId: 10000001,
+            now: new Date('2026-09-23T01:01:01.001Z'),
+          },
+          input: {
+            requestKey: 'request-key-registered-0001',
+            externalRef: 'external-ref-registered-0001',
+            subjectLabel: 'Subject label registered 0001',
+            correlationId: 'correlation-id-registered-0001',
+            callbackUrl: 'https://signing.client.development.invalid/callbacks/registered-0001',
+          },
+          rawBody: '{"externalRef":"external-ref-registered-0001"}',
+          requestBodyHash: 'request-body-hash-registered-0001',
+        },
+        expected: 'run-key-registered-0001',
+      },
+      {
+        override: {
+          runKey: 'run-key-registered-0002',
+        },
+        input: {
+          context: {
+            apiClientId: 10000002,
+            now: new Date('2026-09-23T02:02:02.002Z'),
+          },
+          input: {
+            requestKey: 'request-key-registered-0002',
+            externalRef: 'external-ref-registered-0002',
+            subjectLabel: 'Subject label registered 0002',
+            correlationId: 'correlation-id-registered-0002',
+            callbackUrl: 'https://rotating.client.development.invalid/callbacks/registered-0002',
+          },
+          rawBody: '{"externalRef":"external-ref-registered-0002"}',
+          requestBodyHash: 'request-body-hash-registered-0002',
+        },
+        expected: 'run-key-registered-0002',
+      },
+    ]
+
+    test.each(cases)('requestKey: $input.input.requestKey', async ({
+      override,
+      input,
+      expected,
+    }) => {
+      const renderer = BaseAiRunPostRenderer.create()
+      jest.spyOn(BaseAiRunPostRenderer, 'aiRunCategory', 'get')
+        .mockReturnValue({
+          ID: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+          NAME: 'asset-media-extraction',
+        })
+
+      const runKeyGenerator = RunKeyGenerator.create()
+      jest.spyOn(runKeyGenerator, 'generateRunKey')
+        .mockReturnValue(override.runKey)
+
+      const dispatchJobSpy = jest.fn()
+      const args = {
+        ...input,
+        aiRunAcceptor: AiRunAcceptor.create({
+          runKeyGenerator,
+        }),
+        aiRunJobDispatchRegistrar: AiRunJobDispatchRegistrar.create({
+          jobDispatcher: /** @type {*} */ ({
+            dispatchJob: dispatchJobSpy,
+          }),
+        }),
+      }
+
+      const received = await renderer.saveAcceptedAiRun(args)
+
+      expect(received)
+        .toHaveProperty('runKey', expected)
+      expect(dispatchJobSpy) // The id is the database's to allocate, so the row that was written names it
+        .toHaveBeenCalledWith({
+          body: {
+            aiRunId: received.id,
+          },
+          keepsConnection: true,
+        })
     })
   })
 })

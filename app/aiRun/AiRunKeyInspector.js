@@ -10,10 +10,26 @@
  * log the refusal reaches. Nineteen digits is what a signed `BIGINT` holds, so the bound is the
  * column's, exactly as the other two are.
  *
- * It closes a second thing on the way. Above 2^53 a comparison through `Number` stops being exact,
- * so two different keys could compare equal and a step of one run could pass for a step of another.
- * Nineteen digits does not remove that by itself, but it is where the bound belongs, and the ids
- * this service mints are nowhere near it.
+ * **The pattern is the whole alphabet rule, and both spellings of a key are held to it by spelling
+ * the key out.** `Number.isInteger()` on its own is not that rule: `1e21` is an integer by that
+ * test, and what JavaScript spells it as is `'1e+21'` — five characters, inside the nineteen the
+ * bound allows, and a path segment of `medium-1e+21` rather than one of digits. So a number is
+ * turned into its text and held to this pattern, which is how "a key is digits" became something
+ * every caller of this class may rely on rather than something the text branch alone kept.
+ *
+ * **A key must also name the number it spells.** Above 2^53 a reading through `Number` stops being
+ * exact: `'9007199254740993'` and `'9007199254740992'` are two nineteen-or-fewer-digit keys that
+ * both read back as the same number, so two media would build one file path and one would overwrite
+ * the other. The pattern cannot see that, and no pattern can — it is a property of the reading, not
+ * of the spelling — so the reading is spelled out again and compared with the text it came from.
+ *
+ * What that admits is exactly the texts standing in one-to-one correspondence with their numbers.
+ * It is not "every key below 2^53": `'18014398509481984'` is above it and is admitted, because a
+ * double holds that one exactly and spells it back, while `'9223372036854775807'` is refused. The
+ * property being kept is not a magnitude but the absence of a collision — two keys reading back as
+ * one number is impossible now, because the second of them could not spell itself back. A key this
+ * refuses is raised by the recorder holding it rather than silently merged with its neighbour, and
+ * the ids this service mints are nowhere near where the refusals begin.
  *
  * **What stays open, stated rather than claimed closed:** a run of nineteen digits or fewer passes,
  * and no pattern can tell one that is a key from one that is something else — a sixteen-digit
@@ -94,7 +110,9 @@ export default class AiRunKeyInspector {
       return null
     }
 
-    return this.keyPattern.test(key)
+    return this.namesRowExactly({
+      keyText: key,
+    })
       ? Number(key)
       : null
   }
@@ -102,10 +120,27 @@ export default class AiRunKeyInspector {
   /**
    * Check whether a number names a row at all.
    *
-   * **The two spellings have to agree.** Before this, text was held to the pattern — a positive
-   * integer with no leading zero — while a number was taken whole, so `'-1'` named no row and `-1`
-   * named one, and which answer a caller got depended on whether its key had crossed a queue or a
-   * query string.
+   * **The two spellings are held to the same alphabet rule.** Before this, text was held to the
+   * pattern — a positive integer with no leading zero — while a number was taken whole, so `'-1'`
+   * named no row and `-1` named one, and which answer a caller got depended on whether its key had
+   * crossed a queue or a query string.
+   *
+   * **A number is held to the pattern by being spelled out**, rather than by a length bound
+   * restated here. The two are not the same rule: `1e21` is a whole number whose spelling is
+   * `'1e+21'`, which the length bound admits and the alphabet does not. Holding both spellings to
+   * the one pattern is what lets a caller building a path out of a key rely on its being digits.
+   * Zero, a negative and a leading zero are refused by that same pattern, which is why no second
+   * comparison is made here.
+   *
+   * **The bijection test is `#namesRowExactly()`'s alone, and that asymmetry is deliberate.** This
+   * method answers yes to `9007199254740993`; the text `'9007199254740993'` is answered no, for
+   * spelling itself back as `9007199254740992`. It is the same key admitted one way and refused
+   * the other, and the reason is that there is nothing left here to refuse: a number above 2^53
+   * lost its identity at the `JSON.parse` — or at the literal — that made it, before this class
+   * ever saw it, so the two keys that would have collided arrived as one value and the second of
+   * them no longer exists to be told apart. What the text branch prevents is two *texts* reading
+   * back as one number, which is a collision that does still survive to reach it. A caller handing
+   * over numbers above 2^53 has already spent that guarantee somewhere this class cannot see.
    *
    * @param {{
    *   key: number
@@ -120,11 +155,37 @@ export default class AiRunKeyInspector {
       return false
     }
 
-    if (key < 1) {
+    return this.keyPattern.test(String(key))
+  }
+
+  /**
+   * Check whether text names a row, and names the row it spells.
+   *
+   * The second half is what the pattern cannot answer. `'9007199254740993'` is a key by every rule
+   * the pattern states, and the number it reads back as is `9007199254740992` — the number the key
+   * beside it reads back as. Two rows would then compare equal, and two media would build one file
+   * path. So the number is spelled out again and compared with the text it came from: a key that
+   * does not spell itself back is answered no, which refuses it rather than merging it.
+   *
+   * It is a bijection test and not a magnitude test. `'18014398509481984'` spells itself back and
+   * is answered yes though it is above 2^53; `'9223372036854775807'` does not and is answered no.
+   * What that buys is the only thing that matters here: no two texts this answers yes to can read
+   * back as one number.
+   *
+   * @param {{
+   *   keyText: string
+   * }} params - Parameters.
+   * @returns {boolean} Whether the text names a row exactly.
+   * @public
+   */
+  namesRowExactly ({
+    keyText,
+  }) {
+    if (!this.keyPattern.test(keyText)) {
       return false
     }
 
-    return String(key).length <= 19
+    return String(Number(keyText)) === keyText
   }
 
   /**

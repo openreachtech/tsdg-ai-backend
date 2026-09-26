@@ -5,6 +5,19 @@
  * first and the renderer's own writes cannot change what it sees. `BaseAiRunPostRenderer` reads
  * the runs `#run-contract` seeded as idempotency inputs, which is what that seeder is for.
  *
+ * `AssetMediaExtractionPostRenderer` follows it for the same reason `BaseAiRunPostRenderer` is
+ * where it is: it creates its runs through the acceptor and takes their ids from the
+ * auto-increment, so it belongs above every file that writes an explicit id. It borrows no seeded
+ * run — each of its cases carries an idempotency key of its own, in `#asset-media-extraction`'s
+ * own block — so its position relative to the three recorders below states nothing.
+ *
+ * It does read the seeded runs, without writing one: its rate-limit cases count how many runs a
+ * seeded client already has inside 2026-09-10, which is the day the `ai_runs` fixture was seeded on
+ * and the day no test in this repository writes into. The runs it creates itself are accepted on
+ * 2026-10-12, well clear of that day, so nothing it writes can move a count it or any read-only
+ * test asserts. A file added anywhere that accepts a run on 2026-09-10 breaks that, and is the one
+ * change this paragraph exists to catch.
+ *
  * **The three recorders below are order-independent, and deliberately so.** Each creates the
  * `ai_runs` rows it stands on, in its own id block — `1021xxxx`, `1022xxxx`, `1023xxxx` — and
  * borrows none. Their position here carries no meaning and states no dependency.
@@ -15,9 +28,24 @@
  * folder failed the first time it was run whole — four cases on `step_index must be unique` — while
  * each file passed alone. A test here creates the rows it stands on; the order below is for stating
  * a real dependency, never for keeping two independent files out of each other's way. See Q69.
+ *
+ * `BaseAiRunJobWorker` is order-independent for a different reason again: it hands the worker a
+ * recorder of its own, so it reads and writes no row at all. It sits in this folder rather than
+ * under `tests/__tests__/` because placement follows what the method does — the lifecycle it
+ * exercises writes to `ai_runs` — and not whether a test stubs the write away.
+ *
+ * `AiRunJobDispatchRegistrar` runs last, and that position does state something. It creates its
+ * runs with explicit ids in `#run-execution`'s own block (`10310001` upward), which is higher than
+ * every id this folder writes; the two files that create runs through the acceptor and the
+ * renderer take their ids from the auto-increment, so they go first and are never handed an id
+ * this file has already pushed the sequence past.
  */
 import './AiRunAcceptor.js'
 import './BaseAiRunPostRenderer.js'
+import './AssetMediaExtractionPostRenderer.js'
 import './AiRunStatusRecorder.js'
 import './AiRunStepRecorder.js'
 import './AiRunFieldOutcomeRecorder.js'
+import './BaseAiRunJobWorker.js'
+import './AiRunJobDispatchRegistrar.js'
+import './AssetMediaReadingFetcher.js'

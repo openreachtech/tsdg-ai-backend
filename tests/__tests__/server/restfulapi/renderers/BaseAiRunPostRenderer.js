@@ -6,7 +6,10 @@ import {
 
 import AiRunCommonFieldsInputAdapter from '../../../../../app/adapter/forRenderer/AiRunCommonFieldsInputAdapter.js'
 import AiRunAcceptor from '../../../../../app/aiRun/AiRunAcceptor.js'
+import AiRunJobDispatchRegistrar from '../../../../../app/aiRun/AiRunJobDispatchRegistrar.js'
 import AiRunCommonFieldsInputValidator from '../../../../../app/validator/forRenderer/AiRunCommonFieldsInputValidator.js'
+
+import AiRun from '../../../../../sequelize/models/AiRun.js'
 
 describe('BaseAiRunPostRenderer', () => {
   describe('inheritance', () => {
@@ -96,6 +99,59 @@ describe('BaseAiRunPostRenderer', () => {
         expected,
       }) => {
         expect(() => input.Ctor.aiRunCategory)
+          .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunPostRenderer', () => {
+  describe('.get:AiRunModel', () => {
+    describe('when called as is', () => {
+      test('should be AiRun', () => {
+        const received = BaseAiRunPostRenderer.AiRunModel
+
+        expect(received)
+          .toBe(AiRun) // same reference
+      })
+    })
+  })
+})
+
+describe('BaseAiRunPostRenderer', () => {
+  /*
+   * The queue a service's runs go to is declared by that service's own renderer, in the same place
+   * and for the same reason as its run category. A renderer that has not declared one is refused
+   * by name the first time it is asked, rather than accepting runs nothing ever executes.
+   */
+  describe('.get:JobDispatcherCtor', () => {
+    describe('when not inherited', () => {
+      const cases = [
+        {
+          input: {
+            Ctor: BaseAiRunPostRenderer,
+          },
+          expected: 'BaseAiRunPostRenderer.get:JobDispatcherCtor must be inherited',
+        },
+        {
+          input: {
+            Ctor: class EpsilonAiRunPostRenderer extends BaseAiRunPostRenderer {},
+          },
+          expected: 'EpsilonAiRunPostRenderer.get:JobDispatcherCtor must be inherited',
+        },
+        {
+          input: {
+            Ctor: class ZetaAiRunPostRenderer extends BaseAiRunPostRenderer {},
+          },
+          expected: 'ZetaAiRunPostRenderer.get:JobDispatcherCtor must be inherited',
+        },
+      ]
+
+      test.each(cases)('Ctor: $input.Ctor.name', ({
+        input,
+        expected,
+      }) => {
+        expect(() => input.Ctor.JobDispatcherCtor)
           .toThrow(expected)
       })
     })
@@ -576,6 +632,103 @@ describe('BaseAiRunPostRenderer', () => {
         expect(received)
           .toEqual(expected)
       })
+    })
+  })
+})
+
+describe('BaseAiRunPostRenderer', () => {
+  /*
+   * The dispatcher is the process's, not the request's — so it is asked of the share, which lives
+   * as long as the process, and the class asked for is the one this renderer's own service names.
+   */
+  describe('#ensureJobDispatcher()', () => {
+    const cases = [
+      {
+        input: {
+          jobDispatcherName: 'AlphaJobDispatcher',
+        },
+        tally: {
+          dispatchJob: () => null,
+        },
+      },
+      {
+        input: {
+          jobDispatcherName: 'BetaJobDispatcher',
+        },
+        tally: {
+          dispatchJob: () => null,
+        },
+      },
+    ]
+
+    test.each(cases)('jobDispatcherName: $input.jobDispatcherName', async ({
+      input,
+      tally,
+    }) => {
+      const JobDispatcherCtor = {
+        name: input.jobDispatcherName,
+      }
+      const renderer = BaseAiRunPostRenderer.create()
+      jest.spyOn(BaseAiRunPostRenderer, 'JobDispatcherCtor', 'get')
+        .mockReturnValue(JobDispatcherCtor)
+
+      const ensureJobDispatcherSpy = jest.fn()
+        .mockResolvedValue(tally)
+      const args = {
+        context: {
+          share: {
+            jobDispatcherProvider: {
+              ensureJobDispatcher: ensureJobDispatcherSpy,
+            },
+          },
+        },
+      }
+
+      const received = await renderer.ensureJobDispatcher(args)
+
+      expect(received)
+        .toBe(tally) // same reference
+      expect(ensureJobDispatcherSpy)
+        .toHaveBeenCalledWith({
+          JobDispatcherCtor,
+        })
+    })
+  })
+})
+
+describe('BaseAiRunPostRenderer', () => {
+  describe('#createAiRunJobDispatchRegistrar()', () => {
+    const cases = [
+      {
+        tally: {
+          dispatchJob: () => null,
+          name: 'job-dispatcher-0001',
+        },
+      },
+      {
+        tally: {
+          dispatchJob: () => null,
+          name: 'job-dispatcher-0002',
+        },
+      },
+    ]
+
+    test.each(cases)('jobDispatcher: $tally.name', ({
+      tally,
+    }) => {
+      const renderer = BaseAiRunPostRenderer.create()
+
+      const args = {
+        jobDispatcher: tally,
+      }
+
+      const registrar = renderer.createAiRunJobDispatchRegistrar(args)
+      const received = registrar.jobDispatcher
+
+      expect(registrar)
+        .toBeInstanceOf(AiRunJobDispatchRegistrar)
+      expect(received)
+        .toBe(tally) // same reference
     })
   })
 })

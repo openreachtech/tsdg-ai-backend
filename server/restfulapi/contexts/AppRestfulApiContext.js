@@ -8,6 +8,7 @@ import ApiClientSignatureVerifier from '../../../app/apiClient/ApiClientSignatur
 import RequestTimestampWindowInspector from '../../../app/apiClient/RequestTimestampWindowInspector.js'
 
 import API_CLIENT_AUTHENTICATION_CONSTANT_HASH from '../../../app/constants/apiClientAuthenticationConstants.js'
+import SIGNED_REQUEST_HEADER_CONSTANT_HASH from '../../../app/constants/signedRequestHeaderConstants.js'
 
 import ApiClient from '../../../sequelize/models/ApiClient.js'
 
@@ -15,9 +16,19 @@ const {
   API_CLIENT_AUTHENTICATION_REFUSAL_REASON,
 } = API_CLIENT_AUTHENTICATION_CONSTANT_HASH
 
-const CLIENT_ID_HEADER_NAME = 'x-ort-client-id'
-const TIMESTAMP_HEADER_NAME = 'x-ort-timestamp'
-const SIGNATURE_HEADER_NAME = 'x-ort-signature'
+const {
+  SIGNED_REQUEST_HEADER_NAME,
+} = SIGNED_REQUEST_HEADER_CONSTANT_HASH
+
+/*
+ * The three names a signed request carries inbound, read from the one place that holds them
+ * rather than written again here. The terminal callback signs an outbound request with the
+ * same three, and two literals free to drift apart would let a client be verified under one
+ * spelling and called back under another, with nothing anywhere saying so.
+ */
+const CLIENT_ID_HEADER_NAME = SIGNED_REQUEST_HEADER_NAME.CLIENT_ID
+const TIMESTAMP_HEADER_NAME = SIGNED_REQUEST_HEADER_NAME.TIMESTAMP
+const SIGNATURE_HEADER_NAME = SIGNED_REQUEST_HEADER_NAME.SIGNATURE
 const RAW_BODY_PROPERTY_NAME = 'rawBody'
 const SECRET_ENVELOPE_FIELD_NAMES = [
   'secretCiphertext',
