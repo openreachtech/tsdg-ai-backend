@@ -455,9 +455,18 @@ const aiRunSeeds = [
    * forgotten the client would answer four. That is the first acceptance criterion and the
    * eighth read as one case.
    *
-   * The three statuses among the first three are deliberate too. A run still queued has finished
-   * no step and reports none; a run still going reports the last step it finished; a run that
-   * ended reports its last. One correlation id therefore holds all three shapes of the same row.
+   * The three statuses among the first three are deliberate too: one correlation id holds a run
+   * that ended, one still going and one still queued, so a read of the chain answers three
+   * statuses rather than one.
+   *
+   * **None of the four carries a step, and the status is therefore the only thing that varies.**
+   * An earlier version of this note said the three also showed three shapes of "the last step
+   * finished" — a run reporting none, one reporting the step it had reached, and an ended one
+   * reporting its last. `ai_run_steps` seeds no row against 10700001-10700004, so all four report
+   * none, and the note described a fixture that was never here. The richer version is worth
+   * having, and adding it is not free: #run-list's accepted tests assert these rows with the last
+   * step absent, so the steps and those expectations move together or not at all.
+   * A run with steps to read is 10010004.
    *
    * They are accepted on 2026-09-14, four days after every row above. That is not decoration:
    * `AiRunRateLimitInspector`'s own cases count this client's accepted runs inside windows that
