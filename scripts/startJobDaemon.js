@@ -5,6 +5,7 @@ import {
 } from '@openreachtech/renchan-job-bullmq'
 
 import AppJobEngine from '../app/queue/AppJobEngine.js'
+import JobScheduleRegistrationInspector from '../app/queue/JobScheduleRegistrationInspector.js'
 
 /*
  * The second of this service's two long-lived processes, and the one that does the work.
@@ -41,7 +42,23 @@ import AppJobEngine from '../app/queue/AppJobEngine.js'
  * rather than in either process. The scan here binds their workers to their queues, so this daemon
  * reports itself listening on both — but nothing will ever post to them until
  * `scripts/startJobSchedulers.js` has been run once against the same Redis. A daemon listening on
- * a purge queue is therefore not evidence that the purge is running.
+ * a purge queue has never been evidence that the purge is running, and until the check below
+ * existed nothing else was either: the queues read green and empty whether the schedule is there
+ * or not, and the purge log is silent both when a sweep is working and when no sweep has ever
+ * run. For §7's two retention horizons that is the worst shape a gap can take — personal data
+ * kept indefinitely while every visible signal reads healthy.
+ *
+ * **So this process now asks Redis what it holds, and names the declared schedules it does not.**
+ * `JobScheduleRegistrationInspector` runs once, after the workers are up, and compares
+ * `AppJobSchedulerService.collectScheduleInputs()` — the same list the registration script
+ * registers from, held to the folder scan by a test — against the schedules read back off each
+ * scheduler's queue. It reports by scheduler id and returns. It throws nothing, on any path: a
+ * Redis that refuses the read or never answers is reported too, because this process also serves
+ * callback delivery and asset media extraction, and a missing purge schedule is no reason to take
+ * those down. **It is a production control and not a development one** — `@openreachtech/mentsu-logger`
+ * writes nothing when `NODE_ENV` is anything but `production`, so booting this daemon locally with
+ * no schedules registered still shows nothing. `npm run schedulers:start` is still the step that
+ * registers them; what changed is that skipping it is now visible rather than silent.
  *
  * **The other half of that sentence: the path is the only thing between a file and being run at
  * boot.** Every `BaseJobWorker` subclass the scan finds under `workersPath` is instantiated and
@@ -61,3 +78,9 @@ const daemon = await JobWorkersDaemon.createAsync({
 })
 
 await daemon.startDaemon()
+
+const jobScheduleRegistrationInspector = JobScheduleRegistrationInspector.create({
+  engine: daemon.engine,
+})
+
+await jobScheduleRegistrationInspector.inspectRegisteredSchedules()
