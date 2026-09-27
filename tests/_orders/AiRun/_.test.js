@@ -49,6 +49,18 @@
  * for the renderer — and neither borrows a run of the other's or a seeded one. Both write only
  * `cancel_requested_at`, and only onto runs they created themselves, so no file above them reads a
  * row either of them has touched.
+ *
+ * `AiRunCancellationWatcher` is last, and its position states the same thing a third time: it
+ * creates runs with explicit ids in that feature's own block (`10840001` upward), higher than
+ * everything written anywhere in this folder, so nothing taking an id from the auto-increment may
+ * run after it. Its position relative to the two files above it carries no meaning — it creates the
+ * two runs it watches and borrows none — and `cancel_requested_at` is the only column it writes.
+ *
+ * `#run-cancel` writes into `AiRunStatusRecorder.js` as well, in `10850001` upward, for the
+ * answering spelling of the cancellation transition. That block is above every id written in this
+ * folder too, and it is written from the fourth position rather than the last only because that
+ * file is where the class's other transitions are already asserted — the three files above it are
+ * the ones taking ids from the auto-increment, and all three have run by then.
  */
 import './AiRunAcceptor.js'
 import './BaseAiRunPostRenderer.js'
@@ -61,3 +73,4 @@ import './AiRunJobDispatchRegistrar.js'
 import './AssetMediaReadingFetcher.js'
 import './AiRunCancellationRegistrar.js'
 import './AiRunCancellationPostRenderer.js'
+import './AiRunCancellationWatcher.js'

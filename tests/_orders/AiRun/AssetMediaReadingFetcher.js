@@ -25,6 +25,12 @@ import AiRun from '../../../sequelize/models/AiRun.js'
  * carried through untouched.
  *
  * The runs are created here in `#asset-media-extraction`'s own block, `10610961` upward.
+ *
+ * **`#run-cancel` writes into this file too, in `10860001` upward.** The describe at the foot is
+ * that feature's: a cancellation arriving while a provider call is in flight, and the reading
+ * already recorded staying recorded. It creates the one run it reads and borrows none, so its
+ * position carries no dependency — and its run is accepted in November 2026, clear of the
+ * September days every block above it uses.
  */
 
 describe('AssetMediaReadingFetcher', () => {
@@ -883,6 +889,178 @@ describe('AssetMediaReadingFetcher', () => {
 
         expect(actual)
           .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#fetchAssetMediaReadings()', () => {
+    /*
+     * specs/1.0.0 §15's third acceptance criterion, as far as this class carries it: "a provider
+     * call in flight is aborted, and the tokens spent up to the abort are still recorded". The
+     * second half is the half a naive abort drops, and it is the half asserted here.
+     *
+     * **The signal is raised by the driver itself, which is what puts the abort in flight rather
+     * than before the step.** `AbortSignal.abort()` handed in at the top would be answered by the
+     * guard before anything was asked of a model, which is the case the describe above this one
+     * already covers. Here the first call is made, the signal is raised while that call is being
+     * answered — a client asking to cancel a run mid-reading — and the run stops at the next
+     * boundary, which is where the second reading would have begun.
+     *
+     * **One reading was taken, so one `ai_model_calls` row stands.** Nothing removes it: the row
+     * is written as the call answers, no transaction wraps the run, and the terminal write that
+     * follows touches `ai_runs` alone. That is what makes §17's "ORT bills a run by reading the
+     * model calls recorded against it, including the calls a canceled run had already spent" a
+     * property of the record rather than of a calculation.
+     *
+     * **`totalReadingCount` still answers three**, which is what stops one surviving reading from
+     * being taken for a unanimous consensus by the step that settles fields.
+     *
+     * The run is created here in `#run-cancel`'s own block, `10860001` upward.
+     */
+    describe('should keep the reading it had recorded when the run was canceled mid-step', () => {
+      const cases = [
+        {
+          factoryParams: {
+            readingCount: 3,
+          },
+          params: {
+            aiRunRow: {
+              id: 10860001,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10860001',
+              requestKey: 'request-key-10860001',
+              requestBodyHash: 'request-body-hash-10860001',
+              externalRef: 'external-ref-10860001',
+              subjectLabel: 'Subject label of run 10860001',
+              correlationId: 'correlation-id-10860001',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10860001',
+              acceptedAt: new Date('2026-11-07T01:01:01.001Z'),
+              startedAt: new Date('2026-11-07T01:01:02.002Z'),
+              finishedAt: null,
+              cancelRequestedAt: new Date('2026-11-07T01:01:03.003Z'),
+            },
+            fetchParams: {
+              aiRunId: 10860001,
+              aiModelId: 10110001, // AI_MODEL.STUB.ID
+              aiAgent: {
+                id: 10150001,
+                name: 'asset-media-extraction-agent',
+              },
+              composedPrompt: {
+                instruction: 'Read the photographs and record what they show.',
+                role: 'You read photographs of a property.',
+                toolSchemas: [
+                  {
+                    name: 'record_field_readings',
+                  },
+                ],
+                instructionSavedAt: new Date('2026-09-24T00:00:03.003Z'),
+              },
+              attachedFiles: [
+                {
+                  id: 10860011,
+                  fileUrl: '/workspace/medium-10860011',
+                  fileType: 'image/png',
+                },
+              ],
+            },
+          },
+          expected: {
+            readings: [
+              [
+                {
+                  path: 'attributes.roofMaterial',
+                  value: 'tile',
+                  evidenceKindName: 'visible-text',
+                  reason: 'Visible along the eaves.',
+                  sourceMediaKeys: [
+                    'media-key-10860011',
+                  ],
+                },
+              ],
+            ],
+            totalReadingCount: 3,
+          },
+        },
+      ]
+
+      test.each(cases)('runKey: $params.aiRunRow.runKey', async ({
+        factoryParams,
+        params,
+        expected,
+      }) => {
+        await AiRun.create(params.aiRunRow)
+
+        const fetcher = AssetMediaReadingFetcher.create(factoryParams)
+        const aiRunWorkTerminator = new AbortController()
+
+        const aiModelProcessor = {
+          /**
+           * Answer one forced tool call, and raise the run's signal while answering it.
+           *
+           * Raising it here is what stands in for the client's cancellation reaching the run while
+           * a provider call is in flight. It is raised on every call rather than on a counted one,
+           * because a stub that counted would be logic written inside a test.
+           *
+           * @returns {Promise<*>} The normalized response.
+           */
+          sendRequestToAi: async () => {
+            aiRunWorkTerminator.abort()
+
+            return {
+              hasError: () => false,
+              extractInputTokenCount: () => 1409,
+              extractOutputTokenCount: () => 517,
+              extractFunctionCalls: () => [
+                {
+                  name: 'record_field_readings',
+                  arguments: {
+                    readings: [
+                      {
+                        path: 'attributes.roofMaterial',
+                        value: 'tile',
+                        evidenceKindName: 'visible-text',
+                        reason: 'Visible along the eaves.',
+                        sourceMediaKeys: [
+                          'media-key-10860011',
+                        ],
+                      },
+                    ],
+                  },
+                },
+              ],
+            }
+          },
+        }
+        const saveAiModelCallSpy = jest.spyOn(fetcher.aiModelCallRecorder, 'saveAiModelCall')
+
+        const actual = await fetcher.fetchAssetMediaReadings({
+          aiRunId: params.fetchParams.aiRunId,
+          aiModelId: params.fetchParams.aiModelId,
+          aiModelProcessor,
+          aiAgent: params.fetchParams.aiAgent,
+          composedPrompt: params.fetchParams.composedPrompt,
+          attachedFiles: params.fetchParams.attachedFiles,
+          signal: aiRunWorkTerminator.signal,
+        })
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveAiModelCallSpy)
+          .toHaveBeenCalledTimes(1)
+        expect(saveAiModelCallSpy)
+          .toHaveBeenNthCalledWith(1, expect.objectContaining({
+            aiRunId: params.fetchParams.aiRunId,
+            aiModelId: params.fetchParams.aiModelId,
+            actionName: 'read-media',
+            readingIndex: 1,
+            inputTokenCount: 1409,
+            outputTokenCount: 517,
+          }))
       })
     })
   })

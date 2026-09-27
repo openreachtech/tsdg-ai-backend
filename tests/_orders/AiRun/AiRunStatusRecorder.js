@@ -36,6 +36,12 @@ const {
  * nothing; `10340101` upward is this file's, and those rows are created here — the settled runs
  * the model guard is asked about with a condition that reads one way and compiles another.
  *
+ * `10850001` upward belongs to `#run-cancel`, which adds the answering spelling of the cancellation
+ * transition: `10850001`, `10850011` and `10850021` upward for its three branches, and `10859101`
+ * upward for the ids it never creates. Every run of that block is accepted in November 2026, clear
+ * of both 2026-09-10 — the day the `ai_runs` fixture was seeded on and the day the rate-limit cases
+ * count runs inside — and the October days the blocks above it use.
+ *
  * `10350001` upward belongs to the third audit round, split the same way again: up to `10350099`
  * for the options stated in `tests/__tests__/sequelize/models/AiRun.js`, which create nothing, and
  * `10350101` upward for this file's rows. What that round found was the status written under the
@@ -5371,6 +5377,345 @@ describe('AiRunStatusRecorder', () => {
           .toBe(expected.affectedAiRunCount)
         expect(buildProvenUnsettledAiRunConditionSpy)
           .toHaveBeenCalledWith(expected.guardArguments)
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveCanceledAiRunOnce()', () => {
+    /*
+     * The cancellation a delivery honors, from either status a run can still be stopped in. Both
+     * instants arrive on the call and neither is copied from the other, so a run whose work stopped
+     * a moment before the cancellation took effect says so rather than reporting one instant twice.
+     */
+    describe('should be truthy', () => {
+      const cases = [
+        {
+          input: {
+            aiRunRow: {
+              id: 10850001,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-10850001',
+              requestKey: 'request-key-10850001',
+              requestBodyHash: 'request-body-hash-10850001',
+              externalRef: 'external-ref-10850001',
+              subjectLabel: 'Subject label of run 10850001',
+              correlationId: 'correlation-id-10850001',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10850001',
+              acceptedAt: new Date('2026-11-05T01:01:01.001Z'),
+              startedAt: new Date('2026-11-05T01:01:02.002Z'),
+              finishedAt: null,
+              cancelRequestedAt: new Date('2026-11-05T01:01:03.003Z'),
+            },
+            canceledAt: new Date('2026-11-05T01:01:09.009Z'),
+            finishedAt: new Date('2026-11-05T01:01:09.009Z'),
+          },
+        },
+        {
+          // Still queued, and canceled without ever having run — nothing was spent on it
+          input: {
+            aiRunRow: {
+              id: 10850002,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 1, // AI_RUN_STATUS.QUEUED.ID
+              runKey: 'run-key-10850002',
+              requestKey: 'request-key-10850002',
+              requestBodyHash: 'request-body-hash-10850002',
+              externalRef: 'external-ref-10850002',
+              subjectLabel: 'Subject label of run 10850002',
+              correlationId: 'correlation-id-10850002',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/10850002',
+              acceptedAt: new Date('2026-11-05T02:02:01.001Z'),
+              startedAt: null,
+              finishedAt: null,
+              cancelRequestedAt: new Date('2026-11-05T02:02:02.002Z'),
+            },
+            canceledAt: new Date('2026-11-05T02:02:22.022Z'),
+            finishedAt: new Date('2026-11-05T02:02:23.023Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $input.aiRunRow.id', async ({
+        input,
+      }) => {
+        await AiRun.create(input.aiRunRow) // Arrange
+
+        const recorder = AiRunStatusRecorder.create()
+        const args = {
+          aiRunId: input.aiRunRow.id,
+          canceledAt: input.canceledAt,
+          finishedAt: input.finishedAt,
+        }
+
+        const received = await recorder.saveCanceledAiRunOnce(args) // Act
+
+        expect(received) // Assert
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveCanceledAiRunOnce()', () => {
+    /*
+     * A delivery honoring a cancellation that reached a run which had already settled on its own.
+     * Both are ordinary: the work finished inside the same second the client asked, or a
+     * re-delivered job arrived at a run a previous delivery had already canceled. Neither is a
+     * defect in the call, so neither is refused.
+     */
+    describe('when the run had already settled', () => {
+      describe('should be falsy', () => {
+        const cases = [
+          {
+            input: {
+              aiRunRow: {
+                id: 10850011,
+                ApiClientId: 10000001,
+                AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+                AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+                runKey: 'run-key-10850011',
+                requestKey: 'request-key-10850011',
+                requestBodyHash: 'request-body-hash-10850011',
+                externalRef: 'external-ref-10850011',
+                subjectLabel: 'Subject label of run 10850011',
+                correlationId: 'correlation-id-10850011',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10850011',
+                acceptedAt: new Date('2026-11-05T03:03:01.001Z'),
+                startedAt: new Date('2026-11-05T03:03:02.002Z'),
+                finishedAt: new Date('2026-11-05T03:03:03.003Z'),
+                cancelRequestedAt: new Date('2026-11-05T03:03:02.502Z'),
+              },
+              canceledAt: new Date('2026-11-05T03:03:33.033Z'),
+              finishedAt: new Date('2026-11-05T03:03:34.034Z'),
+            },
+          },
+          {
+            input: {
+              aiRunRow: {
+                id: 10850012,
+                ApiClientId: 10000001,
+                AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+                AiRunStatusId: 5, // AI_RUN_STATUS.CANCELED.ID
+                runKey: 'run-key-10850012',
+                requestKey: 'request-key-10850012',
+                requestBodyHash: 'request-body-hash-10850012',
+                externalRef: 'external-ref-10850012',
+                subjectLabel: 'Subject label of run 10850012',
+                correlationId: 'correlation-id-10850012',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10850012',
+                acceptedAt: new Date('2026-11-05T04:04:01.001Z'),
+                startedAt: new Date('2026-11-05T04:04:02.002Z'),
+                finishedAt: new Date('2026-11-05T04:04:03.003Z'),
+                cancelRequestedAt: new Date('2026-11-05T04:04:02.502Z'),
+                canceledAt: new Date('2026-11-05T04:04:03.003Z'),
+              },
+              canceledAt: new Date('2026-11-05T04:04:44.044Z'),
+              finishedAt: new Date('2026-11-05T04:04:45.045Z'),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $input.aiRunRow.id', async ({
+          input,
+        }) => {
+          await AiRun.create(input.aiRunRow) // Arrange
+
+          const recorder = AiRunStatusRecorder.create()
+          const args = {
+            aiRunId: input.aiRunRow.id,
+            canceledAt: input.canceledAt,
+            finishedAt: input.finishedAt,
+          }
+
+          const received = await recorder.saveCanceledAiRunOnce(args) // Act
+
+          expect(received) // Assert
+            .toBeFalsy()
+        })
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveCanceledAiRunOnce()', () => {
+    /*
+     * A run that settled between the guard's read and the write, which is the window the condition
+     * on the write itself closes. The guard is steered with a stale run because a row settling
+     * inside those two statements is not a state seeded data can be made to hold.
+     */
+    describe('when another writer settled the run between the read and the write', () => {
+      describe('should be falsy', () => {
+        const cases = [
+          {
+            input: {
+              aiRunRow: {
+                id: 10850021,
+                ApiClientId: 10000001,
+                AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+                AiRunStatusId: 3, // AI_RUN_STATUS.SUCCEEDED.ID
+                runKey: 'run-key-10850021',
+                requestKey: 'request-key-10850021',
+                requestBodyHash: 'request-body-hash-10850021',
+                externalRef: 'external-ref-10850021',
+                subjectLabel: 'Subject label of run 10850021',
+                correlationId: 'correlation-id-10850021',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10850021',
+                acceptedAt: new Date('2026-11-05T05:05:01.001Z'),
+                startedAt: new Date('2026-11-05T05:05:02.002Z'),
+                finishedAt: new Date('2026-11-05T05:05:03.003Z'),
+              },
+              staleAiRun: {
+                id: 10850021,
+                AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID — the run as the guard read it
+              },
+              canceledAt: new Date('2026-11-05T05:05:55.055Z'),
+              finishedAt: new Date('2026-11-05T05:05:56.056Z'),
+            },
+          },
+          {
+            input: {
+              aiRunRow: {
+                id: 10850022,
+                ApiClientId: 10000001,
+                AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+                AiRunStatusId: 4, // AI_RUN_STATUS.FAILED.ID
+                runKey: 'run-key-10850022',
+                requestKey: 'request-key-10850022',
+                requestBodyHash: 'request-body-hash-10850022',
+                externalRef: 'external-ref-10850022',
+                subjectLabel: 'Subject label of run 10850022',
+                correlationId: 'correlation-id-10850022',
+                callbackUrl: 'https://signing.client.development.invalid/callbacks/10850022',
+                failureReasonCode: AI_RUN_FAILURE_REASON_CODE.TIME_LIMIT_EXCEEDED,
+                failureParameters: null,
+                acceptedAt: new Date('2026-11-05T06:06:01.001Z'),
+                startedAt: new Date('2026-11-05T06:06:02.002Z'),
+                finishedAt: new Date('2026-11-05T06:06:03.003Z'),
+              },
+              staleAiRun: {
+                id: 10850022,
+                AiRunStatusId: 1, // AI_RUN_STATUS.QUEUED.ID — the run as the guard read it
+              },
+              canceledAt: new Date('2026-11-05T06:06:36.036Z'),
+              finishedAt: new Date('2026-11-05T06:06:37.037Z'),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $input.aiRunRow.id', async ({
+          input,
+        }) => {
+          await AiRun.create(input.aiRunRow) // Arrange
+
+          const recorder = AiRunStatusRecorder.create()
+
+          jest.spyOn(recorder, 'findAiRun')
+            .mockResolvedValue(input.staleAiRun)
+
+          const args = {
+            aiRunId: input.aiRunRow.id,
+            canceledAt: input.canceledAt,
+            finishedAt: input.finishedAt,
+          }
+
+          const received = await recorder.saveCanceledAiRunOnce(args) // Act
+
+          expect(received) // Assert
+            .toBeFalsy()
+        })
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveCanceledAiRunOnce()', () => {
+    /*
+     * A job naming a run that is not there is answered rather than refused, for the reason Q86
+     * gives: nothing at the `afterCommit` hook can tell a failed COMMIT apart from a real one, so
+     * the delivery covers it by doing nothing — which it can only do if this answers.
+     *
+     * No row is created for either id, and both sit in `#run-cancel`'s never-created range.
+     */
+    describe('when no run carries the id', () => {
+      describe('should be falsy', () => {
+        const cases = [
+          {
+            input: {
+              aiRunId: 10859101,
+              canceledAt: new Date('2026-11-05T07:07:07.007Z'),
+              finishedAt: new Date('2026-11-05T07:07:08.008Z'),
+            },
+          },
+          {
+            input: {
+              aiRunId: 10859102,
+              canceledAt: new Date('2026-11-05T08:08:08.008Z'),
+              finishedAt: new Date('2026-11-05T08:08:09.009Z'),
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $input.aiRunId', async ({
+          input,
+        }) => {
+          const recorder = AiRunStatusRecorder.create() // Arrange
+
+          const received = await recorder.saveCanceledAiRunOnce(input) // Act
+
+          expect(received) // Assert
+            .toBeFalsy()
+        })
+      })
+    })
+  })
+})
+
+describe('AiRunStatusRecorder', () => {
+  describe('#saveCanceledAiRunOnce()', () => {
+    /*
+     * A malformed call is raised rather than answered, in this spelling as in the throwing one: a
+     * second delivery of it would carry the same defect, where false would say there was nothing
+     * left to do.
+     */
+    describe('when the call is malformed', () => {
+      const cases = /** @type {Array<*>} */ ([
+        {
+          input: {
+            aiRunId: 'a run id the caller built out of something else',
+            canceledAt: new Date('2026-11-05T09:09:09.009Z'),
+            finishedAt: new Date('2026-11-05T09:09:10.010Z'),
+          },
+          expected: /#saveOngoingAiRun\(\) refused a key that is not an id: field aiRunId$/u,
+        },
+        {
+          input: {
+            aiRunId: 10859103,
+            canceledAt: 'the moment it stopped',
+            finishedAt: new Date('2026-11-05T10:10:11.011Z'),
+          },
+          expected: /#saveOngoingAiRun\(\) refused an instant field carrying something that is not an instant: AiRunId 10859103, field canceledAt$/u,
+        },
+      ])
+
+      test.each(cases)('aiRunId: $input.aiRunId', async ({
+        input,
+        expected,
+      }) => {
+        const recorder = AiRunStatusRecorder.create() // Arrange
+
+        const received = () => recorder.saveCanceledAiRunOnce(input) // Act
+
+        await expect(received) // Assert
+          .rejects
+          .toThrow(expected)
       })
     })
   })

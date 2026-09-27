@@ -272,14 +272,21 @@ const AI_RUN_STATUS_EVIDENCE_FIELD_NAMES_HASH = {
  * which statuses are terminal.
  *
  * **A writer with nothing left to do is answered rather than refused, which is the second spelling
- * of the same three transitions.** `#run-execution` puts a queue in front of this class, and the
- * queue delivers at-least-once: a job whose worker stalled is re-delivered, so one delivery can
+ * of the transitions a queue drives.** `#run-execution` puts a queue in front of this class, and
+ * the queue delivers at-least-once: a job whose worker stalled is re-delivered, so one delivery can
  * arrive at a run another delivery finished minutes ago, and two deliveries can be finishing the
  * same run at once. For that caller a refusal is the wrong shape — every duplicate delivery would
  * be marked failed and retried for as long as the queue keeps retrying it — so
- * `#saveRunningAiRunOnce()`, `#saveSucceededAiRunOnce()` and `#saveFailedAiRunOnce()` answer those
- * three transitions with a boolean instead. The throwing spelling stays for every caller that
- * wants a refusal naming itself.
+ * `#saveRunningAiRunOnce()`, `#saveSucceededAiRunOnce()`, `#saveFailedAiRunOnce()` and
+ * `#saveCanceledAiRunOnce()` answer those four transitions with a boolean instead. The throwing
+ * spelling stays for every caller that wants a refusal naming itself.
+ *
+ * **`#saveAiRunCancelRequest()` is the one transition with no answering spelling, and that is a
+ * decision rather than an omission.** Its caller is an HTTP request rather than a queue delivery,
+ * and it already holds the boolean it needs: `AiRunCancellationRegistrar` wraps that call in
+ * `#saveAiRunOnce()` itself, because what it does with a false is answer the client with the state
+ * that holds rather than stop. A named spelling here would be a fourth name for a call with one
+ * caller, which would then read as the spelling a worker should reach for.
  *
  * **False means one thing under three causes: there is nothing for this writer to do, and no later
  * attempt will change that.** The run had already settled when the guard read it; it settled
@@ -503,6 +510,44 @@ export default class AiRunStatusRecorder {
       aiRunId,
       failureReasonCode,
       failureParameters,
+      finishedAt,
+    })
+
+    return this.saveAiRunOnce({
+      saveAiRun,
+    })
+  }
+
+  /**
+   * Save a run as canceled, and answer whether this writer was the one that settled it.
+   *
+   * **The spelling a delivery honoring a cancellation settles a run with.** A cancellation is asked
+   * for over the API and honored in a worker, so between the ask and the honoring the run may have
+   * settled on its own — the work finished inside the same second, or the run went past its time
+   * limit — and a re-delivered job may arrive at a run a previous delivery already canceled. None
+   * of those is a defect in the call, and refusing them would mark a delivery failed for having
+   * been beaten to a row it was never going to move. Answered false, the delivery stops there, as
+   * it does for the other three transitions.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   canceledAt: Date
+   *   finishedAt: Date
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether this writer settled the run: false when there is nothing
+   * for it to do, and no later attempt will change that.
+   * @throws {Error} When the call is malformed: an id that is no id, or an instant that is no
+   * instant.
+   * @public
+   */
+  async saveCanceledAiRunOnce ({
+    aiRunId,
+    canceledAt,
+    finishedAt,
+  }) {
+    const saveAiRun = () => this.saveCanceledAiRun({
+      aiRunId,
+      canceledAt,
       finishedAt,
     })
 
