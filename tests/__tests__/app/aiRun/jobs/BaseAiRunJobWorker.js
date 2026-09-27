@@ -19,6 +19,10 @@ import BaseAiRunJobManifest from '../../../../../app/aiRun/jobs/BaseAiRunJobMani
 
 import AiRunStatusRecorder from '../../../../../app/aiRun/AiRunStatusRecorder.js'
 
+import AiRunCancellationInspector from '../../../../../app/aiRun/AiRunCancellationInspector.js'
+
+import AiRunCancellationWatcher from '../../../../../app/aiRun/AiRunCancellationWatcher.js'
+
 import AiRunMediaWorkspace from '../../../../../app/aiRunMedia/AiRunMediaWorkspace.js'
 
 import AiRunTerminalCallbackRaiser from '../../../../../app/aiRunCallback/AiRunTerminalCallbackRaiser.js'
@@ -1400,6 +1404,7 @@ describe('BaseAiRunJobWorker', () => {
       const cases = [
         {
           params: {
+            aiRunId: 10300051,
             body: {
               aiRunId: 10300051,
             },
@@ -1411,10 +1416,12 @@ describe('BaseAiRunJobWorker', () => {
             resultBody: '{"brand":"alpha"}',
             failureReasonCode: null,
             failureParameters: null,
+            isCanceled: false,
           },
         },
         {
           params: {
+            aiRunId: 10300052,
             body: {
               aiRunId: 10300052,
             },
@@ -1426,6 +1433,7 @@ describe('BaseAiRunJobWorker', () => {
             resultBody: '{"brand":"beta"}',
             failureReasonCode: null,
             failureParameters: null,
+            isCanceled: false,
           },
         },
       ]
@@ -1469,6 +1477,7 @@ describe('BaseAiRunJobWorker', () => {
       const cases = [
         {
           params: {
+            aiRunId: 10300061,
             body: {
               aiRunId: 10300061,
             },
@@ -1479,10 +1488,12 @@ describe('BaseAiRunJobWorker', () => {
             resultBody: null,
             failureReasonCode: 'TIME_LIMIT_EXCEEDED',
             failureParameters: null,
+            isCanceled: false,
           },
         },
         {
           params: {
+            aiRunId: 10300062,
             body: {
               aiRunId: 10300062,
             },
@@ -1493,6 +1504,7 @@ describe('BaseAiRunJobWorker', () => {
             resultBody: null,
             failureReasonCode: 'TIME_LIMIT_EXCEEDED',
             failureParameters: null,
+            isCanceled: false,
           },
         },
       ]
@@ -1541,6 +1553,7 @@ describe('BaseAiRunJobWorker', () => {
         const cases = [
           {
             params: {
+              aiRunId: 10300073,
               body: {
                 aiRunId: 10300073,
               },
@@ -1561,6 +1574,7 @@ describe('BaseAiRunJobWorker', () => {
           },
           {
             params: {
+              aiRunId: 10300074,
               body: {
                 aiRunId: 10300074,
               },
@@ -1624,6 +1638,7 @@ describe('BaseAiRunJobWorker', () => {
         const cases = [
           {
             params: {
+              aiRunId: 10300075,
               body: {
                 aiRunId: 10300075,
               },
@@ -1643,6 +1658,7 @@ describe('BaseAiRunJobWorker', () => {
           },
           {
             params: {
+              aiRunId: 10300076,
               body: {
                 aiRunId: 10300076,
               },
@@ -1709,6 +1725,7 @@ describe('BaseAiRunJobWorker', () => {
         const cases = [
           {
             params: {
+              aiRunId: 10300077,
               body: {
                 aiRunId: 10300077,
               },
@@ -1724,6 +1741,7 @@ describe('BaseAiRunJobWorker', () => {
           },
           {
             params: {
+              aiRunId: 10300078,
               body: {
                 aiRunId: 10300078,
               },
@@ -1781,6 +1799,7 @@ describe('BaseAiRunJobWorker', () => {
         const cases = [
           {
             params: {
+              aiRunId: 10300079,
               body: {
                 aiRunId: 10300079,
               },
@@ -1795,6 +1814,7 @@ describe('BaseAiRunJobWorker', () => {
           },
           {
             params: {
+              aiRunId: 10300080,
               body: {
                 aiRunId: 10300080,
               },
@@ -3597,6 +3617,1139 @@ describe('BaseAiRunJobWorker', () => {
           .toHaveBeenCalled()
         expect(actual)
           .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.get:AiRunCancellationInspectorCtor', () => {
+    test('should be the inspector of the cancellation column', () => {
+      const expected = AiRunCancellationInspector
+
+      const actual = BaseAiRunJobWorker.AiRunCancellationInspectorCtor
+
+      expect(actual)
+        .toBe(expected)
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('.get:AiRunCancellationWatcherCtor', () => {
+    test('should be the watch of the cancellation column', () => {
+      const expected = AiRunCancellationWatcher
+
+      const actual = BaseAiRunJobWorker.AiRunCancellationWatcherCtor
+
+      expect(actual)
+        .toBe(expected)
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAiRunCancellationInspector()', () => {
+    /*
+     * Built per delivery rather than held, so a worker that is one long-lived instance per queue
+     * hands no run's reading to another run's.
+     */
+    describe('should create the inspector of the cancellation column', () => {
+      const cases = [
+        {
+          factoryParams: {
+            runTimeLimitMilliseconds: 300000,
+          },
+        },
+        {
+          factoryParams: {
+            runTimeLimitMilliseconds: 1000,
+          },
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: factoryParams.runTimeLimitMilliseconds,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.createAiRunCancellationInspector()
+
+        expect(actual)
+          .toBeInstanceOf(AiRunCancellationInspector)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#createAiRunCancellationWatcher()', () => {
+    describe('should create the watch of the cancellation column', () => {
+      const cases = [
+        {
+          factoryParams: {
+            runTimeLimitMilliseconds: 300000,
+          },
+        },
+        {
+          factoryParams: {
+            runTimeLimitMilliseconds: 1000,
+          },
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', ({
+        factoryParams,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: factoryParams.runTimeLimitMilliseconds,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.createAiRunCancellationWatcher()
+
+        expect(actual)
+          .toBeInstanceOf(AiRunCancellationWatcher)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildCanceledAiRunOutcome()', () => {
+    /*
+     * The outcome of a run stopped before it began. It names no result and no reason code, which is
+     * what keeps `ai_runs.result_body` and `ai_runs.failure_reason_code` out of the write the
+     * recorder makes from it — a client asking is not a failure, and nothing ran, so there is
+     * nothing the run settled.
+     */
+    describe('should carry the cancellation and nothing else', () => {
+      const cases = [
+        {
+          factoryParams: {
+            runTimeLimitMilliseconds: 300000,
+          },
+          expected: {
+            resultBody: null,
+            failureReasonCode: null,
+            failureParameters: null,
+            isCanceled: true,
+          },
+        },
+        {
+          factoryParams: {
+            runTimeLimitMilliseconds: 1000,
+          },
+          expected: {
+            resultBody: null,
+            failureReasonCode: null,
+            failureParameters: null,
+            isCanceled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('runTimeLimitMilliseconds: $factoryParams.runTimeLimitMilliseconds', ({
+        factoryParams,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: factoryParams.runTimeLimitMilliseconds,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = worker.buildCanceledAiRunOutcome()
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#hasAiRunCancelRequest()', () => {
+    describe('should answer what the inspector read of the run', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10880001,
+          },
+          mockHasAiRunCancelRequest: true,
+          expected: {
+            aiRunId: 10880001,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10880002,
+          },
+          mockHasAiRunCancelRequest: false,
+          expected: {
+            aiRunId: 10880002,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasAiRunCancelRequest,
+        expected,
+      }) => {
+        const hasAiRunCancelRequest = jest.fn()
+          .mockResolvedValue(mockHasAiRunCancelRequest)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        jest.spyOn(worker, 'createAiRunCancellationInspector')
+          .mockReturnValue({
+            hasAiRunCancelRequest,
+          })
+
+        const actual = await worker.hasAiRunCancelRequest(params)
+
+        expect(hasAiRunCancelRequest)
+          .toHaveBeenCalledWith(expected)
+        expect(actual)
+          .toBe(mockHasAiRunCancelRequest)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#hasAiRunCancelRequest()', () => {
+    /*
+     * The reading is one row across a connection, and a connection can fail. What a failure let out
+     * of here would cost is the whole of §11's fifth acceptance criterion: the run was claimed
+     * `running` a statement earlier, so an exception escaping would leave it there until the
+     * retention sweep, with the client waiting on a callback that never comes. Answering false costs
+     * the early stop and nothing else — the watch beside the work asks again a second later.
+     */
+    describe('when the reading fails', () => {
+      describe('should be falsy', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10880011,
+            },
+            mockError: new Error('ECONNREFUSED reading ai_runs'),
+          },
+          {
+            params: {
+              aiRunId: 10880012,
+            },
+            mockError: new TypeError('refused a key that is not an id: field aiRunId'),
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          mockError,
+        }) => {
+          const hasAiRunCancelRequest = jest.fn()
+            .mockRejectedValue(mockError)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'createAiRunCancellationInspector')
+            .mockReturnValue({
+              hasAiRunCancelRequest,
+            })
+          jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+          const actual = await worker.hasAiRunCancelRequest(params)
+
+          expect(actual)
+            .toBeFalsy()
+        })
+      })
+
+      describe('should write the line naming the run it could not ask about', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10880021,
+            },
+            mockError: new Error('ECONNREFUSED reading ai_runs'),
+            expected: 'BaseAiRunJobWorker a run could not be asked whether a client had stopped caring: AiRunId 10880021, Error',
+          },
+          {
+            params: {
+              aiRunId: 10880022,
+            },
+            mockError: new TypeError('refused a key that is not an id: field aiRunId'),
+            expected: 'BaseAiRunJobWorker a run could not be asked whether a client had stopped caring: AiRunId 10880022, TypeError',
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          mockError,
+          expected,
+        }) => {
+          const hasAiRunCancelRequest = jest.fn()
+            .mockRejectedValue(mockError)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'createAiRunCancellationInspector')
+            .mockReturnValue({
+              hasAiRunCancelRequest,
+            })
+          const errorSpy = jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+          await worker.hasAiRunCancelRequest(params)
+
+          expect(errorSpy)
+            .toHaveBeenCalledWith({
+              message: expected,
+              tags: [
+                'AiRunJob',
+                'FailedAiRunCancellationReading',
+              ],
+            })
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#watchAiRunCancellation()', () => {
+    describe('should answer what the watch found, and hand it the work terminator', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10880031,
+            aiRunWorkTerminator: new AbortController(),
+            watchSignal: new AbortController().signal,
+          },
+          mockHasWatched: true,
+        },
+        {
+          params: {
+            aiRunId: 10880032,
+            aiRunWorkTerminator: new AbortController(),
+            watchSignal: new AbortController().signal,
+          },
+          mockHasWatched: false,
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasWatched,
+      }) => {
+        const watchAiRunCancellation = jest.fn()
+          .mockResolvedValue(mockHasWatched)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        jest.spyOn(worker, 'createAiRunCancellationWatcher')
+          .mockReturnValue({
+            watchAiRunCancellation,
+          })
+
+        const actual = await worker.watchAiRunCancellation(params)
+
+        expect(watchAiRunCancellation)
+          .toHaveBeenCalledWith(params)
+        expect(actual)
+          .toBe(mockHasWatched)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#watchAiRunCancellation()', () => {
+    /*
+     * The watch lives for as long as the work does, and it is started before the race is awaited —
+     * so a rejection raised inside it would be one nothing had attached a handler to yet, which
+     * under Node's default is not a failed run but a dead daemon. This is the case that says the
+     * `catch` around it is load-bearing rather than tidy.
+     */
+    describe('when the watch fails', () => {
+      describe('should be falsy', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10880041,
+              aiRunWorkTerminator: new AbortController(),
+              watchSignal: new AbortController().signal,
+            },
+            mockError: new Error('ECONNREFUSED reading ai_runs'),
+          },
+          {
+            params: {
+              aiRunId: 10880042,
+              aiRunWorkTerminator: new AbortController(),
+              watchSignal: new AbortController().signal,
+            },
+            mockError: new RangeError('the watch interval is out of range'),
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          mockError,
+        }) => {
+          const watchAiRunCancellation = jest.fn()
+            .mockRejectedValue(mockError)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'createAiRunCancellationWatcher')
+            .mockReturnValue({
+              watchAiRunCancellation,
+            })
+          jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+          const actual = await worker.watchAiRunCancellation(params)
+
+          expect(actual)
+            .toBeFalsy()
+        })
+      })
+
+      describe('should write the line naming the run it stopped watching', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10880051,
+              aiRunWorkTerminator: new AbortController(),
+              watchSignal: new AbortController().signal,
+            },
+            mockError: new Error('ECONNREFUSED reading ai_runs'),
+            expected: 'BaseAiRunJobWorker a run could not be asked whether a client had stopped caring: AiRunId 10880051, Error',
+          },
+          {
+            params: {
+              aiRunId: 10880052,
+              aiRunWorkTerminator: new AbortController(),
+              watchSignal: new AbortController().signal,
+            },
+            mockError: new RangeError('the watch interval is out of range'),
+            expected: 'BaseAiRunJobWorker a run could not be asked whether a client had stopped caring: AiRunId 10880052, RangeError',
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          mockError,
+          expected,
+        }) => {
+          const watchAiRunCancellation = jest.fn()
+            .mockRejectedValue(mockError)
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'createAiRunCancellationWatcher')
+            .mockReturnValue({
+              watchAiRunCancellation,
+            })
+          const errorSpy = jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+          await worker.watchAiRunCancellation(params)
+
+          expect(errorSpy)
+            .toHaveBeenCalledWith({
+              message: expected,
+              tags: [
+                'AiRunJob',
+                'FailedAiRunCancellationReading',
+              ],
+            })
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#logFailedAiRunCancellationReading()', () => {
+    /*
+     * The bound-message rule, at the one member this feature added a line to. Each `error` below
+     * carries a message shaped the way a driver or a database builds one — a statement, a host —
+     * and none of it appears in what is written.
+     */
+    describe('should write a line carrying nothing the error said', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10880061,
+            error: new Error('SELECT cancel_requested_at FROM ai_runs WHERE id = 10880061 timed out'),
+          },
+          expected: 'BaseAiRunJobWorker a run could not be asked whether a client had stopped caring: AiRunId 10880061, Error',
+        },
+        {
+          params: {
+            aiRunId: 10880062,
+            error: new TypeError('connect ECONNREFUSED database.example.com:3306'),
+          },
+          expected: 'BaseAiRunJobWorker a run could not be asked whether a client had stopped caring: AiRunId 10880062, TypeError',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+        const errorSpy = jest.spyOn(BaseAiRunJobWorker.mentsuLogger, 'error')
+
+        worker.logFailedAiRunCancellationReading(params)
+
+        expect(errorSpy)
+          .toHaveBeenCalledWith({
+            message: expected,
+            tags: [
+              'AiRunJob',
+              'FailedAiRunCancellationReading',
+            ],
+          })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildAiRunTerminalOutcome()', () => {
+    /*
+     * The fold that makes §15's second acceptance criterion recordable.
+     *
+     * Both boundaries in this service honour the cancellation signal by stopping and answering with
+     * what they had, so a work that was told to stop comes back looking exactly like a work that
+     * finished — the second case below is that shape, and without the watch's boolean it would be
+     * recorded succeeded. The third is the other one: a work that threw on its way out would be
+     * recorded failed.
+     */
+    describe('should carry the watch answer beside what the race answered', () => {
+      const cases = [
+        {
+          params: {
+            outcome: {
+              resultBody: '{"brand":"alpha"}',
+              failureReasonCode: null,
+              failureParameters: null,
+            },
+            aiRunCancellationWatch: Promise.resolve(false),
+            cancellationWatchTerminator: new AbortController(),
+          },
+          expected: {
+            resultBody: '{"brand":"alpha"}',
+            failureReasonCode: null,
+            failureParameters: null,
+            isCanceled: false,
+          },
+        },
+        {
+          params: {
+            outcome: {
+              resultBody: '{"partial":"beta"}',
+              failureReasonCode: null,
+              failureParameters: null,
+            },
+            aiRunCancellationWatch: Promise.resolve(true),
+            cancellationWatchTerminator: new AbortController(),
+          },
+          expected: {
+            resultBody: '{"partial":"beta"}',
+            failureReasonCode: null,
+            failureParameters: null,
+            isCanceled: true,
+          },
+        },
+        {
+          params: {
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'PROVIDER_CALL_FAILED',
+              failureParameters: null,
+            },
+            aiRunCancellationWatch: Promise.resolve(true),
+            cancellationWatchTerminator: new AbortController(),
+          },
+          expected: {
+            resultBody: null,
+            failureReasonCode: 'PROVIDER_CALL_FAILED',
+            failureParameters: null,
+            isCanceled: true,
+          },
+        },
+        {
+          params: {
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+              failureParameters: null,
+            },
+            aiRunCancellationWatch: Promise.resolve(false),
+            cancellationWatchTerminator: new AbortController(),
+          },
+          expected: {
+            resultBody: null,
+            failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+            failureParameters: null,
+            isCanceled: false,
+          },
+        },
+      ]
+
+      test.each(cases)('outcome.resultBody: $params.outcome.resultBody, outcome.failureReasonCode: $params.outcome.failureReasonCode', async ({
+        params,
+        expected,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        const actual = await worker.buildAiRunTerminalOutcome(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildAiRunTerminalOutcome()', () => {
+    /*
+     * The watch is stopped here as well as in the caller's `finally`, and this is the one that
+     * matters for the answer: a watch that found nothing resolves false only once it has been told
+     * to stop, so a run that was never canceled would otherwise be waited on until its next
+     * interval elapsed.
+     */
+    describe('should stop the watch it takes the answer from', () => {
+      const cases = [
+        {
+          params: {
+            outcome: {
+              resultBody: '{"brand":"alpha"}',
+              failureReasonCode: null,
+              failureParameters: null,
+            },
+            aiRunCancellationWatch: Promise.resolve(false),
+            cancellationWatchTerminator: new AbortController(),
+          },
+        },
+        {
+          params: {
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+              failureParameters: null,
+            },
+            aiRunCancellationWatch: Promise.resolve(true),
+            cancellationWatchTerminator: new AbortController(),
+          },
+        },
+      ]
+
+      test.each(cases)('outcome.resultBody: $params.outcome.resultBody', async ({
+        params,
+      }) => {
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: AiRunStatusRecorder.create(),
+        })
+
+        await worker.buildAiRunTerminalOutcome(params)
+
+        expect(params.cancellationWatchTerminator.signal.aborted)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildSettlingAiRunOutcome()', () => {
+    /*
+     * §15's first acceptance criterion, at the branch that keeps it: a run already asked to stop
+     * never reaches the race, so `#executeAiRunWork()` is never entered — and every model call this
+     * service makes is made inside it. The second assertion is the one carrying the criterion; the
+     * first only says what the run is then recorded as.
+     */
+    describe('when the run was already asked to stop', () => {
+      describe('should answer the cancellation without racing the work', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10880071,
+              body: {
+                aiRunId: 10880071,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              resultBody: null,
+              failureReasonCode: null,
+              failureParameters: null,
+              isCanceled: true,
+            },
+          },
+          {
+            params: {
+              aiRunId: 10880072,
+              body: {
+                aiRunId: 10880072,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              resultBody: null,
+              failureReasonCode: null,
+              failureParameters: null,
+              isCanceled: true,
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          expected,
+        }) => {
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'hasAiRunCancelRequest')
+            .mockResolvedValue(true)
+          const raceAiRunWorkAgainstTimeLimitSpy = jest.spyOn(worker, 'raceAiRunWorkAgainstTimeLimit')
+
+          const actual = await worker.buildSettlingAiRunOutcome(params)
+
+          expect(actual)
+            .toEqual(expected)
+          expect(raceAiRunWorkAgainstTimeLimitSpy)
+            .not
+            .toHaveBeenCalled()
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#buildSettlingAiRunOutcome()', () => {
+    /*
+     * The other way out of that branch. A run nobody has asked about is raced exactly as it was
+     * before this feature existed, and the run is handed to the race by name so the watch beside it
+     * knows which row to read.
+     */
+    describe('when the run has not been asked to stop', () => {
+      describe('should race the work against the time limit', () => {
+        const cases = [
+          {
+            params: {
+              aiRunId: 10880081,
+              body: {
+                aiRunId: 10880081,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              aiRunId: 10880081,
+              body: {
+                aiRunId: 10880081,
+              },
+              context: {},
+              parcel: {},
+            },
+          },
+          {
+            params: {
+              aiRunId: 10880082,
+              body: {
+                aiRunId: 10880082,
+              },
+              context: {},
+              parcel: {},
+            },
+            expected: {
+              aiRunId: 10880082,
+              body: {
+                aiRunId: 10880082,
+              },
+              context: {},
+              parcel: {},
+            },
+          },
+        ]
+
+        test.each(cases)('aiRunId: $params.aiRunId', async ({
+          params,
+          expected,
+        }) => {
+          const worker = new BaseAiRunJobWorker({
+            engine: {},
+            config: {},
+            manifest: BaseAiRunJobManifest.create({
+              jobName: 'alpha-ai-run-queue',
+            }),
+            dispatcherHash: {},
+            errorHash: {},
+            runTimeLimitMilliseconds: 300000,
+            aiRunStatusRecorder: AiRunStatusRecorder.create(),
+          })
+          jest.spyOn(worker, 'hasAiRunCancelRequest')
+            .mockResolvedValue(false)
+          const raceAiRunWorkAgainstTimeLimitSpy = jest.spyOn(worker, 'raceAiRunWorkAgainstTimeLimit')
+            .mockResolvedValue({
+              resultBody: null,
+              failureReasonCode: null,
+              failureParameters: null,
+              isCanceled: false,
+            })
+
+          await worker.buildSettlingAiRunOutcome(params)
+
+          expect(raceAiRunWorkAgainstTimeLimitSpy)
+            .toHaveBeenCalledWith(expected)
+        })
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#recordTerminalAiRunState()', () => {
+    /*
+     * The ordering inside the branch, stated where it is decided.
+     *
+     * Each case below carries an outcome that would have been recorded as something else had the
+     * cancellation not been asked first — a success, a failure the work raised on its way out of a
+     * step, a run that lost to its own time limit by a hair. A client that asked for its run to stop
+     * is answered `canceled` in all three, and the two arms it did not take are asserted untouched.
+     */
+    describe('should settle a canceled run whatever else its outcome carried', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10880091,
+            outcome: {
+              resultBody: '{"partial":"alpha"}',
+              failureReasonCode: null,
+              failureParameters: null,
+              isCanceled: true,
+            },
+          },
+          expected: {
+            aiRunId: 10880091,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10880092,
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'PROVIDER_CALL_FAILED',
+              failureParameters: null,
+              isCanceled: true,
+            },
+          },
+          expected: {
+            aiRunId: 10880092,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+        {
+          params: {
+            aiRunId: 10880093,
+            outcome: {
+              resultBody: null,
+              failureReasonCode: 'TIME_LIMIT_EXCEEDED',
+              failureParameters: null,
+              isCanceled: true,
+            },
+          },
+          expected: {
+            aiRunId: 10880093,
+            failureReasonCode: null,
+            hasSettled: true,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const saveCanceledAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveFailedAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const saveSucceededAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveCanceledAiRunOnce,
+            saveFailedAiRunOnce,
+            saveSucceededAiRunOnce,
+          },
+        })
+
+        const actual = await worker.recordTerminalAiRunState(params)
+
+        expect(actual)
+          .toEqual(expected)
+        expect(saveFailedAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+        expect(saveSucceededAiRunOnce)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#settleCanceledAiRun()', () => {
+    /*
+     * The two instants the recorder is handed. `canceled_at` is when the cancellation took effect
+     * and `finished_at` is when the run stopped doing work; this delivery observes one event and
+     * says so by handing one reading of the clock to both. Neither is `cancel_requested_at`, which
+     * belongs to the client's ask and is never overwritten — §15's third use case is the gap.
+     */
+    describe('should hand the recorder one instant for both columns', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10880101,
+          },
+          mockStoppedAt: new Date('2026-11-12T01:01:01.001Z'),
+          expected: {
+            aiRunId: 10880101,
+            canceledAt: new Date('2026-11-12T01:01:01.001Z'),
+            finishedAt: new Date('2026-11-12T01:01:01.001Z'),
+          },
+        },
+        {
+          params: {
+            aiRunId: 10880102,
+          },
+          mockStoppedAt: new Date('2026-11-12T02:02:02.002Z'),
+          expected: {
+            aiRunId: 10880102,
+            canceledAt: new Date('2026-11-12T02:02:02.002Z'),
+            finishedAt: new Date('2026-11-12T02:02:02.002Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockStoppedAt,
+        expected,
+      }) => {
+        const saveCanceledAiRunOnce = jest.fn()
+          .mockResolvedValue(true)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveCanceledAiRunOnce,
+          },
+        })
+        jest.spyOn(worker, 'buildCurrentInstant')
+          .mockReturnValue(mockStoppedAt)
+
+        await worker.settleCanceledAiRun(params)
+
+        expect(saveCanceledAiRunOnce)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('BaseAiRunJobWorker', () => {
+  describe('#saveCanceledAiRun()', () => {
+    describe('should hand the recorder the instants the run stopped at', () => {
+      const cases = [
+        {
+          params: {
+            aiRunId: 10880111,
+            canceledAt: new Date('2026-11-12T03:03:03.003Z'),
+            finishedAt: new Date('2026-11-12T03:03:03.003Z'),
+          },
+          mockHasSettled: true,
+          expected: {
+            aiRunId: 10880111,
+            canceledAt: new Date('2026-11-12T03:03:03.003Z'),
+            finishedAt: new Date('2026-11-12T03:03:03.003Z'),
+          },
+        },
+        {
+          params: {
+            aiRunId: 10880112,
+            canceledAt: new Date('2026-11-12T04:04:04.004Z'),
+            finishedAt: new Date('2026-11-12T04:04:04.004Z'),
+          },
+          mockHasSettled: false,
+          expected: {
+            aiRunId: 10880112,
+            canceledAt: new Date('2026-11-12T04:04:04.004Z'),
+            finishedAt: new Date('2026-11-12T04:04:04.004Z'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        mockHasSettled,
+        expected,
+      }) => {
+        const saveCanceledAiRunOnce = jest.fn()
+          .mockResolvedValue(mockHasSettled)
+        const worker = new BaseAiRunJobWorker({
+          engine: {},
+          config: {},
+          manifest: BaseAiRunJobManifest.create({
+            jobName: 'alpha-ai-run-queue',
+          }),
+          dispatcherHash: {},
+          errorHash: {},
+          runTimeLimitMilliseconds: 300000,
+          aiRunStatusRecorder: {
+            saveCanceledAiRunOnce,
+          },
+        })
+
+        const actual = await worker.saveCanceledAiRun(params)
+
+        expect(saveCanceledAiRunOnce)
+          .toHaveBeenCalledWith(expected)
+        expect(actual)
+          .toBe(mockHasSettled)
       })
     })
   })

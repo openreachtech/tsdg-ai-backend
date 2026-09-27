@@ -38,6 +38,11 @@ import RunAssetMediaExtractionJobManifest from './RunAssetMediaExtractionJobMani
  * **The run's own work honours the cancellation signal at two boundaries and neither of them is
  * here.** The media fetch stops between media and the readings stop between readings, each saying
  * so in its own words. This class passes the signal down untouched.
+ *
+ * **That signal now carries two reasons and the work is told neither.** The base raises it where
+ * the run went past its time limit, and again where a client asked for the run to stop; a work that
+ * honours it stops in the same place either way, and which of the two it was is the base's to
+ * record. Nothing here reads it, and nothing here needs to.
  */
 export default class RunAssetMediaExtractionJobWorker extends BaseAiRunJobWorker {
   /**

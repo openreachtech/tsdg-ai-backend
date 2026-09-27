@@ -36,12 +36,15 @@ const DEFAULT_WATCH_INTERVAL_MILLISECONDS = 1000
  * reason.
  *
  * **It raises the work's own terminator and creates no controller of its own.**
- * `BaseAiRunJobWorker` already runs two, and its docblock names them as "the two cancellations
- * that run opposite ways round": one is raised where the time limit won, the other stops the timer
- * measuring it. A third would be a third signal a work had to be taught to watch. Instead the
- * controller a delivery already hands its work is handed here too, so a client's cancellation and
- * the run's time limit reach the work through the one channel it already honors, and a work that
- * stops for either stops in the same place.
+ * `BaseAiRunJobWorker` already runs two the work can hear about, and its docblock names them as
+ * "the two cancellations that run opposite ways round": one is raised where the time limit won,
+ * the other stops the timer measuring it. A third **signal** would be a third thing a work had to
+ * be taught to watch. Instead the controller a delivery already hands its work is handed here too,
+ * so a client's cancellation and the run's time limit reach the work through the one channel it
+ * already honors, and a work that stops for either stops in the same place.
+ *
+ * The delivery does build a controller for the watch itself — `watchSignal` below — but that one
+ * is never shown to the work: it says only that nobody needs this watch any more.
  *
  * **The watch is stopped by its own signal, not by its own answer.** A run whose work finished
  * inside its limit was never canceled, and a timer still asking about it would keep a query going

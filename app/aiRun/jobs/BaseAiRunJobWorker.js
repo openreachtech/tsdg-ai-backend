@@ -11,6 +11,10 @@ import {
 
 import AiRunStatusRecorder from '../AiRunStatusRecorder.js'
 
+import AiRunCancellationInspector from '../AiRunCancellationInspector.js'
+
+import AiRunCancellationWatcher from '../AiRunCancellationWatcher.js'
+
 import AiRunMediaWorkspace from '../../aiRunMedia/AiRunMediaWorkspace.js'
 
 import AiRunTerminalCallbackRaiser from '../../aiRunCallback/AiRunTerminalCallbackRaiser.js'
@@ -53,6 +57,7 @@ const REFUSED_JOB_BODY_MESSAGE = 'refused a job body its own schema does not hol
 const UNREADABLE_AI_RUN_ID_MESSAGE = 'refused a job body naming no run'
 
 const FAILED_AI_RUN_WORK_MESSAGE = 'the work of a run threw'
+const FAILED_AI_RUN_CANCELLATION_READING_MESSAGE = 'a run could not be asked whether a client had stopped caring'
 const FAILED_DELIVERY_MESSAGE = 'a delivery failed'
 const COMPLETED_DELIVERY_MESSAGE = 'a delivery completed'
 const WORKER_ERROR_MESSAGE = 'the worker errored'
@@ -76,6 +81,11 @@ const UNNAMED_ERROR_NAME = 'Error'
 const FAILED_AI_RUN_WORK_TAGS = [
   'AiRunJob',
   'FailedAiRunWork',
+]
+
+const FAILED_AI_RUN_CANCELLATION_READING_TAGS = [
+  'AiRunJob',
+  'FailedAiRunCancellationReading',
 ]
 
 const FAILED_WORKSPACE_REMOVAL_TAGS = [
@@ -234,6 +244,45 @@ const mentsuLogger = MentsuLogger.create({
  * delivery told the run had already settled, whether at the claim or at the terminal write, raises
  * nothing: the run is terminal either way, and the writer that made it so has already called.
  *
+ * **A run a client asked to stop is honored in two places, and the ordering between them is the
+ * decision.** §15's first acceptance criterion is that a queued run which is canceled ends canceled
+ * "having made zero model calls", and its second is that a running run "stops at the next step
+ * boundary, never mid-step". Those are two different moments, so there are two asks. The first is
+ * one reading, taken once the run has been claimed and before any work begins: a delivery that
+ * finds a cancellation already recorded settles the run canceled and never calls
+ * `#executeAiRunWork()`, which is where every model call this service makes happens. The second is
+ * `AiRunCancellationWatcher`, started beside the race, which reads the same column on an interval
+ * while the work is in flight and raises the work's own terminator when it finds one.
+ *
+ * **The reading sits after the claim and not before it, which is deliberate.** §11's fifth
+ * acceptance criterion is that a run moves queued → running → exactly one terminal state, and a
+ * delivery that checked before claiming would take a run straight from queued to canceled and break
+ * that criterion of a neighbouring feature to satisfy one of ours. After the claim the run has still
+ * made no model call, which is what the criterion actually asks.
+ *
+ * **The cancellation travels on the terminator the work is already handed, and no third controller
+ * is built.** The two named above run opposite ways round; a third would be a third signal every
+ * work would have to be taught to watch. A client's cancellation and the run's time limit therefore
+ * reach `#executeAiRunWork()` through the one channel it already honors, and a work that stops for
+ * either stops in the same place. What the watch adds is a controller for the watch itself, raised
+ * on every way out of the race, so a run that ended well leaves no query still asking about it.
+ *
+ * **The watch's own answer is what tells a canceled run from a finished one**, and nothing else
+ * could. Both boundaries in this service honor the signal by stopping gracefully and answering with
+ * what they had — `AiRunMediaCollector` stops between media, `AssetMediaReadingFetcher` between
+ * readings — so a work that was told to stop returns exactly what a work that ran out of things to
+ * do returns. Read from the work alone, a canceled run would be recorded succeeded with a partial
+ * result. So the boolean the watch answers is carried on the outcome and decides the terminal state
+ * ahead of the outcome's reason code: a client that asked is answered `canceled`, whether the work
+ * came back with a partial result, threw on its way out, or lost to the time limit by a hair.
+ *
+ * **Neither ask is allowed to cost a run its terminal state.** Both read a row across a connection,
+ * and a read that failed says nothing about whether a client asked — but a failure let out of either
+ * would leave the run at `running` until the retention sweep, with the client waiting on a callback
+ * that never comes, which is the one thing this class exists to prevent. So each logs and answers
+ * false, which is what the run did before this feature existed: it does the work, and the watch asks
+ * again a second later.
+ *
  * **Raising cannot fail this delivery**, by `AiRunTerminalCallbackRaiser`'s own design rather than
  * by anything guarding it here: a queue that cannot be reached is logged there and swallowed, so a
  * run that succeeded is never turned into a job that failed by the callback for it. Wrapping the
@@ -338,6 +387,24 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    */
   static get AiRunTerminalCallbackRaiserCtor () {
     return AiRunTerminalCallbackRaiser
+  }
+
+  /**
+   * get: the inspector answering whether a client has asked for a run to stop.
+   *
+   * @returns {typeof AiRunCancellationInspector} - The class.
+   */
+  static get AiRunCancellationInspectorCtor () {
+    return AiRunCancellationInspector
+  }
+
+  /**
+   * get: the watch that asks the same question again while a run's work is in flight.
+   *
+   * @returns {typeof AiRunCancellationWatcher} - The class.
+   */
+  static get AiRunCancellationWatcherCtor () {
+    return AiRunCancellationWatcher
   }
 
   /**
@@ -697,6 +764,13 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    *   context: InstanceType<ContextCtor>
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
+   * **A cancellation settles the run from here too, through the same two calls below.** That is
+   * what keeps the word "always" in §15's fourth acceptance criterion true: an early `return` from
+   * `#executeJob()` for a run already asked to stop would settle the row canceled and raise no
+   * callback at all, and no run would look any different for it. Every terminal state this worker
+   * writes passes through `#recordTerminalAiRunState()`, so the single raise below the branch
+   * covers the canceled one without knowing it exists.
+   *
    * @returns {Promise<AiRunJobResult>} What this delivery did.
    * @public
    */
@@ -706,7 +780,8 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     context,
     parcel,
   }) {
-    const outcome = await this.raceAiRunWorkAgainstTimeLimit({
+    const outcome = await this.buildSettlingAiRunOutcome({
+      aiRunId,
       body,
       context,
       parcel,
@@ -723,6 +798,119 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     })
 
     return result
+  }
+
+  /**
+   * Build the outcome the run settles on: the cancellation it was already carrying, or the race.
+   *
+   * **The reading happens here, once, between the claim and the work.** §15's first acceptance
+   * criterion asks that a queued run which is canceled end canceled "having made zero model calls",
+   * and this early return is the whole of it: `#raceAiRunWorkAgainstTimeLimit()` is never entered,
+   * so `#executeAiRunWork()` is never called, and every model call this service makes is made
+   * inside it.
+   *
+   * **It is one reading and not a loop.** A run that is asked to stop after this line is the
+   * watch's to notice, and the watch is started by the method below — asking twice here would be
+   * the same question a few microseconds apart.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   body: Record<string, *>
+   *   context: InstanceType<ContextCtor>
+   *   parcel: InstanceType<WorkerParcelCtor>
+   * }} params - Parameters.
+   * @returns {Promise<AiRunTerminalOutcome>} The outcome the terminal state is recorded from.
+   * @public
+   */
+  async buildSettlingAiRunOutcome ({
+    aiRunId,
+    body,
+    context,
+    parcel,
+  }) {
+    const hasAiRunCancelRequest = await this.hasAiRunCancelRequest({
+      aiRunId,
+    })
+
+    if (hasAiRunCancelRequest) {
+      return this.buildCanceledAiRunOutcome()
+    }
+
+    return this.raceAiRunWorkAgainstTimeLimit({
+      aiRunId,
+      body,
+      context,
+      parcel,
+    })
+  }
+
+  /**
+   * Ask whether a client has already asked for this run to stop.
+   *
+   * **A reading that failed answers false, and that is the safe direction rather than the
+   * convenient one.** The alternative is letting the failure out, and a failure let out of here
+   * leaves a run claimed `running` with no terminal state and no callback — the one outcome the
+   * whole lifecycle is built to rule out. Answering false costs the run the early stop and nothing
+   * else: it does the work it would have done before this feature existed, and the watch started
+   * below asks the same question again a second later.
+   *
+   * The construction sits inside the `try` for the reason `#removeAiRunMediaWorkspace()` gives:
+   * what this method promises is that nothing leaves it, and a construction outside would make that
+   * true of part of the method instead of all of it.
+   *
+   * @param {{
+   *   aiRunId: number
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether a cancellation has been asked for.
+   * @public
+   */
+  async hasAiRunCancelRequest ({
+    aiRunId,
+  }) {
+    try {
+      const aiRunCancellationInspector = this.createAiRunCancellationInspector()
+
+      return await aiRunCancellationInspector.hasAiRunCancelRequest({
+        aiRunId,
+      })
+    } catch (error) {
+      this.logFailedAiRunCancellationReading({
+        aiRunId,
+        error,
+      })
+
+      return false
+    }
+  }
+
+  /**
+   * Create the inspector answering whether a client has asked for a run to stop.
+   *
+   * @returns {AiRunCancellationInspector} The inspector.
+   * @public
+   */
+  createAiRunCancellationInspector () {
+    return this.Ctor.AiRunCancellationInspectorCtor.create()
+  }
+
+  /**
+   * Build the outcome of a run that was asked to stop before its work began.
+   *
+   * It carries no result and no reason code, because neither is true of it: nothing ran, so there
+   * is nothing the run settled, and a client asking is not a failure. What the recorder writes from
+   * it is the canceled status and the two instants, and `ai_runs.result_body` and
+   * `ai_runs.failure_reason_code` are left as they stood.
+   *
+   * @returns {AiRunTerminalOutcome} The outcome.
+   * @public
+   */
+  buildCanceledAiRunOutcome () {
+    return {
+      resultBody: null,
+      failureReasonCode: null,
+      failureParameters: null,
+      isCanceled: true,
+    }
   }
 
   /**
@@ -752,24 +940,50 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * a bare `return` would complete the statement before the race settled, and the `finally` would
    * then cancel the alarm while the limit was still being measured.
    *
+   * **The watch runs beside the race rather than inside it, and it is not a third arm.** What it
+   * produces is not an outcome but a raising: it reads the run's cancellation column on an interval
+   * and, where it finds one, raises the very terminator the time limit raises, so the work hears
+   * one signal for two reasons. The race then ends the ordinary way — the work answers, or the
+   * limit does — and the watch's boolean is folded into what that answered.
+   *
+   * **A third controller, and it stops the watch rather than anything the work can hear.** A run
+   * whose work finished inside its limit was never canceled, and a watch still asking about it
+   * would keep a query going against a settled row for as long as the process lived. So it is
+   * raised on every way out, in the `finally`, for the same reason and in the same breath as the
+   * alarm.
+   *
+   * `return await` inside the `try` is load-bearing for the same reason it is in `#executeJob()`:
+   * a bare `return` would complete the statement before the race settled, and the `finally` would
+   * then cancel the alarm while the limit was still being measured.
+   *
    * @param {{
+   *   aiRunId: number
    *   body: Record<string, *>
    *   context: InstanceType<ContextCtor>
    *   parcel: InstanceType<WorkerParcelCtor>
    * }} params - Parameters.
-   * @returns {Promise<AiRunWorkOutcome>} The outcome that won the race.
+   * @returns {Promise<AiRunTerminalOutcome>} The outcome that won the race, and whether a client
+   * asked for the run to stop.
    * @public
    */
   async raceAiRunWorkAgainstTimeLimit ({
+    aiRunId,
     body,
     context,
     parcel,
   }) {
     const aiRunWorkTerminator = this.createAbortController()
     const timeLimitAlarmTerminator = this.createAbortController()
+    const cancellationWatchTerminator = this.createAbortController()
+
+    const aiRunCancellationWatch = this.watchAiRunCancellation({
+      aiRunId,
+      aiRunWorkTerminator,
+      watchSignal: cancellationWatchTerminator.signal,
+    })
 
     try {
-      return await Promise.race([
+      const outcome = await Promise.race([
         this.buildAiRunWorkOutcome({
           body,
           context,
@@ -781,8 +995,140 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
           timeLimitAlarmSignal: timeLimitAlarmTerminator.signal,
         }),
       ])
+
+      return await this.buildAiRunTerminalOutcome({
+        outcome,
+        aiRunCancellationWatch,
+        cancellationWatchTerminator,
+      })
     } finally {
       timeLimitAlarmTerminator.abort()
+      cancellationWatchTerminator.abort()
+    }
+  }
+
+  /**
+   * Watch the run for a cancellation while its work is in flight, and answer whether one came.
+   *
+   * **It is started before the `try` and can never reject.** The watch lives for as long as the
+   * work does, so a rejection raised while the race was still running would be a rejection nothing
+   * had attached a handler to yet — which under Node's default is not a failed run but a dead
+   * daemon. The `catch` here is what makes that impossible, and it is the same judgement the
+   * reading above makes: a watch that failed says nothing about whether a client asked, and the
+   * honest answer to "did a client ask?" when the column could not be read is the one that lets the
+   * run finish on its own terms.
+   *
+   * What is lost when that happens is stated rather than implied: the work is never told, so it
+   * runs to its own end or to the time limit, and the run is recorded as whatever it settled on.
+   * The line this writes is the only record that a client asked and was not heard.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   aiRunWorkTerminator: AbortController
+   *   watchSignal: AbortSignal
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether a cancellation was found and the work told to stop.
+   * @public
+   */
+  async watchAiRunCancellation ({
+    aiRunId,
+    aiRunWorkTerminator,
+    watchSignal,
+  }) {
+    try {
+      const aiRunCancellationWatcher = this.createAiRunCancellationWatcher()
+
+      return await aiRunCancellationWatcher.watchAiRunCancellation({
+        aiRunId,
+        aiRunWorkTerminator,
+        watchSignal,
+      })
+    } catch (error) {
+      this.logFailedAiRunCancellationReading({
+        aiRunId,
+        error,
+      })
+
+      return false
+    }
+  }
+
+  /**
+   * Create the watch that asks whether a client has stopped caring about a run in flight.
+   *
+   * Built per delivery rather than held as a property, for the reason `#createAbortController()`
+   * gives: a worker is one long-lived instance per queue, and a watch is one delivery's.
+   *
+   * @returns {AiRunCancellationWatcher} The watch.
+   * @public
+   */
+  createAiRunCancellationWatcher () {
+    return this.Ctor.AiRunCancellationWatcherCtor.create()
+  }
+
+  /**
+   * Write the line a cancellation reading that failed leaves behind.
+   *
+   * One member for both readings — the one before the work and the watch beside it — because an
+   * operator acts on the same thing either way: a run this service could not ask about. The error's
+   * own message is not repeated, for the reason `#logFailedAiRunWork()` gives.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   error: *
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedAiRunCancellationReading ({
+    aiRunId,
+    error,
+  }) {
+    const errorName = this.extractErrorName({
+      error,
+    })
+
+    this.Ctor.mentsuLogger.error({
+      message: `${this.Ctor.name} ${FAILED_AI_RUN_CANCELLATION_READING_MESSAGE}: AiRunId ${aiRunId}, ${errorName}`,
+      tags: FAILED_AI_RUN_CANCELLATION_READING_TAGS,
+    })
+  }
+
+  /**
+   * Fold the watch's answer into the outcome the race produced.
+   *
+   * **The watch is stopped here and again in the caller's `finally`, and both are needed.** This
+   * one is what lets the answer be taken at all: the watch resolves false only once it is told to
+   * stop, so a run that was never canceled would otherwise be waited on until its next interval
+   * elapsed. The one in the `finally` covers the path this line is never reached on — a race that
+   * threw — and raising an already-raised controller does nothing, which is what makes keeping both
+   * cost nothing.
+   *
+   * **The boolean is carried rather than acted on.** What a canceled run is recorded as belongs to
+   * `#recordTerminalAiRunState()`, which is the one place a terminal state is decided; this method
+   * only makes the decision possible by putting on the outcome the one fact the work's own answer
+   * could never carry.
+   *
+   * @param {{
+   *   outcome: AiRunWorkOutcome
+   *   aiRunCancellationWatch: Promise<boolean>
+   *   cancellationWatchTerminator: AbortController
+   * }} params - Parameters.
+   * @returns {Promise<AiRunTerminalOutcome>} The outcome the terminal state is recorded from.
+   * @public
+   */
+  async buildAiRunTerminalOutcome ({
+    outcome,
+    aiRunCancellationWatch,
+    cancellationWatchTerminator,
+  }) {
+    cancellationWatchTerminator.abort()
+
+    const isCanceled = await aiRunCancellationWatch
+
+    return {
+      ...outcome,
+      isCanceled,
     }
   }
 
@@ -1131,14 +1477,21 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * Record the one terminal state the outcome names, and report what this delivery did.
    *
    * The branch the outcome decides, held in a member of its own so that its caller has one place
-   * below it where both arms have already answered — which is where the terminal callback is
-   * raised. The reason code is what tells the two apart: an outcome carrying one is a failure,
-   * whichever side of the race produced it, and an outcome carrying none is a success even when
-   * the run settled nothing, which is section 10's second criterion.
+   * below it where every arm has already answered — which is where the terminal callback is
+   * raised. The reason code is what tells failure from success: an outcome carrying one is a
+   * failure, whichever side of the race produced it, and an outcome carrying none is a success even
+   * when the run settled nothing, which is section 10's second criterion.
+   *
+   * **The cancellation is asked first, and the ordering is the decision.** A client that asked for
+   * a run to stop is answered `canceled` whatever else the outcome says — the work may have come
+   * back with a partial result, thrown on its way out of a step, or lost to the time limit by a
+   * hair, and all three are the shape of a run that stopped because somebody asked. Ordering the
+   * reason code first would record such a run as failed, and the client would be told its run broke
+   * when what happened is that it got what it asked for.
    *
    * @param {{
    *   aiRunId: number
-   *   outcome: AiRunWorkOutcome
+   *   outcome: AiRunTerminalOutcome
    * }} params - Parameters.
    * @returns {Promise<AiRunJobResult>} What this delivery did.
    * @public
@@ -1147,6 +1500,12 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     aiRunId,
     outcome,
   }) {
+    if (outcome.isCanceled) {
+      return this.settleCanceledAiRun({
+        aiRunId,
+      })
+    }
+
     if (outcome.failureReasonCode !== null) {
       return this.settleFailedAiRun({
         aiRunId,
@@ -1157,6 +1516,76 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
     return this.settleSucceededAiRun({
       aiRunId,
       outcome,
+    })
+  }
+
+  /**
+   * Record the run as canceled, at the instant this delivery saw it stop.
+   *
+   * **It takes no outcome, and that is the point rather than an omission.** A run that was asked to
+   * stop settled nothing: what the work had accumulated when it reached the boundary it stopped at
+   * is a fragment of an answer nobody asked for, and writing it into `ai_runs.result_body` would
+   * present it to the client as what the run produced. A reason code is not written either — a
+   * client asking is not a failure, and `AiRunStatusRecorder#saveCanceledAiRun()` writes neither
+   * column.
+   *
+   * **The two instants are one reading of the clock, deliberately.** `canceled_at` is when the
+   * cancellation took effect and `finished_at` is when the run stopped doing work; the recorder
+   * takes both on the call rather than copying one from the other, because whether they coincide is
+   * the caller's to state. Here they do: this delivery observes one event — the work has come back
+   * and the watch has said it was asked to stop — and cannot see the boundary it stopped at any
+   * more precisely than this. Neither of them is the instant the client asked, which is
+   * `cancel_requested_at` and is never overwritten; §15's third use case is the gap between that
+   * one and these.
+   *
+   * **The tokens the run spent before it stopped are not touched here.** They were recorded into
+   * `ai_model_calls` as each call was made, by the step that made it, and nothing on this path
+   * updates or removes one — which is what lets a canceled run report what it spent.
+   *
+   * @param {{
+   *   aiRunId: number
+   * }} params - Parameters.
+   * @returns {Promise<AiRunJobResult>} What this delivery did.
+   * @public
+   */
+  async settleCanceledAiRun ({
+    aiRunId,
+  }) {
+    const stoppedAt = this.buildCurrentInstant()
+
+    const hasSettled = await this.saveCanceledAiRun({
+      aiRunId,
+      canceledAt: stoppedAt,
+      finishedAt: stoppedAt,
+    })
+
+    return this.buildAiRunJobResult({
+      aiRunId,
+      failureReasonCode: null,
+      hasSettled,
+    })
+  }
+
+  /**
+   * Save the run as canceled, and answer whether this delivery is the one that settled it.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   canceledAt: Date
+   *   finishedAt: Date
+   * }} params - Parameters.
+   * @returns {Promise<boolean>} Whether this writer performed the write.
+   * @public
+   */
+  async saveCanceledAiRun ({
+    aiRunId,
+    canceledAt,
+    finishedAt,
+  }) {
+    return this.aiRunStatusRecorder.saveCanceledAiRunOnce({
+      aiRunId,
+      canceledAt,
+      finishedAt,
     })
   }
 
@@ -1571,11 +2000,29 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
  */
 
 /**
+ * What one side of the race answered, and the whole of it.
+ *
  * @typedef {{
  *   resultBody: string | null
  *   failureReasonCode: string | null
  *   failureParameters: Record<string, *> | null
  * }} AiRunWorkOutcome
+ */
+
+/**
+ * What a terminal state is recorded from: what the race answered, and whether a client asked for
+ * the run to stop.
+ *
+ * The second is a fact neither side of the race can carry. A work that honoured the cancellation
+ * signal answers exactly as a work that ran out of things to do answers, so `isCanceled` is folded
+ * on afterwards, out of the watch's own reading of the run.
+ *
+ * @typedef {{
+ *   resultBody: string | null
+ *   failureReasonCode: string | null
+ *   failureParameters: Record<string, *> | null
+ *   isCanceled: boolean
+ * }} AiRunTerminalOutcome
  */
 
 /**

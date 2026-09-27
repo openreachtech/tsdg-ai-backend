@@ -396,9 +396,11 @@ export default class AssetMediaReadingFetcher {
    * carry no `if` - and both of the guards here are early returns that say nothing more than which
    * readings do not add anything.
    *
-   * **The signal is asked before the reading rather than after it.** A run whose time limit has
-   * already won is a run whose row is already settled, so another call to a provider would be
-   * billed against a run nobody is waiting for. Asking afterwards would spend it first.
+   * **The signal is asked before the reading rather than after it**, because whichever of the two
+   * things raised it, nobody is waiting for what another call would produce. A run whose time
+   * limit has won is a run whose row is already settled. A run whose client asked it to stop is
+   * one whose row is **not** settled yet — the settle happens after this work returns — but the
+   * answer is about to be discarded either way. Asking afterwards would spend the call first.
    *
    * @param {AppendOneReadingParams} params - Parameters.
    * @returns {Promise<Array<Array<*>>>} The readings, with this one added if it found anything.

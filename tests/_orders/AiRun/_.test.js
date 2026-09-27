@@ -30,9 +30,14 @@
  * a real dependency, never for keeping two independent files out of each other's way. See Q69.
  *
  * `BaseAiRunJobWorker` is order-independent for a different reason again: it hands the worker a
- * recorder of its own, so it reads and writes no row at all. It sits in this folder rather than
- * under `tests/__tests__/` because placement follows what the method does — the lifecycle it
- * exercises writes to `ai_runs` — and not whether a test stubs the write away.
+ * recorder of its own, so it writes no row at all. It sits in this folder rather than under
+ * `tests/__tests__/` because placement follows what the method does — the lifecycle it exercises
+ * writes to `ai_runs` — and not whether a test stubs the write away.
+ *
+ * What it does read, since `#run-cancel`, is one column of a run that is not there: the delivery
+ * asks whether a client has stopped caring before it begins the work, and the ids that file names
+ * carry no row. The answer is the same as for a run nobody asked about, so nothing above or below
+ * it can change what that file sees, and it changes nothing for them.
  *
  * `AiRunJobDispatchRegistrar` sits below every file that takes its ids from the auto-increment,
  * and that position does state something. It creates its runs with explicit ids in
@@ -56,6 +61,15 @@
  * run after it. Its position relative to the two files above it carries no meaning — it creates the
  * two runs it watches and borrows none — and `cancel_requested_at` is the only column it writes.
  *
+ * `BaseAiRunJobWorkerCancellation` is the last of all, and its position is the only one in this
+ * folder that had to move something. It is the cancellation half of `BaseAiRunJobWorker`'s
+ * lifecycle, and unlike that file it runs the recorder for real — so it creates `ai_runs` rows with
+ * explicit ids, in `#run-cancel`'s own block (`10870001` upward), which is higher than every id
+ * written anywhere above it. That is why it is a file of its own rather than more describes in
+ * `BaseAiRunJobWorker.js`: that file writes no row at all and so may sit seventh, and adding these
+ * cases to it would have put explicit ids above three files that take theirs from the
+ * auto-increment. Its runs are accepted in November 2026, clear of 2026-09-10.
+ *
  * `#run-cancel` writes into `AiRunStatusRecorder.js` as well, in `10850001` upward, for the
  * answering spelling of the cancellation transition. That block is above every id written in this
  * folder too, and it is written from the fourth position rather than the last only because that
@@ -74,3 +88,4 @@ import './AssetMediaReadingFetcher.js'
 import './AiRunCancellationRegistrar.js'
 import './AiRunCancellationPostRenderer.js'
 import './AiRunCancellationWatcher.js'
+import './BaseAiRunJobWorkerCancellation.js'
