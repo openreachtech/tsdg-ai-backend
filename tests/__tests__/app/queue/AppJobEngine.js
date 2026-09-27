@@ -109,10 +109,19 @@ describe('AppJobEngine', () => {
      * `workersPath` is asserted because the daemon loads every `BaseJobWorker` subclass beneath
      * it: a path reaching one directory higher would pick up a shared abstract base worker, which
      * has no job name, and stop the daemon at boot.
+     *
+     * `schedulersPath` is asserted for the same shape of reason and one more. The scheduler
+     * service loads every `BaseJobScheduler` subclass beneath it and asks each for its
+     * `schedulerId`, so a path one directory higher would reach the abstract purge scheduler and
+     * throw during registration. The additional reason is that `DeepBulkClassLoader` reads the
+     * directory with `fs.readdirSync()` and no existence guard, so a path naming a directory that
+     * is not there raises `ENOENT` rather than finding nothing — which is why this asserts the
+     * exact string rather than merely that the key is present.
      */
-    test('should name the workers path and the Redis to open', () => {
+    test('should name the scanned paths and the Redis to open', () => {
       const expected = {
         workersPath: rootPath.to('app/jobs/'),
+        schedulersPath: rootPath.to('app/jobs/'),
         redisConfig: {
           host: 'redis.queue.example.com',
           port: 16379,

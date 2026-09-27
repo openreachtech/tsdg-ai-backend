@@ -29,11 +29,19 @@ import AppJobEngine from '../app/queue/AppJobEngine.js'
  * subscribes, because a run reports its outcome by posting a callback rather than by publishing
  * progress.
  *
- * **There is no registration step.** The scan is the registration: a service that adds a job
- * directory under that path is picked up with no file edited here. Two services have done so —
- * `deliver-run-callback` and `run-asset-media-extraction` — and neither required a line in this
- * file, which is the whole of what the scan buys. The concrete job of a service belongs to that
- * service, so this file names none of them and stays correct as more arrive.
+ * **There is no registration step for a worker.** The scan is the registration: a service that
+ * adds a job directory under that path is picked up with no file edited here. Four have done so —
+ * `deliver-run-callback`, `run-asset-media-extraction` and retention's two purges — and none
+ * required a line in this file, which is the whole of what the scan buys. The concrete job of a
+ * service belongs to that service, so this file names none of them and stays correct as more
+ * arrive.
+ *
+ * **A schedule is not covered by that, and the difference shows up at deployment.** Retention's
+ * two purges are started by a clock rather than by a request, and a repeatable job lives in Redis
+ * rather than in either process. The scan here binds their workers to their queues, so this daemon
+ * reports itself listening on both — but nothing will ever post to them until
+ * `scripts/startJobSchedulers.js` has been run once against the same Redis. A daemon listening on
+ * a purge queue is therefore not evidence that the purge is running.
  *
  * **The other half of that sentence: the path is the only thing between a file and being run at
  * boot.** Every `BaseJobWorker` subclass the scan finds under `workersPath` is instantiated and

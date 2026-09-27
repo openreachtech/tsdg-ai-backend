@@ -17,16 +17,27 @@
  * empties the content of every seeded run in the database, and the failures surface in other
  * folders as missing subject labels rather than here.
  *
- * **The two files are order-independent, and each states why.** `AiRunContentPurger.js` creates
- * runs accepted in 2019 whose content stamp is null; `AiRunTracePurger.js` creates runs accepted
- * in 2017 whose content stamp is already set, which is both true of a run that has reached the
- * two-year horizon and what keeps those rows out of a content sweep's set. Neither file's horizons
- * can reach the other file's rows in either order: the trace horizons all fall in 2017, before
- * every run the content file creates, and the content sweeps exclude a run already stamped.
+ * **The files are order-independent, and each states why.** The two content files create runs
+ * accepted in 2019 whose content stamp is null; the two trace files create runs accepted in 2017
+ * whose content stamp is already set, which is both true of a run that has reached the two-year
+ * horizon and what keeps those rows out of a content sweep's set. No file's horizons can reach
+ * another file's rows in any order: the trace horizons all fall in 2017, before every run the
+ * content files create, and the content sweeps exclude a run already stamped.
  *
- * Both files work in #retention's own id block, `11020001` and `11030001` upward. Checkpoint 3's
- * own file, `tests/_orders/AiRun/AiRun.js`, holds `11010001` upward and stays where it is: what it
- * pins is what the schema accepts, not what a job does.
+ * **Two of the four test a purger and two test the job that runs it, and the split is the folder
+ * placement rule rather than a preference.** `AiRunContentPurger.js` and `AiRunTracePurger.js` pin
+ * what a purge does to the rows. `PurgeExpiredRunContentJobWorker.js` and
+ * `PurgeExpiredRunTracesJobWorker.js` pin the one thing neither of those reaches - a worker built
+ * the way the daemon builds one, with its own **default** purger, handed a real instant, and
+ * actually purging. Each worker's read-only members stay in `tests/__tests__/app/jobs/`;
+ * `#sweepExpiredAiRuns()` is here because it writes transitively, which is what decides placement.
+ *
+ * **Each file works in its own id block**, all inside #retention's: `11020001`, `11030001`,
+ * `11040001` and `11050001` upward, and none is borrowed. Checkpoint 3's own file,
+ * `tests/_orders/AiRun/AiRun.js`, holds `11010001` upward and stays where it is: what it pins is
+ * what the schema accepts, not what a job does.
  */
 import './AiRunContentPurger.js'
 import './AiRunTracePurger.js'
+import './PurgeExpiredRunContentJobWorker.js'
+import './PurgeExpiredRunTracesJobWorker.js'

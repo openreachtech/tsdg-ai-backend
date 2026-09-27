@@ -67,6 +67,8 @@ curl -X POST http://127.0.0.1:3900/graphql-customer \
 | コマンド | 内容 |
 | :-- | :-- |
 | `npm run dev` | `NODE_ENV=development` で `server/` を nodemon 実行する |
+| `npm run schedulers:start` | このリポジトリの繰り返しジョブを Redis に登録する（`scripts/startJobSchedulers.js`） |
+| `npm run schedulers:stop` | 登録した繰り返しジョブを Redis から削除する（`scripts/stopJobSchedulers.js`） |
 | `npm test` | データベースを作り直し、シードを投入して Jest を実行する（`test.sh`） |
 | `npm run test:live` | データベースには手を付けず、`live` 環境に対して Jest を実行する（`test-live.sh`） |
 | `npm run lint` | リポジトリ全体に ESLint をかける（別名: `npm run l`） |
@@ -84,6 +86,14 @@ npm test -- --empty
 ```
 
 `sequelize/seeders/master/` には、実際のデプロイ向けのシードが入ります。どのスクリプトからも参照されていません。意図的に、手で投入するものです。
+
+`npm run schedulers:start` は常駐プロセスではなくデプロイ手順です。PM2 が動かさないのはそのためです。リテンションの purge はリクエストではなく時計から始まり、繰り返しジョブは二つのプロセスのどちらでもなく Redis に存在します。つまり job daemon は、誰も投入しないキューであっても両方の purge キューを待ち受けていると報告します。同じ Redis に対してこのコマンドを一度実行するまで、そこには何も投入されません。デプロイ時に実行し、スケジューラの cron 式を変えたときにも実行してください。scheduler id をキーとした upsert なので、再実行しても安全です。スケジューラの改名や廃止のときは、古い id がまだソースに残っているうちに **先に** `npm run schedulers:stop` を実行してください。さもないと、古いスケジュールが誰も知らない名前で動き続けます。
+
+どちらのスクリプトも環境を決め打ちしません。書き込む先の Redis はデプロイ先のものだからです。したがって `NODE_ENV` は呼び出す側が与えます。未設定の場合、スクリプトは接続する前に停止します。
+
+```sh
+NODE_ENV=production npm run schedulers:start
+```
 
 ### アプリケーションのコードを置く場所
 

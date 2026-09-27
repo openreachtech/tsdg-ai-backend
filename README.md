@@ -67,6 +67,8 @@ In production the servers run under PM2, whose configuration is `pm2.config.cjs`
 | command | what it does |
 | :-- | :-- |
 | `npm run dev` | run `server/` under nodemon with `NODE_ENV=development` |
+| `npm run schedulers:start` | write this repository's repeatable jobs into Redis (`scripts/startJobSchedulers.js`) |
+| `npm run schedulers:stop` | remove them from Redis again (`scripts/stopJobSchedulers.js`) |
 | `npm test` | rebuild the database, seed it, and run Jest (`test.sh`) |
 | `npm run test:live` | run Jest against the `live` environment, leaving the database alone (`test-live.sh`) |
 | `npm run lint` | ESLint over the repository (alias: `npm run l`) |
@@ -84,6 +86,14 @@ npm test -- --empty
 ```
 
 `sequelize/seeders/master/` holds the seeds meant for a real deployment. No script points at it — it is seeded deliberately, by hand.
+
+`npm run schedulers:start` is a deployment step rather than a process, which is why PM2 does not run it. The retention purges are started by a clock instead of by a request, and a repeatable job lives in Redis rather than in either of the two processes — so the job daemon reports itself listening on both purge queues whether or not anything will ever post to them. Nothing does until this has been run once against the same Redis. Run it at deployment, and again whenever a scheduler's cron expression changes; it is an upsert keyed by the scheduler id, so re-running is safe. Renaming or retiring a scheduler needs `npm run schedulers:stop` **first**, while the old id is still in the source, otherwise the old schedule keeps firing under a name nothing knows.
+
+Neither script hardcodes an environment, because the Redis they write to is the deployment's. `NODE_ENV` therefore comes from the caller, and an unset one stops the script before it connects:
+
+```sh
+NODE_ENV=production npm run schedulers:start
+```
 
 ### Where the application code goes
 
