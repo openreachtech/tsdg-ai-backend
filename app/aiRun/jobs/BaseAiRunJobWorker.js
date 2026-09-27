@@ -770,7 +770,6 @@ export default class BaseAiRunJobWorker extends BaseJobWorker {
    * callback at all, and no run would look any different for it. Every terminal state this worker
    * writes passes through `#recordTerminalAiRunState()`, so the single raise below the branch
    * covers the canceled one without knowing it exists.
-   *
    * @returns {Promise<AiRunJobResult>} What this delivery did.
    * @public
    */

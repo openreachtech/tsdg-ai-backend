@@ -60,6 +60,7 @@ describe('AiRun', () => {
               acceptedAt: new Date('2026-11-21T01:00:01.001Z'),
               startedAt: new Date('2026-11-21T01:00:02.002Z'),
               finishedAt: new Date('2026-11-21T01:00:03.003Z'),
+
               /*
                * Carried at creation so the instance holds it. `#update()` answers the instance
                * rather than the row, and an instance carries only what it was created with plus
