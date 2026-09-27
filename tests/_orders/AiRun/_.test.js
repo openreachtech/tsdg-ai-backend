@@ -34,11 +34,21 @@
  * under `tests/__tests__/` because placement follows what the method does — the lifecycle it
  * exercises writes to `ai_runs` — and not whether a test stubs the write away.
  *
- * `AiRunJobDispatchRegistrar` runs last, and that position does state something. It creates its
- * runs with explicit ids in `#run-execution`'s own block (`10310001` upward), which is higher than
- * every id this folder writes; the two files that create runs through the acceptor and the
- * renderer take their ids from the auto-increment, so they go first and are never handed an id
- * this file has already pushed the sequence past.
+ * `AiRunJobDispatchRegistrar` sits below every file that takes its ids from the auto-increment,
+ * and that position does state something. It creates its runs with explicit ids in
+ * `#run-execution`'s own block (`10310001` upward), which is higher than every id the files above
+ * it write; the two files that create runs through the acceptor and the renderer take their ids
+ * from the auto-increment, so they go first and are never handed an id this file has already
+ * pushed the sequence past.
+ *
+ * `#run-cancel`'s two files are last for the same reason and state the same thing. They create
+ * runs with explicit ids in their own block (`10810001` upward), higher again than everything
+ * above them, so nothing that takes an id from the auto-increment can run afterwards and collide.
+ * Their position relative to each other carries no meaning: each creates the rows it stands on, in
+ * a sub-block of its own — `10810001` and `10820001` upward for the registrar, `10830001` upward
+ * for the renderer — and neither borrows a run of the other's or a seeded one. Both write only
+ * `cancel_requested_at`, and only onto runs they created themselves, so no file above them reads a
+ * row either of them has touched.
  */
 import './AiRunAcceptor.js'
 import './BaseAiRunPostRenderer.js'
@@ -49,3 +59,5 @@ import './AiRunFieldOutcomeRecorder.js'
 import './BaseAiRunJobWorker.js'
 import './AiRunJobDispatchRegistrar.js'
 import './AssetMediaReadingFetcher.js'
+import './AiRunCancellationRegistrar.js'
+import './AiRunCancellationPostRenderer.js'
