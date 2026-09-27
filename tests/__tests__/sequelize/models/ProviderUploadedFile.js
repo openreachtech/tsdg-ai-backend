@@ -63,6 +63,11 @@ describe('ProviderUploadedFile', () => {
             attributeName: 'expiresAt',
           },
         },
+        {
+          params: {
+            attributeName: 'providerPurgedAt',
+          },
+        },
       ]
 
       test.each(cases)('attributeName: $params.attributeName', ({
@@ -83,8 +88,14 @@ describe('ProviderUploadedFile', () => {
      * `id` is not among the cases: it is spread from the shared attribute factory, so its shape is
      * that factory's contract and not this model's. Its presence is pinned above.
      *
-     * `expiresAt` is the one nullable column, and it is here for that: a provider that states no
-     * expiry leaves nothing to record, and a column declared NOT NULL would force an invented one.
+     * `expiresAt` is the one nullable column the provider supplies, and it is here for that: a
+     * provider that states no expiry leaves nothing to record, and a column declared NOT NULL would
+     * force an invented one.
+     *
+     * `providerPurgedAt` is nullable for a different reason: it is the stamp #retention's third
+     * purge writes when the copy at the provider has been deleted, so null is every row until that
+     * has happened - and it is what keeps the job's work set shrinking, since a row already taken
+     * back would otherwise be picked again every day the record outlives the copy.
      */
     describe('should declare the shape of each column it writes itself', () => {
       const cases = [
@@ -127,6 +138,15 @@ describe('ProviderUploadedFile', () => {
         {
           params: {
             attributeName: 'expiresAt',
+          },
+          expected: {
+            type: DataTypes.DATE(3),
+            allowNull: true,
+          },
+        },
+        {
+          params: {
+            attributeName: 'providerPurgedAt',
           },
           expected: {
             type: DataTypes.DATE(3),

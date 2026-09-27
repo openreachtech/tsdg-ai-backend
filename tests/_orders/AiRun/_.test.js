@@ -75,6 +75,15 @@
  * folder too, and it is written from the fourth position rather than the last only because that
  * file is where the class's other transitions are already asserted — the three files above it are
  * the ones taking ids from the auto-increment, and all three have run by then.
+ *
+ * `AiRun.js` is the last of all, and its position states the same thing once more. It is
+ * #retention's own file, it creates the four runs it purges with explicit ids in that feature's
+ * block (`11010001` upward) — higher than every id written anywhere above it — and it borrows
+ * neither a seeded run nor a run of any other file's. Its runs are accepted in November 2026,
+ * clear of 2026-09-10. It is a file named for the model rather than for a class of its own because
+ * the member it exercises is the model's: what a purge writes onto a run is `AiRun#update()` and
+ * `AiRun.update()`, and the guard that write has to pass is this model's own hook. The jobs that
+ * will make those writes are checkpoints of their own and are not here.
  */
 import './AiRunAcceptor.js'
 import './BaseAiRunPostRenderer.js'
@@ -89,3 +98,4 @@ import './AiRunCancellationRegistrar.js'
 import './AiRunCancellationPostRenderer.js'
 import './AiRunCancellationWatcher.js'
 import './BaseAiRunJobWorkerCancellation.js'
+import './AiRun.js'

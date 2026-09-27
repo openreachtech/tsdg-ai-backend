@@ -54,6 +54,13 @@ export default class ProviderUploadedFile extends BaseAppRenchanModel {
         type: DataTypes.DATE(3),
         allowNull: true,
       },
+      // When the copy at the provider was deleted. Null while it is still there. The row itself
+      // outlives the copy - the egress record answers "which file left, to whom and when" months
+      // afterwards - so what is recorded here is the end of the copy, not the end of the record.
+      providerPurgedAt: {
+        type: DataTypes.DATE(3),
+        allowNull: true,
+      },
     }
   }
 

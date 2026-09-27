@@ -25,6 +25,7 @@ declare global {
       cancelRequestedAt: Date | null
       canceledAt: Date | null
       contentPurgedAt: Date | null
+      tracePurgedAt: Date | null
     }
   }
 }

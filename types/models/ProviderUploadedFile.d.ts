@@ -9,6 +9,7 @@ declare global {
       providerFileName: string
       uploadedAt: Date
       expiresAt: Date | null
+      providerPurgedAt: Date | null
     }
   }
 }

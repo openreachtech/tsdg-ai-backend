@@ -1,4 +1,5 @@
 import {
+  DataTypes,
   Op,
 } from 'sequelize'
 
@@ -1383,6 +1384,112 @@ describe('AiRun', () => {
 
         expect(received)
           .toBeNull()
+      })
+    })
+  })
+})
+
+/*
+ * The two purge stamps, read off the declaration itself, so nothing here reads a table.
+ *
+ * They are asked together and in one place because their being two is the point. Section 7 fixes
+ * two horizons and says "two separate settings, never one"; a run therefore carries two marks, and
+ * a single stamp that meant "purged" would collapse the pair the requirement exists to keep apart.
+ * Both are nullable and neither carries a default, so a run that has been through neither purge
+ * reads null twice - which is what makes a purged run distinguishable from one that never carried
+ * content, and a run inside the trace horizon distinguishable from one past it.
+ */
+describe('AiRun', () => {
+  describe('.createAttributes()', () => {
+    describe('should declare a stamp for each of the two retention clocks', () => {
+      const cases = [
+        {
+          input: {
+            attributeName: 'contentPurgedAt',
+          },
+          expected: {
+            type: DataTypes.DATE(3),
+            allowNull: true,
+          },
+        },
+        {
+          input: {
+            attributeName: 'tracePurgedAt',
+          },
+          expected: {
+            type: DataTypes.DATE(3),
+            allowNull: true,
+          },
+        },
+      ]
+
+      test.each(cases)('attributeName: $input.attributeName', ({
+        input,
+        expected,
+      }) => {
+        const received = AiRun.createAttributes(DataTypes)
+
+        expect(received)
+          .toHaveProperty(input.attributeName, expected)
+      })
+    })
+  })
+})
+
+/*
+ * The four columns section 7 counts as content, and the shape each of them has to have for the
+ * content purge to empty it.
+ *
+ * Three are nullable and the purge nulls them. `subjectLabel` is the exception and is here for it:
+ * the column is NOT NULL, because every run has a label and a run without one would be a row the
+ * record could not describe - so the purge writes an empty string where the other three are
+ * nulled, and a declaration that turned nullable would let a fourth spelling of "no label" into a
+ * table that has one.
+ *
+ * `ai_model_calls.response_body` is the fifth column the same purge empties, and it is asked in
+ * that model's own file rather than here.
+ */
+describe('AiRun', () => {
+  describe('.createAttributes()', () => {
+    describe('should declare each content column as the purge needs it', () => {
+      const cases = [
+        {
+          input: {
+            attributeName: 'requestBody',
+          },
+          expected: {
+            type: DataTypes.TEXT('medium'),
+            allowNull: true,
+          },
+        },
+        {
+          input: {
+            attributeName: 'resultBody',
+          },
+          expected: {
+            type: DataTypes.TEXT('medium'),
+            allowNull: true,
+          },
+        },
+        {
+          input: {
+            attributeName: 'subjectLabel',
+          },
+          expected: {
+            type: DataTypes.TEXT,
+            allowNull: false,
+          },
+        },
+      ]
+
+      test.each(cases)('attributeName: $input.attributeName', ({
+        input,
+        expected,
+      }) => {
+        const received = AiRun.createAttributes(DataTypes)
+
+        expect(received)
+          .toHaveProperty(input.attributeName, expected)
       })
     })
   })

@@ -294,7 +294,18 @@ export default class AiRun extends BaseAppRenchanModel {
         type: DataTypes.DATE(3),
         allowNull: true,
       },
+      // When the four content columns were emptied. Null for a run still inside the content
+      // horizon, which is also what a run that never carried content would read - so the purge
+      // writes this even when it emptied nothing, and the two stay apart.
       contentPurgedAt: {
+        type: DataTypes.DATE(3),
+        allowNull: true,
+      },
+      // When this run's decision trace was removed. The trace is rows rather than columns, so
+      // purging it leaves nothing behind to read: a run whose steps are gone looks exactly like a
+      // run canceled before it took one. This is what tells them apart, and what lets a run inside
+      // the trace horizon be distinguished from one past it.
+      tracePurgedAt: {
         type: DataTypes.DATE(3),
         allowNull: true,
       },
