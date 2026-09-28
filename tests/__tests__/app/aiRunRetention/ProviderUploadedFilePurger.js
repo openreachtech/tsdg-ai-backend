@@ -1035,3 +1035,175 @@ describe('ProviderUploadedFilePurger', () => {
     })
   })
 })
+
+describe('ProviderUploadedFilePurger', () => {
+  describe('#extractErrorName()', () => {
+    /*
+     * A raise reaches the log line as a class name and never as a message. What a refusal carries
+     * is the vendor's to decide, so a name this service recognizes is the only part of it that may
+     * be written down.
+     */
+    describe('should name the class of a raise', () => {
+      const cases = [
+        {
+          label: 'an Error subclass',
+          input: {
+            error: new TypeError('files/provider-file-0101 is not a file'),
+          },
+          expected: 'TypeError',
+        },
+        {
+          label: 'a raise that is not an Error',
+          input: {
+            error: {
+              name: 'ClientError',
+              message: 'got status: 403. {"error":{"message":"permission denied"}}',
+            },
+          },
+          expected: 'ClientError',
+        },
+        {
+          label: 'a raise carrying no name at all',
+          input: {
+            error: null,
+          },
+          expected: 'Error',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+        expected,
+      }) => {
+        const purger = ProviderUploadedFilePurger.create()
+
+        const received = purger.extractErrorName(input)
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('ProviderUploadedFilePurger', () => {
+  describe('#deleteProviderCopy()', () => {
+    /*
+     * The provider refuses. The row is left exactly as it was, so tomorrow's sweep asks again.
+     */
+    describe('when the provider refuses the delete', () => {
+      const cases = [
+        {
+          input: {
+            providerUploadedFile: {
+              id: 11210041,
+              AiProviderId: 99900003,
+              providerFileName: 'files/provider-file-0008',
+            },
+            aiModelProcessor: {
+              deleteProviderUploadedFile: async () => {
+                throw new TypeError('refused')
+              },
+            },
+          },
+        },
+        {
+          input: {
+            providerUploadedFile: {
+              id: 11210042,
+              AiProviderId: 99900004,
+              providerFileName: 'files/provider-file-0009',
+            },
+            aiModelProcessor: {
+              deleteProviderUploadedFile: async () => {
+                throw new TypeError('refused')
+              },
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerUploadedFile.providerFileName', async ({
+        input,
+      }) => {
+        const purger = ProviderUploadedFilePurger.create()
+
+        const received = await purger.deleteProviderCopy(input)
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('ProviderUploadedFilePurger', () => {
+  describe('#deleteProviderCopy()', () => {
+    /*
+     * **The vendor's own wording does not reach the log file.** A provider is free to quote the
+     * request back in a refusal - a handle, a prompt, a string somebody else wrote - and this line
+     * is asserted whole so that a message travelling into it fails here rather than in a log file
+     * nobody reads until an audit.
+     */
+    describe('should write the class of the refusal and nothing the provider worded', () => {
+      const cases = [
+        {
+          input: {
+            providerUploadedFile: {
+              id: 11210051,
+              AiProviderId: 99900005,
+              providerFileName: 'files/provider-file-0010',
+            },
+            aiModelProcessor: {
+              deleteProviderUploadedFile: async () => {
+                throw new TypeError('got status: 403. {"error":{"message":"files/provider-file-0010 denied"}}')
+              },
+            },
+          },
+          expected: {
+            message: 'ProviderUploadedFilePurger left a file where it is because the provider could not be reached: AiProviderId 99900005, providerFileName files/provider-file-0010, TypeError',
+            tags: [
+              'ProviderUploadPurge',
+              'FailedDelete',
+            ],
+          },
+        },
+        {
+          input: {
+            providerUploadedFile: {
+              id: 11210052,
+              AiProviderId: 99900006,
+              providerFileName: 'files/provider-file-0011',
+            },
+            aiModelProcessor: {
+              deleteProviderUploadedFile: async () => {
+                throw new RangeError('got status: 500. {"error":{"message":"files/provider-file-0011 unavailable"}}')
+              },
+            },
+          },
+          expected: {
+            message: 'ProviderUploadedFilePurger left a file where it is because the provider could not be reached: AiProviderId 99900006, providerFileName files/provider-file-0011, RangeError',
+            tags: [
+              'ProviderUploadPurge',
+              'FailedDelete',
+            ],
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerUploadedFile.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const purger = ProviderUploadedFilePurger.create()
+        const errorSpy = jest.spyOn(ProviderUploadedFilePurger.mentsuLogger, 'error')
+          .mockImplementation(() => null)
+
+        await purger.deleteProviderCopy(input)
+
+        expect(errorSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})

@@ -325,13 +325,13 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    * @public
    */
   async createGeminiApiClient () {
-    const geminiApiClientCtor = await this.resolveGeminiApiClientCtor()
-
     const apiKey = this.extractApiKey()
 
     if (!apiKey) {
       throw new Error(`${this.Ctor.name}#createGeminiApiClient() ${MISSING_API_KEY_MESSAGE}: model ${this.aiModel}`)
     }
+
+    const geminiApiClientCtor = await this.resolveGeminiApiClientCtor()
 
     return geminiApiClientCtor.createWithApiKey({
       apiKey,

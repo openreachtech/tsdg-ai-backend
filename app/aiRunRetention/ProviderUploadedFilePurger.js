@@ -26,6 +26,7 @@ const {
 const UNRECORDABLE_INSTANT_MESSAGE = 'refused an instant that is not an instant'
 const UNREACHABLE_PROVIDER_MESSAGE = 'left a file where it is because this service has no driver for its provider'
 const FAILED_DELETE_MESSAGE = 'left a file where it is because the provider could not be reached'
+const UNNAMED_ERROR_NAME = 'Error'
 
 /*
  * The same log file the two run purges write to, and for the reason `BaseAiRunPurgeJobWorker`
@@ -615,6 +616,11 @@ export default class ProviderUploadedFilePurger {
    * only thing that identifies which row to look at. Nothing about the run it belonged to, or what
    * the file showed, goes anywhere near this line.
    *
+   * **Nor does the vendor's own wording.** What a refusal carries is the vendor's to decide, and a
+   * provider that quotes the request back - a handle, a prompt, a caller's own string - would put it
+   * in a file section 22 keeps for ids, reason codes and error codes. The error's class name says
+   * which failure this was and carries nothing that was not already this service's own.
+   *
    * @param {{
    *   providerUploadedFile: *
    *   aiModelProcessor: *
@@ -642,13 +648,36 @@ export default class ProviderUploadedFilePurger {
 
       return providerUploadedFile.id
     } catch (error) {
+      const errorName = this.extractErrorName({
+        error,
+      })
+
       this.Ctor.mentsuLogger.error({
-        message: `${this.Ctor.name} ${FAILED_DELETE_MESSAGE}: AiProviderId ${providerUploadedFile.AiProviderId}, providerFileName ${providerUploadedFile.providerFileName}, ${error.message}`,
+        message: `${this.Ctor.name} ${FAILED_DELETE_MESSAGE}: AiProviderId ${providerUploadedFile.AiProviderId}, providerFileName ${providerUploadedFile.providerFileName}, ${errorName}`,
         tags: FAILED_DELETE_TAGS,
       })
 
       return null
     }
+  }
+
+  /**
+   * Name the class of a raise, for a log line that may not carry its message.
+   *
+   * A raise from a vendor SDK is not always an Error, and one built by hand is not always named, so
+   * a fallback is what keeps the line readable rather than ending in `undefined`.
+   *
+   * @param {{
+   *   error: *
+   * }} params - Parameters.
+   * @returns {string} The error's class name.
+   * @public
+   */
+  extractErrorName ({
+    error,
+  }) {
+    return error?.name
+      ?? UNNAMED_ERROR_NAME
   }
 
   /**
