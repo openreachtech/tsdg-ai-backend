@@ -492,7 +492,12 @@ describe('AppRestfulApiContext', () => {
 
 describe('AppRestfulApiContext', () => {
   describe('.extractRawBody()', () => {
-    describe('when the server parsed no body', () => {
+    /*
+     * The request carries no body and says so, which is how every client sends the two read-back
+     * operations. Its raw body is the empty string - the thing a client signs - and answering null
+     * here refused all of them.
+     */
+    describe('when the request declared no body', () => {
       const cases = [
         {
           input: {
@@ -508,6 +513,49 @@ describe('AppRestfulApiContext', () => {
             expressRequest: /** @type {*} */ ({
               headers: {
                 'x-ort-client-id': 'client-key-0006',
+                'content-length': '0',
+              },
+            }),
+          },
+        },
+      ]
+
+      test.each(cases)('headers: $input.expressRequest.headers', ({
+        input,
+      }) => {
+        const received = AppRestfulApiContext.extractRawBody(input)
+
+        expect(received)
+          .toBe('')
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.extractRawBody()', () => {
+    /*
+     * Bytes reached the socket that nothing in this process parsed, so no signature could have
+     * covered them. This is the case the null was written for, and it is unchanged.
+     */
+    describe('when the request declared bytes the engine did not parse', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0007',
+                'content-length': '35',
+              },
+            }),
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0008',
+                'transfer-encoding': 'chunked',
               },
             }),
           },
@@ -521,6 +569,93 @@ describe('AppRestfulApiContext', () => {
 
         expect(received)
           .toBeNull()
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.declaresEmptyBody()', () => {
+    describe('when the request declared no body bytes', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0009',
+              },
+            }),
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0010',
+                'content-length': '0',
+              },
+            }),
+          },
+        },
+      ]
+
+      test.each(cases)('headers: $input.expressRequest.headers', ({
+        input,
+      }) => {
+        const received = AppRestfulApiContext.declaresEmptyBody(input)
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiContext', () => {
+  describe('.declaresEmptyBody()', () => {
+    describe('when the request declared bytes', () => {
+      const cases = [
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0011',
+                'content-length': '128',
+              },
+            }),
+          },
+        },
+        {
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0012',
+                'transfer-encoding': 'chunked',
+              },
+            }),
+          },
+        },
+        {
+          // Chunked wins over a length, because the length is then not an account of the bytes.
+          input: {
+            expressRequest: /** @type {*} */ ({
+              headers: {
+                'x-ort-client-id': 'client-key-0013',
+                'content-length': '0',
+                'transfer-encoding': 'chunked',
+              },
+            }),
+          },
+        },
+      ]
+
+      test.each(cases)('headers: $input.expressRequest.headers', ({
+        input,
+      }) => {
+        const received = AppRestfulApiContext.declaresEmptyBody(input)
+
+        expect(received)
+          .toBeFalsy()
       })
     })
   })

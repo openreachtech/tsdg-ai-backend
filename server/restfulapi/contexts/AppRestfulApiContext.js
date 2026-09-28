@@ -30,6 +30,8 @@ const CLIENT_ID_HEADER_NAME = SIGNED_REQUEST_HEADER_NAME.CLIENT_ID
 const TIMESTAMP_HEADER_NAME = SIGNED_REQUEST_HEADER_NAME.TIMESTAMP
 const SIGNATURE_HEADER_NAME = SIGNED_REQUEST_HEADER_NAME.SIGNATURE
 const RAW_BODY_PROPERTY_NAME = 'rawBody'
+const CONTENT_LENGTH_HEADER_NAME = 'content-length'
+const TRANSFER_ENCODING_HEADER_NAME = 'transfer-encoding'
 const SECRET_ENVELOPE_FIELD_NAMES = [
   'secretCiphertext',
   'previousSecretCiphertext',
@@ -557,20 +559,87 @@ export default class AppRestfulApiContext extends BaseRestfulApiContext {
    * Extract the bytes of the request body exactly as they arrived.
    *
    * `AppRestfulApiServerEngine#defineKeepRawBodyCallback()` sets this from the body parsers'
-   * `verify` hook, so a request the engine parsed no body for carries none. Absent is reported as
-   * null and never as an empty body, which is a string somebody could have signed.
+   * `verify` hook, so the property is present only for a request the engine parsed a body for.
+   *
+   * **A property that is absent means two different things, and answering null to both refused
+   * every request that carries no body at all.** The hook does not run when there is nothing to
+   * parse, and it also does not run when a body arrived under a content type no parser claimed:
+   *
+   * | the request | its raw body | answered |
+   * | :-- | :-- | :-- |
+   * | declared no body, or declared zero bytes | the empty string - that is what arrived | `''` |
+   * | declared bytes the engine did not parse | unknown to this process | `null` |
+   *
+   * The second row is what the null is for, and it is unchanged: bytes reached the socket that no
+   * signature could have covered, so there is nothing here to verify. The first row is not that
+   * case. A request that declared no body **has** a raw body, and a client signs it as the empty
+   * string, which is what every signed-request protocol does for a method that carries none.
+   * Reported as null, the two read-back operations section 16 declares answered `401` to a request
+   * sent the way clients send them - and the workaround, framing an empty body on a `GET`, is
+   * refused by the Fetch specification itself, so no browser or Fetch client could reach them.
+   *
+   * `ApiClientSignatureVerifier` is deliberately untouched by this: it still refuses anything that
+   * is not a string, and its reasoning - *"a raw body the server never parsed is absent, not
+   * empty"* - stays true of the case it was written about. What was wrong was this method
+   * answering for a case that reasoning never covered.
    *
    * @param {{
    *   expressRequest: ExpressType.Request
    * }} params - Parameters.
-   * @returns {*} - Raw body, or null when the request carries none.
+   * @returns {*} - Raw body, or null when the request carried bytes this process did not parse.
    */
   static extractRawBody ({
     expressRequest,
   }) {
-    return expressRequest
+    const rawBody = expressRequest
       ?.[RAW_BODY_PROPERTY_NAME]
-      ?? null
+
+    if (typeof rawBody === 'string') {
+      return rawBody
+    }
+
+    if (
+      this.declaresEmptyBody({
+        expressRequest,
+      })
+    ) {
+      return ''
+    }
+
+    return null
+  }
+
+  /**
+   * Check whether the request declared that it carries no body bytes.
+   *
+   * Read from the framing headers rather than from what arrived, because this is asked precisely
+   * when nothing parsed the body: the declaration is the only account of it this process has.
+   *
+   * A chunked request declares a length it does not state, so it is never empty by declaration. A
+   * `content-length` of zero states there are no bytes, and its absence on a request with no
+   * chunked encoding says the same thing.
+   *
+   * @param {{
+   *   expressRequest: ExpressType.Request
+   * }} params - Parameters.
+   * @returns {boolean} - Whether the request declared no body bytes.
+   */
+  static declaresEmptyBody ({
+    expressRequest,
+  }) {
+    const headers = expressRequest
+      ?.headers
+      ?? {}
+
+    if (headers[TRANSFER_ENCODING_HEADER_NAME]) {
+      return false
+    }
+
+    if (!(CONTENT_LENGTH_HEADER_NAME in headers)) {
+      return true
+    }
+
+    return Number(headers[CONTENT_LENGTH_HEADER_NAME]) === 0
   }
 
   /**

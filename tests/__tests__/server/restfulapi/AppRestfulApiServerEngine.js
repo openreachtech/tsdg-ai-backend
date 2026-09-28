@@ -1,8 +1,17 @@
+import {
+  createHmac,
+} from 'node:crypto'
+
 import AppRestfulApiServerEngine from '../../../../server/restfulapi/AppRestfulApiServerEngine.js'
 
 import {
   BaseRestfulApiServerEngine,
+  RestfulApiServerBuilder,
 } from '@openreachtech/renchan'
+
+import {
+  env,
+} from '../../../../app/globals/_.js'
 
 import AppRestfulApiShare from '../../../../server/restfulapi/contexts/AppRestfulApiShare.js'
 import AppRestfulApiContext from '../../../../server/restfulapi/contexts/AppRestfulApiContext.js'
@@ -901,6 +910,218 @@ describe('AppRestfulApiServerEngine', () => {
         expect(logSpy)
           .not
           .toHaveBeenCalled()
+      })
+    })
+  })
+})
+
+/*
+ * The two read-back operations, driven over real HTTP against a real server this test builds.
+ *
+ * **Every other test in this repository reaches a renderer, a context or a verifier directly.**
+ * That is why a request sent the way clients send a `GET` was refused by this service for the whole
+ * of 1.0.0 without one test failing: the signature verifier wants the request's raw bytes, the body
+ * parser only sets them when it parses a body, and nothing exercised the two together. The unit
+ * tests beside this one pin what `.extractRawBody()` answers for a request object somebody wrote;
+ * only a socket says what Express hands it for a request nobody wrote.
+ *
+ * So these drive `fetch` with no body at all - the one shape the Fetch specification allows for a
+ * `GET`, and therefore the only shape a browser or Fetch client can ever send.
+ */
+
+/**
+ * Build the service on a port the operating system picks, drive one request at it, and take the
+ * server down again.
+ *
+ * @param {{
+ *   path: string
+ *   headers: Record<string, string>
+ * }} params - Parameters.
+ * @returns {Promise<{
+ *   status: number
+ *   body: string
+ * }>} What the service answered.
+ */
+async function requestOverHttp ({
+  path,
+  headers,
+}) {
+  const builder = await RestfulApiServerBuilder.createAsync({
+    Engine: AppRestfulApiServerEngine,
+  })
+
+  const server = builder.buildHttpServer()
+
+  /*
+   * The listening callback is awaited as an event, not passed to `listen()`.
+   * `RestfulApiServerBuilder#buildListenProxyServer()` appends a callback of its own after
+   * whatever it was handed, so a callback passed here lands in `http.Server#listen()`'s
+   * `backlog` position and is never called - which hangs the await rather than failing it.
+   */
+  const listening = new Promise(resolve => {
+    server.once('listening', resolve)
+  })
+
+  server.listen(0, '127.0.0.1')
+
+  await listening
+
+  const { port } = /** @type {*} */ (server.address())
+
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'GET',
+    headers,
+  })
+
+  const body = await response.text()
+
+  await new Promise(resolve => {
+    server.close(resolve)
+  })
+
+  return {
+    status: response.status,
+    body,
+  }
+}
+
+/**
+ * Sign a request that carries no body, the way a client library does.
+ *
+ * @param {{
+ *   clientKey: string
+ *   secret: string
+ * }} params - Parameters.
+ * @returns {Record<string, string>} The three signed-request headers.
+ */
+function buildSignedHeaders ({
+  clientKey,
+  secret,
+}) {
+  const timestamp = String(Math.floor(Date.now() / 1000))
+
+  const signature = createHmac('sha256', secret)
+    .update(`${timestamp}.`)
+    .digest('hex')
+
+  return {
+    'x-ort-client-id': clientKey,
+    'x-ort-timestamp': timestamp,
+    'x-ort-signature': signature,
+  }
+}
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('over HTTP, a signed request carrying no body', () => {
+    describe('should be authenticated on every read-back route', () => {
+      const cases = [
+        {
+          input: {
+            path: '/v1/ai-runs/run-key-10010001',
+          },
+        },
+        {
+          input: {
+            path: '/v1/ai-runs',
+          },
+        },
+      ]
+
+      test.each(cases)('path: $input.path', async ({
+        input,
+      }) => {
+        const expected = 200
+
+        const received = await requestOverHttp({
+          path: input.path,
+          headers: buildSignedHeaders({
+            clientKey: 'client-key-signing-10000001',
+            secret: env.DEVELOPMENT_API_CLIENT_SECRET,
+          }),
+        })
+
+        expect(received.status)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('over HTTP, a request carrying no body and no signature', () => {
+    /*
+     * The other half, and the reason the describe above proves anything: without it, a route that
+     * authenticated nobody would pass it just as well.
+     */
+    describe('should be refused on every read-back route', () => {
+      const cases = [
+        {
+          input: {
+            path: '/v1/ai-runs/run-key-10010001',
+          },
+        },
+        {
+          input: {
+            path: '/v1/ai-runs',
+          },
+        },
+      ]
+
+      test.each(cases)('path: $input.path', async ({
+        input,
+      }) => {
+        const expected = 401
+
+        const received = await requestOverHttp({
+          path: input.path,
+          headers: {
+            'x-ort-client-id': 'client-key-signing-10000001',
+          },
+        })
+
+        expect(received.status)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('AppRestfulApiServerEngine', () => {
+  describe('over HTTP, a signed request for another client\'s run', () => {
+    /*
+     * `run-key-10010003` belongs to a different seeded client. Section 16 says such a run answers
+     * as though it did not exist, so this is 404 rather than 403 - and this route now being
+     * reachable at all is what makes that assertion possible for the first time.
+     */
+    describe('should answer as though the run did not exist', () => {
+      const cases = [
+        {
+          input: {
+            path: '/v1/ai-runs/run-key-10010003',
+          },
+        },
+        {
+          input: {
+            path: '/v1/ai-runs/run-key-there-is-no-such-run',
+          },
+        },
+      ]
+
+      test.each(cases)('path: $input.path', async ({
+        input,
+      }) => {
+        const expected = 404
+
+        const received = await requestOverHttp({
+          path: input.path,
+          headers: buildSignedHeaders({
+            clientKey: 'client-key-signing-10000001',
+            secret: env.DEVELOPMENT_API_CLIENT_SECRET,
+          }),
+        })
+
+        expect(received.status)
+          .toBe(expected)
       })
     })
   })
