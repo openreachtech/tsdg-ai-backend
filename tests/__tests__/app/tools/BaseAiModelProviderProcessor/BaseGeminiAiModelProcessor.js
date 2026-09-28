@@ -131,17 +131,23 @@ describe('BaseGeminiAiModelProcessor', () => {
   describe('.create()', () => {
     /*
      * The registry calls `.create()` with no argument at all, on every installation, at start-up.
-     * What it must fill is a class and never a connection: filling a built client here would read a
-     * key on a machine that has none.
+     * What it must fill is **nothing**, and that is the assertion.
+     *
+     * Filling a built client here would read a key on a machine that has none. Filling the client
+     * *class* would be milder but still wrong: naming it would import it, and importing it loads
+     * the vendor SDK into a process that may never call the vendor — which is what §17's first use
+     * case forbids. So the default is null, the class is loaded by
+     * `#resolveGeminiApiClientCtor()` the first time a client is actually wanted, and a test that
+     * injects one costs no import at all.
      */
-    describe('should fill default geminiApiClientCtor', () => {
+    describe('should leave geminiApiClientCtor unfilled', () => {
       test('with no arguments', () => {
         const processor = BaseGeminiAiModelProcessor.create()
 
         const received = processor.geminiApiClientCtor
 
         expect(received)
-          .toBe(GeminiApiClient) // same reference
+          .toBeNull()
       })
     })
   })
@@ -332,11 +338,15 @@ describe('BaseGeminiAiModelProcessor', () => {
         },
       ]
 
-      test.each(cases)('aiModel: $override.aiModel', ({
+      test.each(cases)('aiModel: $override.aiModel', async ({
         override,
         expected,
       }) => {
-        const processor = BaseGeminiAiModelProcessor.create()
+        const processor = BaseGeminiAiModelProcessor.create({
+          geminiApiClientCtor: {
+            createWithApiKey: () => null,
+          },
+        })
         jest.spyOn(processor, 'aiModel', 'get')
           .mockReturnValue(override.aiModel)
         jest.spyOn(processor, 'extractApiKey')
@@ -344,7 +354,8 @@ describe('BaseGeminiAiModelProcessor', () => {
 
         const received = () => processor.createGeminiApiClient()
 
-        expect(received)
+        await expect(received)
+          .rejects
           .toThrow(expected)
       })
     })
@@ -369,7 +380,7 @@ describe('BaseGeminiAiModelProcessor', () => {
         },
       ]
 
-      test.each(cases)('apiKey: $input.apiKey', ({
+      test.each(cases)('apiKey: $input.apiKey', async ({
         input,
         expected,
       }) => {
@@ -382,7 +393,7 @@ describe('BaseGeminiAiModelProcessor', () => {
         jest.spyOn(processor, 'extractApiKey')
           .mockReturnValue(input.apiKey)
 
-        processor.createGeminiApiClient()
+        await processor.createGeminiApiClient()
 
         expect(createWithApiKeyTally)
           .toHaveBeenCalledWith(expected)
@@ -661,7 +672,7 @@ describe('BaseGeminiAiModelProcessor', () => {
             fileType: 'image/jpeg',
             providerFileName: 'files/upload-0001',
             providerFileUri: 'https://generativelanguage.googleapis.com/v1beta/files/upload-0001',
-            providerFileExpiresAt: '2026-10-01T01:02:03.004Z',
+            providerFileExpiresAt: new Date('2026-10-01T01:02:03.004Z'),
           },
         },
         {
@@ -826,7 +837,7 @@ describe('BaseGeminiAiModelProcessor', () => {
               fileType: 'image/jpeg',
               providerFileName: 'files/upload-0001',
               providerFileUri: 'https://generativelanguage.googleapis.com/v1beta/files/upload-0001',
-              providerFileExpiresAt: '2026-10-01T01:02:03.004Z',
+              providerFileExpiresAt: new Date('2026-10-01T01:02:03.004Z'),
             },
           ],
         },
@@ -852,7 +863,7 @@ describe('BaseGeminiAiModelProcessor', () => {
               fileType: 'image/webp',
               providerFileName: 'files/upload-0002',
               providerFileUri: 'https://generativelanguage.googleapis.com/v1beta/files/upload-0002',
-              providerFileExpiresAt: '2026-10-02T05:06:07.008Z',
+              providerFileExpiresAt: new Date('2026-10-02T05:06:07.008Z'),
             },
           ],
         },
@@ -917,7 +928,7 @@ describe('BaseGeminiAiModelProcessor', () => {
               fileType: 'image/jpeg',
               providerFileName: 'files/upload-0003',
               providerFileUri: 'https://generativelanguage.googleapis.com/v1beta/files/upload-0003',
-              providerFileExpiresAt: '2026-10-03T09:10:11.012Z',
+              providerFileExpiresAt: new Date('2026-10-03T09:10:11.012Z'),
             },
             {
               id: 11100324,
@@ -925,7 +936,7 @@ describe('BaseGeminiAiModelProcessor', () => {
               fileType: 'image/png',
               providerFileName: 'files/upload-0004',
               providerFileUri: 'https://generativelanguage.googleapis.com/v1beta/files/upload-0004',
-              providerFileExpiresAt: '2026-10-04T13:14:15.016Z',
+              providerFileExpiresAt: new Date('2026-10-04T13:14:15.016Z'),
             },
           ],
         },
@@ -961,7 +972,7 @@ describe('BaseGeminiAiModelProcessor', () => {
               fileType: 'image/jpeg',
               providerFileName: 'files/upload-0005',
               providerFileUri: 'https://generativelanguage.googleapis.com/v1beta/files/upload-0005',
-              providerFileExpiresAt: '2026-10-05T17:18:19.020Z',
+              providerFileExpiresAt: new Date('2026-10-05T17:18:19.020Z'),
             },
             {
               id: 11100326,

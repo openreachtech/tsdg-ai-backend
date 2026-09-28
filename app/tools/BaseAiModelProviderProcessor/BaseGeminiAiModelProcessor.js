@@ -3,7 +3,6 @@ import AiModelResponse from '../AiModelResponse.js'
 
 import GeminiMessagePayloadGenerator from '../AiPayloadGenerator/GeminiMessagePayloadGenerator.js'
 
-import GeminiApiClient from '../../geminiClient/GeminiApiClient.js'
 import SendMessageToGeminiCapsule from '../../geminiClient/SendMessageToGeminiCapsule.js'
 import UploadFileToGeminiCapsule from '../../geminiClient/UploadFileToGeminiCapsule.js'
 
@@ -82,7 +81,7 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    * @public
    */
   static create ({
-    geminiApiClientCtor = GeminiApiClient,
+    geminiApiClientCtor = null,
   } = {}) {
     return /** @type {InstanceType<T>} */ (
       new this({
@@ -248,7 +247,7 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
   async sendMessageToGemini ({
     payload,
   }) {
-    const geminiApiClient = this.createGeminiApiClient()
+    const geminiApiClient = await this.createGeminiApiClient()
 
     try {
       const response = await geminiApiClient.sendMessageToGemini(payload)
@@ -275,16 +274,44 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    * @throws {Error} When no key is configured.
    * @public
    */
-  createGeminiApiClient () {
+  async createGeminiApiClient () {
+    const geminiApiClientCtor = await this.resolveGeminiApiClientCtor()
+
     const apiKey = this.extractApiKey()
 
     if (!apiKey) {
       throw new Error(`${this.Ctor.name}#createGeminiApiClient() ${MISSING_API_KEY_MESSAGE}: model ${this.aiModel}`)
     }
 
-    return this.geminiApiClientCtor.createWithApiKey({
+    return geminiApiClientCtor.createWithApiKey({
       apiKey,
     })
+  }
+
+  /**
+   * Resolve the client class, loading the vendor SDK the first time one is actually wanted.
+   *
+   * **The import is deferred on purpose, and section 17's first use case is the reason.** The
+   * concrete drivers sit in the directory `BulkAiModelProcessorsLoader` scans, and that scan
+   * imports every file in it at boot and in every test run. Naming the client at module scope
+   * would therefore pull the whole vendor SDK into a process that may never call the vendor — on
+   * a machine with no key, answering on the stub, which is precisely the installation that
+   * section says must load nothing of a vendor's. Deferred, the SDK is read once a request has
+   * resolved to this model by name, and never otherwise.
+   *
+   * An injected class short-circuits it, so the seam a test uses costs no import at all.
+   *
+   * @returns {Promise<*>} The client class.
+   * @public
+   */
+  async resolveGeminiApiClientCtor () {
+    if (this.geminiApiClientCtor !== null) {
+      return this.geminiApiClientCtor
+    }
+
+    const { default: GeminiApiClient } = await import('../../geminiClient/GeminiApiClient.js')
+
+    return GeminiApiClient
   }
 
   /**
@@ -357,7 +384,7 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
       return []
     }
 
-    const geminiApiClient = this.createGeminiApiClient()
+    const geminiApiClient = await this.createGeminiApiClient()
 
     return fileUrls.reduce(
       async (preparedFilesPromise, attachedFile) => {
@@ -408,7 +435,9 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
       throw new Error(`${this.Ctor.name}#prepareAttachedFile() ${UNNAMED_UPLOAD_MESSAGE}: ${attachedFile.fileUrl}`)
     }
 
-    const providerFileExpiresAt = uploadCapsule.extractUploadedFileExpirationTime()
+    const providerFileExpiresAt = this.generateProviderFileExpiresAt({
+      uploadCapsule,
+    })
 
     return {
       ...attachedFile,
@@ -416,6 +445,44 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
       providerFileUri,
       providerFileExpiresAt,
     }
+  }
+
+  /**
+   * Generate the instant the vendor says it will delete its copy.
+   *
+   * **The vendor states an RFC 3339 string and the egress record takes an instant, so the crossing
+   * happens here** — in the one class that knows this vendor's shape. `ProviderUploadedFileRecorder`
+   * refuses anything that is not an instant, by name, which is how the mismatch was found: a real
+   * upload succeeded, the string travelled, and the write that records the departure refused it.
+   *
+   * **A value that does not parse answers null rather than an invalid date.** The retention job
+   * that later asks the vendor to delete a copy decides when to ask by reading this column, and a
+   * column holding `Invalid Date` would be read as a date that has passed — so the job would ask
+   * about a file the vendor may still be holding, and record that it had asked. Null says plainly
+   * that the vendor stated no usable expiry, which is a fact the job can act on correctly.
+   *
+   * @param {{
+   *   uploadCapsule: import('../../geminiClient/UploadFileToGeminiCapsule.js').default
+   * }} params - Parameters.
+   * @returns {Date | null} The instant, or null where the vendor stated none this service can read.
+   * @public
+   */
+  generateProviderFileExpiresAt ({
+    uploadCapsule,
+  }) {
+    const expirationTime = uploadCapsule.extractUploadedFileExpirationTime()
+
+    if (expirationTime === null) {
+      return null
+    }
+
+    const expiresAt = new Date(expirationTime)
+
+    if (Number.isNaN(expiresAt.getTime())) {
+      return null
+    }
+
+    return expiresAt
   }
 
   /**

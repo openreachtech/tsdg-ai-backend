@@ -1,6 +1,21 @@
-import {
-  FunctionCallingConfigMode,
-} from '@google/genai'
+/*
+ * The two function-calling modes this service asks for, written out rather than imported.
+ *
+ * The vendor exports them as `FunctionCallingConfigMode`, and importing that enum would be the
+ * plainer read — but this file is reached from the directory `BulkAiModelProcessorsLoader` scans,
+ * and that scan runs at every boot and in every test. An import here pulls the whole vendor SDK
+ * into a process that may never call the vendor at all, which is exactly what §17's first use case
+ * says must not happen: a default installation answers on the stub and loads nothing of a vendor's.
+ *
+ * The values are copied from the vendor's own declaration
+ * (`node_modules/@google/genai/dist/genai.d.ts`, `enum FunctionCallingConfigMode`), where they are
+ * the strings the wire protocol carries rather than symbols the SDK assigns — so they are stable in
+ * the way a protocol constant is, and a test asserts the built request against them.
+ */
+const FUNCTION_CALLING_MODE = {
+  AUTO: 'AUTO',
+  ANY: 'ANY',
+}
 
 const USER_ROLE = 'user'
 const MODEL_ROLE = 'model'
@@ -390,7 +405,7 @@ export default class GeminiMessagePayloadGenerator {
     if (this.toolChoices.length === 0) {
       return {
         functionCallingConfig: {
-          mode: FunctionCallingConfigMode.AUTO,
+          mode: FUNCTION_CALLING_MODE.AUTO,
         },
       }
     }
@@ -399,7 +414,7 @@ export default class GeminiMessagePayloadGenerator {
 
     return {
       functionCallingConfig: {
-        mode: FunctionCallingConfigMode.ANY,
+        mode: FUNCTION_CALLING_MODE.ANY,
         allowedFunctionNames,
       },
     }
