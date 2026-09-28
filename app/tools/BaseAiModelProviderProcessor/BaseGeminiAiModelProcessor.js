@@ -3,6 +3,7 @@ import AiModelResponse from '../AiModelResponse.js'
 
 import GeminiMessagePayloadGenerator from '../AiPayloadGenerator/GeminiMessagePayloadGenerator.js'
 
+import DeleteFileFromGeminiCapsule from '../../geminiClient/DeleteFileFromGeminiCapsule.js'
 import SendMessageToGeminiCapsule from '../../geminiClient/SendMessageToGeminiCapsule.js'
 import UploadFileToGeminiCapsule from '../../geminiClient/UploadFileToGeminiCapsule.js'
 
@@ -13,6 +14,7 @@ import {
 const MISSING_API_KEY_MESSAGE = 'refused to call Gemini with no API key'
 const UNKNOWN_AI_MODEL_MESSAGE = 'refused a model name the catalog does not carry'
 const FAILED_UPLOAD_MESSAGE = 'failed to hand a file to Gemini'
+const FAILED_DELETE_MESSAGE = 'could not establish that Gemini no longer holds a file'
 const UNNAMED_UPLOAD_MESSAGE = 'refused an upload the provider named nothing'
 
 /**
@@ -118,6 +120,15 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
   }
 
   /**
+   * get: the capsule a delete answer is read through.
+   *
+   * @returns {typeof DeleteFileFromGeminiCapsule} The class.
+   */
+  static get DeleteFileFromGeminiCapsuleCtor () {
+    return DeleteFileFromGeminiCapsule
+  }
+
+  /**
    * get: the canonical response every driver answers in.
    *
    * @returns {typeof AiModelResponse} The class.
@@ -156,6 +167,22 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    * the uri the vendor gave each one. Uploading again here - which is what the reference does -
    * would hand every file over twice and write the egress record twice.
    *
+   * **A run already told to stop is refused before anything is read, built or opened.** The guard
+   * is the first statement rather than a check further down: a refusal after the catalog read
+   * would have read a row for nobody, and a refusal after `#createGeminiApiClient()` would have
+   * read the key and built an SDK instance for a call that was never going to be made. What the
+   * run observes is the base's refusal capsule, which is the same object the keyless driver
+   * refuses with.
+   *
+   * **A signal raised while the call is already in flight is a different story, and it is the
+   * vendor's.** `abortSignal` travels into the request config, the SDK stops waiting, and
+   * `#sendMessageToGemini()` answers a capsule carrying the vendor's own error — so the call is
+   * recorded, with the zero token counts a dropped connection reports. Google is still doing the
+   * work and still charging for it: its own declaration of `abortSignal` states that aborting is
+   * a client-only operation, that it does not cancel the request in the service, and that the
+   * usage is charged regardless. Nothing in this service can change that, and nothing in this
+   * service should imply otherwise.
+   *
    * @override
    * @param {import('../BaseAiModelProcessor.js').SendRequestToAiParams} params - Parameters.
    * @returns {Promise<AiModelResponse>} The normalized response.
@@ -172,7 +199,16 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
     toolChoices = [],
     isAutoHandleFunctionCall = true,
     extraToolOptions = {},
+    abortSignal = null,
   }) {
+    if (
+      this.isAbortSignalRaised({
+        abortSignal,
+      })
+    ) {
+      return this.createAbortedAiModelResponse()
+    }
+
     const aiModel = await this.findAiModelByName({
       aiModelName: this.aiModel,
     })
@@ -195,6 +231,7 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
 
     const aiResponseCapsule = await this.sendMessageToGemini({
       payload,
+      abortSignal,
     })
 
     return this.createAiModelResponse({
@@ -237,8 +274,17 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    * and the caller asks `#hasError()`. A raise here would make every caller of every driver wrap
    * the call in a `try`, which is the branch on the provider that this layer exists to remove.
    *
+   * **The signal travels beside the payload rather than inside it.** What the generator builds is
+   * the message — the model, the turns, the ceiling, the tools — and how long this service is
+   * willing to wait for an answer to it is not part of that message. Keeping them apart is also
+   * what keeps the payload a value two identical requests share.
+   *
+   * **An abort lands in the `catch` and is recorded as a failed call**, which is correct: the
+   * request did leave, and the provider is charging for work this service stopped waiting for.
+   *
    * @param {{
    *   payload: import('../AiPayloadGenerator/GeminiMessagePayloadGenerator.js').GeminiMessagePayload
+   *   abortSignal?: AbortSignal | null
    * }} params - Parameters.
    * @returns {Promise<SendMessageToGeminiCapsule>} The capsule.
    * @throws {Error} When no key is configured.
@@ -246,11 +292,15 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    */
   async sendMessageToGemini ({
     payload,
+    abortSignal = null,
   }) {
     const geminiApiClient = await this.createGeminiApiClient()
 
     try {
-      const response = await geminiApiClient.sendMessageToGemini(payload)
+      const response = await geminiApiClient.sendMessageToGemini({
+        ...payload,
+        abortSignal,
+      })
 
       return this.Ctor.SendMessageToGeminiCapsuleCtor.createWithResponse({
         response,
@@ -512,6 +562,93 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
       })
     } catch (error) {
       return this.Ctor.UploadFileToGeminiCapsuleCtor.createWithError({
+        error,
+      })
+    }
+  }
+
+  /**
+   * Ask the Files API to delete one file this service handed it, and answer once it is gone.
+   *
+   * **This is the member §19's third purge exists to call**, and its whole contract is in what it
+   * raises. Answering normally says one thing: the copy no longer exists at Google. Raising says
+   * the copy's state is unknown. The sweep writes `provider_uploaded_files.provider_purged_at` on
+   * the first and leaves the row alone on the second, so anything answered loosely here becomes a
+   * false record about personal data — which is the reason §4 deferred this job rather than faking
+   * it on a driver that uploads nothing.
+   *
+   * **A vendor that says it knows no such handle is answered normally, not raised.** Google deletes
+   * its own copy after about forty-eight hours whatever this service does, so by the time a daily
+   * sweep reaches a file whose stated expiry has passed, "no such file" is the ordinary answer and
+   * it means exactly what the stamp records. Treating it as a failure would leave every such row
+   * unstamped for ever, and the egress record would go on saying a copy exists that does not.
+   * `DeleteFileFromGeminiCapsule#isFileGone()` is what draws that line, from the HTTP status, and
+   * it draws it narrowly on purpose.
+   *
+   * **What this call buys, given the vendor expires the copy anyway.** Not that the copy goes —
+   * that it goes when this service said, and that an instant this service can show is written down
+   * when it did. A vendor that lengthened its own window, or a file it kept past what it stated, is
+   * reached by this call and by nothing else.
+   *
+   * **A missing key raises here as everywhere else**, through `#createGeminiApiClient()`. That is
+   * the right answer for a sweep: a machine with no Gemini key cannot establish anything about a
+   * copy at Google, and the alternative — carrying on and stamping — is the failure this member is
+   * written to make impossible.
+   *
+   * @override
+   * @param {{
+   *   providerFileName: string
+   * }} params - Parameters.
+   * @returns {Promise<null>} Nothing, once the copy no longer exists at the provider.
+   * @throws {Error} When no key is configured, or the vendor could not be reached.
+   * @public
+   */
+  async deleteProviderUploadedFile ({
+    providerFileName,
+  }) {
+    const geminiApiClient = await this.createGeminiApiClient()
+
+    const deleteCapsule = await this.deleteFileFromGemini({
+      providerFileName,
+      geminiApiClient,
+    })
+
+    if (!deleteCapsule.isFileGone()) {
+      throw new Error(`${this.Ctor.name}#deleteProviderUploadedFile() ${FAILED_DELETE_MESSAGE}: ${providerFileName}, ${deleteCapsule.extractErrorMessage()}`)
+    }
+
+    return null
+  }
+
+  /**
+   * Ask the Files API to delete one file, and answer with the capsule whichever way it went.
+   *
+   * The call is separated from the judgement above it for the reason `#sendMessageToGemini()` and
+   * `#uploadAttachedFile()` are: one member talks to the vendor and one decides what its answer
+   * meant, so the decision can be exercised over every answer the vendor can give without a
+   * network being involved in any of them.
+   *
+   * @param {{
+   *   providerFileName: string
+   *   geminiApiClient: GeminiApiClient
+   * }} params - Parameters.
+   * @returns {Promise<DeleteFileFromGeminiCapsule>} The capsule.
+   * @public
+   */
+  async deleteFileFromGemini ({
+    providerFileName,
+    geminiApiClient,
+  }) {
+    try {
+      const response = await geminiApiClient.deleteFileFromGemini({
+        providerFileName,
+      })
+
+      return this.Ctor.DeleteFileFromGeminiCapsuleCtor.createWithResponse({
+        response,
+      })
+    } catch (error) {
+      return this.Ctor.DeleteFileFromGeminiCapsuleCtor.createWithError({
         error,
       })
     }

@@ -2,6 +2,7 @@ import {
   BaseJobSchedulerService,
 } from '@openreachtech/renchan-job-bullmq'
 
+import PurgeExpiredProviderUploadsCronJobScheduler from '../jobs/purge-expired-provider-uploads/PurgeExpiredProviderUploadsCronJobScheduler.js'
 import PurgeExpiredRunContentCronJobScheduler from '../jobs/purge-expired-run-content/PurgeExpiredRunContentCronJobScheduler.js'
 import PurgeExpiredRunTracesCronJobScheduler from '../jobs/purge-expired-run-traces/PurgeExpiredRunTracesCronJobScheduler.js'
 
@@ -52,10 +53,12 @@ export default class AppJobSchedulerService extends BaseJobSchedulerService {
   static async collectScheduleInputs () {
     const purgeExpiredRunContentInput = PurgeExpiredRunContentCronJobScheduler.buildScheduleInput()
     const purgeExpiredRunTracesInput = PurgeExpiredRunTracesCronJobScheduler.buildScheduleInput()
+    const purgeExpiredProviderUploadsInput = PurgeExpiredProviderUploadsCronJobScheduler.buildScheduleInput()
 
     return [
       purgeExpiredRunContentInput,
       purgeExpiredRunTracesInput,
+      purgeExpiredProviderUploadsInput,
     ]
   }
 }

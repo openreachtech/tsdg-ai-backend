@@ -138,6 +138,21 @@ export default class StubAiModelProcessor extends BaseAiModelProcessor {
   /**
    * Send one request to the model and answer with the normalized response.
    *
+   * **A run already told to stop is refused here too, and that is a decision rather than an
+   * oversight.** This driver opens nothing, so there is literally no call in flight for a signal
+   * to abort — the argument for ignoring it. It is refused anyway, because a caller cannot tell
+   * one driver from another: it resolves a processor by model name and calls the same member on
+   * whatever it got back. A driver that answered an ordinary response to a raised signal while
+   * every vendor driver refused would make the same run behave differently by installation, and
+   * would leave the refusal branch unexercised on precisely the installation this driver exists
+   * to keep exercised. The refusal itself is the base's, so it is the same object a vendor driver
+   * refuses with.
+   *
+   * **The signal never reaches the digest.** What the answer is drawn from is the request, and an
+   * `AbortSignal` is neither part of a request nor stable between two runs of one — digesting it
+   * would make the same request answer differently on the second asking, which is the one thing
+   * this driver may not do. It is therefore read by the guard and by nothing else.
+   *
    * @override
    * @param {import('../BaseAiModelProcessor.js').SendRequestToAiParams} params - Parameters.
    * @returns {Promise<AiModelResponse>} The normalized response.
@@ -153,7 +168,16 @@ export default class StubAiModelProcessor extends BaseAiModelProcessor {
     toolChoices = [],
     isAutoHandleFunctionCall = true,
     extraToolOptions = {},
+    abortSignal = null,
   }) {
+    if (
+      this.isAbortSignalRaised({
+        abortSignal,
+      })
+    ) {
+      return this.createAbortedAiModelResponse()
+    }
+
     const request = this.buildRequestIdentity({
       aiAgent,
       instruction,

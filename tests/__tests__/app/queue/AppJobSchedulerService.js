@@ -20,10 +20,16 @@ describe('AppJobSchedulerService', () => {
   describe('.collectScheduleInputs()', () => {
     describe('when called as is', () => {
       /*
-       * §19 declares two scheduled purges for this version, and the third row of its table — the
-       * provider-upload purge — is deferred under "Out of scope for now" until the first vendor
-       * driver exists. So two inputs, and a third appearing here before that driver does would be
-       * a schedule stamping "the copy was deleted" without a copy having been deleted.
+       * §19 declares three scheduled purges, and all three are here now that the first vendor
+       * driver exists — the third row, the provider-upload purge, was deferred under "Out of scope
+       * for now" for exactly as long as the only driver was the stub, which uploads nothing and
+       * would have had a schedule stamping "the copy was deleted" without a copy having been
+       * deleted.
+       *
+       * The list is compared whole, because a scheduler missing from it registers nothing while
+       * `scripts/startJobSchedulers.js` reports success: the framework substitutes
+       * `{ schedule: null, body: null, optionHash: null }` for an id it finds no input under, and
+       * the schedule simply never fires. There is no scan that catches the omission.
        */
       test('should carry every schedule this version declares', async () => {
         const expected = [
@@ -51,6 +57,26 @@ describe('AppJobSchedulerService', () => {
             schedulerId: 'purge-expired-run-traces',
             schedule: {
               cronExpression: '0 4 * * 0',
+            },
+            body: {},
+            optionHash: {
+              attempts: 3,
+              backoff: {
+                type: 'exponential',
+                delay: 300000,
+              },
+              removeOnComplete: {
+                count: 90,
+              },
+              removeOnFail: {
+                count: 90,
+              },
+            },
+          },
+          {
+            schedulerId: 'purge-expired-provider-uploads',
+            schedule: {
+              cronExpression: '0 5 * * *',
             },
             body: {},
             optionHash: {

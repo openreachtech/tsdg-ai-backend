@@ -11,10 +11,11 @@ import RegisteredJobScheduleReader from '../../../../app/queue/RegisteredJobSche
 /*
  * What this class decides, checked without a Redis anywhere near it.
  *
- * The declared half of the comparison runs for real — `AppJobSchedulerService`'s ids are the two
- * §19 purges, `purge-expired-run-content` and `purge-expired-run-traces`, and a case that wrote
- * them down a third time would stop failing the day the declaration changed. The registered half
- * is the one thing a suite cannot obtain, so the reader is handed in.
+ * The declared half of the comparison runs for real — `AppJobSchedulerService`'s ids are the
+ * three §19 purges, `purge-expired-run-content`, `purge-expired-run-traces` and
+ * `purge-expired-provider-uploads`, and a case that wrote them down a third time would stop
+ * failing the day the declaration changed. The registered half is the one thing a suite cannot
+ * obtain, so the reader is handed in.
  *
  * Every case that reports asserts the logger call, because the log line **is** the control: this
  * check has no return value an operator reads and no exception it is allowed to raise, so a line
@@ -288,7 +289,8 @@ describe('JobScheduleRegistrationInspector', () => {
   describe('#extractDeclaredSchedulerIds()', () => {
     describe('when read from the application scheduler service', () => {
       /*
-       * Run for real, because it can be: `collectScheduleInputs()` assembles two cron expressions
+       * Run for real, because it can be: `collectScheduleInputs()` assembles three cron
+       * expressions
        * and opens nothing. This is the half of the comparison the brief calls authoritative — the
        * same list `scripts/startJobSchedulers.js` registers from, already held to the folder scan
        * by `AppJobSchedulerService`'s own test — so the ids are read here rather than written down
@@ -296,10 +298,11 @@ describe('JobScheduleRegistrationInspector', () => {
        */
       const cases = [
         {
-          label: 'the two purge schedules §19 declares for this version',
+          label: 'the three purge schedules §19 declares for this version',
           expected: [
             'purge-expired-run-content',
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
           ],
         },
       ]
@@ -385,6 +388,7 @@ describe('JobScheduleRegistrationInspector', () => {
           ],
           expected: [
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
           ],
         },
         {
@@ -393,6 +397,16 @@ describe('JobScheduleRegistrationInspector', () => {
           ],
           expected: [
             'purge-expired-run-content',
+            'purge-expired-provider-uploads',
+          ],
+        },
+        {
+          mockRegisteredSchedulerIds: [
+            'purge-expired-provider-uploads',
+          ],
+          expected: [
+            'purge-expired-run-content',
+            'purge-expired-run-traces',
           ],
         },
         {
@@ -400,6 +414,7 @@ describe('JobScheduleRegistrationInspector', () => {
           expected: [
             'purge-expired-run-content',
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
           ],
         },
       ]
@@ -437,13 +452,15 @@ describe('JobScheduleRegistrationInspector', () => {
           mockRegisteredSchedulerIds: [
             'purge-expired-run-content',
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
           ],
         },
         {
           mockRegisteredSchedulerIds: [
             'purge-expired-run-traces',
-            'purge-expired-run-content',
             'purge-expired-provider-uploads',
+            'purge-expired-run-content',
+            'purge-expired-provider-files',
           ],
         },
       ]
@@ -476,6 +493,7 @@ describe('JobScheduleRegistrationInspector', () => {
           ],
           expected: [
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
           ],
         },
         {
@@ -484,6 +502,7 @@ describe('JobScheduleRegistrationInspector', () => {
           ],
           expected: [
             'purge-expired-run-content',
+            'purge-expired-provider-uploads',
           ],
         },
       ]
@@ -792,11 +811,13 @@ describe('JobScheduleRegistrationInspector', () => {
           mockRegisteredSchedulerIds: [
             'purge-expired-run-content',
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
           ],
         },
         {
           mockRegisteredSchedulerIds: [
             'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
             'purge-expired-run-content',
           ],
         },
@@ -831,11 +852,31 @@ describe('JobScheduleRegistrationInspector', () => {
        * The id is the finding. "Some schedules are missing" tells an operator to go and look;
        * `purge-expired-run-traces` tells them which horizon is not being applied, which is §7's
        * 730-day one and therefore which data is being kept.
+       *
+       * The third case is the one a deployment actually meets: a job was added to the repository
+       * and `npm run schedulers:start` was never run again, so a Redis that was complete yesterday
+       * holds every purge except the one that landed today.
        */
       const cases = [
         {
+          label: 'a Redis holding every purge but the run-content one',
+          mockRegisteredSchedulerIds: [
+            'purge-expired-run-traces',
+            'purge-expired-provider-uploads',
+          ],
+          expected: {
+            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-content',
+            tags: [
+              'JobScheduleRegistration',
+              'MissingSchedule',
+            ],
+          },
+        },
+        {
+          label: 'a Redis holding every purge but the run-traces one',
           mockRegisteredSchedulerIds: [
             'purge-expired-run-content',
+            'purge-expired-provider-uploads',
           ],
           expected: {
             message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-traces',
@@ -846,11 +887,13 @@ describe('JobScheduleRegistrationInspector', () => {
           },
         },
         {
+          label: 'a Redis holding both run purges but not the provider-uploads one',
           mockRegisteredSchedulerIds: [
+            'purge-expired-run-content',
             'purge-expired-run-traces',
           ],
           expected: {
-            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-content',
+            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-provider-uploads',
             tags: [
               'JobScheduleRegistration',
               'MissingSchedule',
@@ -859,7 +902,7 @@ describe('JobScheduleRegistrationInspector', () => {
         },
       ]
 
-      test.each(cases)('mockRegisteredSchedulerIds[0]: $mockRegisteredSchedulerIds.0', async ({
+      test.each(cases)('label: $label', async ({
         mockRegisteredSchedulerIds,
         expected,
       }) => {
@@ -883,11 +926,11 @@ describe('JobScheduleRegistrationInspector', () => {
 
 describe('JobScheduleRegistrationInspector', () => {
   describe('#inspectRegisteredSchedules()', () => {
-    describe('when both declared schedules are missing', () => {
+    describe('when every declared schedule is missing', () => {
       /*
        * The registration script was never run against this Redis, which is the failure the whole
-       * check exists for: both of §7's retention horizons unapplied, both purge queues green and
-       * empty, and the purge log silent — indistinguishable, until this line, from a service
+       * check exists for: every retention horizon §19 delivers unapplied, every purge queue green
+       * and empty, and the purge log silent — indistinguishable, until this line, from a service
        * sweeping nightly.
        */
       const cases = [
@@ -895,7 +938,7 @@ describe('JobScheduleRegistrationInspector', () => {
           label: 'a Redis holding no schedule at all',
           mockRegisteredSchedulerIds: [],
           expected: {
-            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-content, purge-expired-run-traces',
+            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-content, purge-expired-run-traces, purge-expired-provider-uploads',
             tags: [
               'JobScheduleRegistration',
               'MissingSchedule',
@@ -905,10 +948,10 @@ describe('JobScheduleRegistrationInspector', () => {
         {
           label: 'a Redis holding only a schedule this repository does not declare',
           mockRegisteredSchedulerIds: [
-            'purge-expired-provider-uploads',
+            'purge-expired-provider-files',
           ],
           expected: {
-            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-content, purge-expired-run-traces',
+            message: 'JobScheduleRegistrationInspector declared job schedules are not registered in Redis: purge-expired-run-content, purge-expired-run-traces, purge-expired-provider-uploads',
             tags: [
               'JobScheduleRegistration',
               'MissingSchedule',

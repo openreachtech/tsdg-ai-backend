@@ -117,11 +117,13 @@ export default class GeminiApiClient {
     maxOutputTokens,
     tools,
     toolConfig,
+    abortSignal = null,
   }) {
     const config = this.buildGenerateContentConfig({
       maxOutputTokens,
       tools,
       toolConfig,
+      abortSignal,
     })
 
     return this.geminiClient.models.generateContent({
@@ -134,11 +136,7 @@ export default class GeminiApiClient {
   /**
    * Build the config one request is sent under.
    *
-   * @param {{
-   *   maxOutputTokens: number
-   *   tools: Array<Record<string, *>> | null
-   *   toolConfig: Record<string, *> | null
-   * }} params - Parameters.
+   * @param {BuildGenerateContentConfigParams} params - Parameters.
    * @returns {Record<string, *>} The config.
    * @public
    */
@@ -146,15 +144,20 @@ export default class GeminiApiClient {
     maxOutputTokens,
     tools,
     toolConfig,
+    abortSignal = null,
   }) {
     const toolEntries = this.buildToolEntries({
       tools,
       toolConfig,
     })
+    const abortSignalEntry = this.buildAbortSignalEntry({
+      abortSignal,
+    })
 
     return {
       maxOutputTokens,
       ...toolEntries,
+      ...abortSignalEntry,
     }
   }
 
@@ -187,6 +190,40 @@ export default class GeminiApiClient {
   }
 
   /**
+   * Build the abort half of a request config.
+   *
+   * A call carrying no signal carries no key at all, for the reason the tool entries above carry
+   * none: `abortSignal` is declared optional on the vendor's config, and a null sitting in an
+   * optional field is a value the vendor has to decide what to do with rather than an absence.
+   *
+   * **What the vendor does with the signal, in its own words.** Its declaration of this field
+   * reads: "AbortSignal is a client-only operation. Using it to cancel an operation will not
+   * cancel the request in the service. You will still be charged usage for any applicable
+   * operations." So what this key buys is that this service stops waiting — not that the work
+   * stops and not that the charge stops. A call abandoned this way reports no usage figure, so
+   * the `ai_model_calls` row it produces carries zero tokens against a charge that was really
+   * made, and an operator reconciling an invoice against those counts will find the difference
+   * there rather than in a fault.
+   *
+   * @param {{
+   *   abortSignal: AbortSignal | null
+   * }} params - Parameters.
+   * @returns {Record<string, *>} The entry, empty when the caller handed no signal.
+   * @public
+   */
+  buildAbortSignalEntry ({
+    abortSignal,
+  }) {
+    if (!abortSignal) {
+      return {}
+    }
+
+    return {
+      abortSignal,
+    }
+  }
+
+  /**
    * Hand one file to the Files API and answer with the vendor's own record of it.
    *
    * The file is named by a path on this machine, which is what the SDK's `file` argument takes
@@ -211,6 +248,39 @@ export default class GeminiApiClient {
       },
     })
   }
+
+  /**
+   * Ask the Files API to delete one file, and answer with the vendor's own response.
+   *
+   * **The file is named by the handle the upload answered with** — `files/<something>`, which is
+   * what `provider_uploaded_files.provider_file_name` carries. Not the uri: that is what a
+   * generate-content request points a file part at, and the two are separate members on the upload
+   * capsule for exactly this reason.
+   *
+   * **This member is how a deletion becomes this service's.** Google removes its own copy after
+   * about forty-eight hours whether or not anybody asks, so what calling it buys is not that the
+   * copy eventually goes — it is that it goes on a schedule this service chose, at an instant this
+   * service can record. A vendor that quietly changed that window, or a file it kept longer than it
+   * said, is reached by this call and by nothing else.
+   *
+   * Answers whatever the SDK answers, untouched; reading it is the capsule's, so the one member
+   * that talks to Google does nothing but talk to Google. A file the vendor no longer holds raises
+   * here rather than answering — the SDK's `ApiError` carries the HTTP status, and
+   * `DeleteFileFromGeminiCapsule` is what reads it.
+   *
+   * @param {{
+   *   providerFileName: string
+   * }} params - Parameters.
+   * @returns {Promise<import('@google/genai').DeleteFileResponse>} The vendor response.
+   * @public
+   */
+  async deleteFileFromGemini ({
+    providerFileName,
+  }) {
+    return this.geminiClient.files.delete({
+      name: providerFileName,
+    })
+  }
 }
 
 /**
@@ -226,7 +296,17 @@ export default class GeminiApiClient {
  *   maxOutputTokens: number
  *   tools: Array<Record<string, *>> | null
  *   toolConfig: Record<string, *> | null
+ *   abortSignal?: AbortSignal | null
  * }} SendMessageToGeminiParams
+ */
+
+/**
+ * @typedef {{
+ *   maxOutputTokens: number
+ *   tools: Array<Record<string, *>> | null
+ *   toolConfig: Record<string, *> | null
+ *   abortSignal?: AbortSignal | null
+ * }} BuildGenerateContentConfigParams
  */
 
 /**

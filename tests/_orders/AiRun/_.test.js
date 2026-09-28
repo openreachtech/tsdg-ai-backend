@@ -84,6 +84,13 @@
  * the member it exercises is the model's: what a purge writes onto a run is `AiRun#update()` and
  * `AiRun.update()`, and the guard that write has to pass is this model's own hook. The jobs that
  * will make those writes are checkpoints of their own and are not here.
+ *
+ * `AssetMediaReadingFetcher.js` gained a third block when the aborting of a provider call already
+ * in flight was built, in `11300001` upward — higher than every id written anywhere in this folder,
+ * including the two blocks below it in this list. That is allowed and states nothing, because every
+ * id in this folder from the fourth position down is explicit: only a file taking its ids from the
+ * auto-increment could be pushed past by a high explicit id, and all three of those run first. The
+ * runs are accepted in December 2026, clear of 2026-09-10 and of every other block's days.
  */
 import './AiRunAcceptor.js'
 import './BaseAiRunPostRenderer.js'

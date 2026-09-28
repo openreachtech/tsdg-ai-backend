@@ -1235,3 +1235,366 @@ describe('StubAiModelProcessor', () => {
     })
   })
 })
+
+describe('StubAiModelProcessor', () => {
+  /*
+   * specs/1.0.0 §15, as it reaches the driver a default installation answers on.
+   *
+   * **This driver honours the signal even though it has nothing to abort, and that is the decision
+   * these cases pin.** It opens no connection, so no call of its can be in flight — the argument
+   * for ignoring the parameter altogether. It refuses anyway, because a caller cannot tell one
+   * driver from another: it resolves a processor by model name and calls the same member on
+   * whatever it got back. Ignoring the signal here would make the same run behave one way on a
+   * keyless installation and another on a Gemini one, and would leave the refusal branch
+   * unexercised on precisely the installation this driver exists to keep exercised.
+   *
+   * **The refusal is the base's**, so what a caller receives is the same object every driver
+   * refuses with — which is what makes the two installations indistinguishable at the point that
+   * matters.
+   */
+  describe('#sendRequestToAi()', () => {
+    describe('should refuse a run already told to stop', () => {
+      const cases = [
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'gamma-0003',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            abortSignal: AbortSignal.abort('run-canceled-0001'),
+          },
+        },
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'delta-0004',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            abortSignal: AbortSignal.abort('run-past-its-time-limit-0002'),
+          },
+        },
+      ]
+
+      test.each(cases)('instruction: $input.instruction', async ({
+        input,
+      }) => {
+        const processor = StubAiModelProcessor.create()
+
+        const aiModelResponse = await processor.sendRequestToAi(input)
+        const received = aiModelResponse.hasError()
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * The tool this driver would otherwise have asked for by name. A refusal that still asked for
+     * it would let the reading fetcher carry findings out of a call that was never made.
+     */
+    describe('should ask for no tool at all where it refused', () => {
+      const cases = [
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'epsilon-0005',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            abortSignal: AbortSignal.abort('run-canceled-0011'),
+          },
+        },
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'zeta-0006',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+              {
+                description: 'psi',
+                name: 'record_media_signature',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            abortSignal: AbortSignal.abort('run-past-its-time-limit-0012'),
+          },
+        },
+      ]
+
+      test.each(cases)('instruction: $input.instruction', async ({
+        input,
+      }) => {
+        const processor = StubAiModelProcessor.create()
+
+        const aiModelResponse = await processor.sendRequestToAi(input)
+        const received = aiModelResponse.extractFunctionCalls()
+
+        expect(received)
+          .toHaveLength(0)
+      })
+    })
+
+    /*
+     * A signal nobody raised changes nothing. Without this, a guard that read the signal's presence
+     * rather than its state would refuse every call on every installation and still pass the two
+     * describes above.
+     */
+    describe('should answer as usual where the signal has not been raised', () => {
+      const cases = [
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'eta-0007',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            abortSignal: new AbortController().signal,
+          },
+        },
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'theta-0008',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            // abortSignal: omitted → default null
+          },
+        },
+      ]
+
+      test.each(cases)('instruction: $input.instruction', async ({
+        input,
+      }) => {
+        const processor = StubAiModelProcessor.create()
+
+        const aiModelResponse = await processor.sendRequestToAi(input)
+        const received = aiModelResponse.hasError()
+
+        expect(received)
+          .toBeFalsy()
+      })
+    })
+
+    /*
+     * The signal is kept out of what the answer is drawn from, which is what keeps this driver's
+     * central promise: the same request answers the same way on every machine and in every order.
+     * No two `AbortSignal` instances are alike, so a signal that reached the digest would make one
+     * request answer two different texts — the one thing this driver may not do.
+     *
+     * Asserted on the call rather than on two answers compared, so the failure names the member
+     * that let the signal through instead of the symptom two runs apart.
+     */
+    describe('should keep the signal out of what the answer is drawn from', () => {
+      const cases = [
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'iota-0009',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+            abortSignal: new AbortController().signal,
+          },
+          expected: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'iota-0009',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [],
+            toolChoices: [],
+            isAutoHandleFunctionCall: false,
+            extraToolOptions: {},
+          },
+        },
+        {
+          input: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'kappa-0010',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: true,
+            extraToolOptions: {},
+            abortSignal: new AbortController().signal,
+          },
+          expected: {
+            aiAgent: {
+              name: 'asset-media-extraction',
+            },
+            instruction: 'kappa-0010',
+            documents: [],
+            fileUrls: [],
+            historyMessages: [],
+            tools: [
+              {
+                description: 'omega',
+                name: 'record_field_values',
+                payload: '{}',
+              },
+            ],
+            toolChoices: [],
+            isAutoHandleFunctionCall: true,
+            extraToolOptions: {},
+          },
+        },
+      ]
+
+      test.each(cases)('instruction: $input.instruction', async ({
+        input,
+        expected,
+      }) => {
+        const processor = StubAiModelProcessor.create()
+        const buildRequestIdentitySpy = jest.spyOn(processor, 'buildRequestIdentity')
+
+        await processor.sendRequestToAi(input)
+
+        expect(buildRequestIdentitySpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('StubAiModelProcessor', () => {
+  describe('#deleteProviderUploadedFile()', () => {
+    /*
+     * The stub must not answer this, and the test exists to keep it that way (specs/1.0.0,
+     * #retention).
+     *
+     * This driver hands nothing to anybody: `#prepareAttachedFiles()` returns the files unchanged,
+     * so no row of `provider_uploaded_files` is ever written against it and the purge of provider
+     * uploads never reaches it. An override here would be a driver claiming it had deleted a copy
+     * it never made - and the purge, taking that at its word, would stamp
+     * `provider_uploaded_files.provider_purged_at` on rows whose copies are still sitting at a real
+     * vendor. That is exactly the false record #provider-layer's deferral refused to build, which
+     * is why "the stub gains no delete" is asserted rather than assumed.
+     *
+     * So what is pinned is the base's own refusal, arriving through this class unchanged: the
+     * message names `StubAiModelProcessor`, which is what tells the reader of a log line which
+     * driver was asked.
+     */
+    describe('when a file it never sent is asked about', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0001',
+          },
+          expected: 'StubAiModelProcessor#deleteProviderUploadedFile() hands no file to a provider, so it holds none to delete: files/provider-file-0001',
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0002',
+          },
+          expected: 'StubAiModelProcessor#deleteProviderUploadedFile() hands no file to a provider, so it holds none to delete: files/provider-file-0002',
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const processor = StubAiModelProcessor.create()
+
+        const received = () => processor.deleteProviderUploadedFile(input)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})

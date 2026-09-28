@@ -17,6 +17,27 @@ import AiModel from '../../../../sequelize/models/AiModel.js'
  * model binding - `#provider-layer` seeded them to exercise the composing path, not a run.
  */
 
+/*
+ * The driver scan is settled here rather than left to whichever case happens to start it.
+ *
+ * `BulkAiModelProcessorsLoader.createAsync()` walks the driver directory with a chain of dynamic
+ * `import()` calls, and jest answers an `import()` issued while it sits between two tests with a
+ * ReferenceError reading "You are trying to 'import' a file outside of the scope of the test
+ * code". What the pool holds is the promise unawaited - the production design, and the property
+ * `.ensureBulkAiModelProcessorsLoaderPromise()` is tested for - so a case that starts the scan
+ * without awaiting it leaves the chain running across the gap that follows, and a single link
+ * landing in that gap rejects the pooled promise for every case that awaits it afterwards. Which
+ * link lands where is the runner's timing, which is why this file passes on its own and went red
+ * only under a loaded run.
+ *
+ * A hook counts as test code to jest, so awaiting the scan here runs every one of those imports
+ * where they are allowed, once, before the first case - and every case after it is handed a promise
+ * that has already answered.
+ */
+beforeAll(async () => {
+  await AiAgentModelBindingFinder.ensureBulkAiModelProcessorsLoaderPromise()
+})
+
 describe('AiAgentModelBindingFinder', () => {
   describe('constructor', () => {
     describe('to keep properties', () => {

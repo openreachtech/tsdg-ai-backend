@@ -32,12 +32,25 @@
  * actually purging. Each worker's read-only members stay in `tests/__tests__/app/jobs/`;
  * `#sweepExpiredAiRuns()` is here because it writes transitively, which is what decides placement.
  *
+ * **The last two purge a different table, and their isolation is dates again rather than luck.**
+ * `ProviderUploadedFilePurger.js` and `PurgeExpiredProviderUploadsJobWorker.js` sweep
+ * `provider_uploaded_files`, which the four above never touch - but every row this repository seeds
+ * into that table, and every row `tests/_orders/AiRunMedia/` writes to it, is dated 2026. The
+ * purger file works in 2018-12 to 2019-07 and the worker file in 2016-11 to 2017-06, so neither
+ * reaches those. **Their order in this barrel is load-bearing**, which is the one thing that
+ * differs from the four above: the purger file deliberately leaves rows unstamped, all of them
+ * dated 2018-12 or later, and the worker file's latest sweep is 2017-06 - so it can reach none of
+ * them, and none of the purger file's sweeps could have reached the worker file's rows because
+ * they did not exist yet. Swapping the two imports breaks both files at once.
+ *
  * **Each file works in its own id block**, all inside #retention's: `11020001`, `11030001`,
- * `11040001` and `11050001` upward, and none is borrowed. Checkpoint 3's own file,
- * `tests/_orders/AiRun/AiRun.js`, holds `11010001` upward and stays where it is: what it pins is
- * what the schema accepts, not what a job does.
+ * `11040001`, `11050001`, `11220001` and `11230001` upward, and none is borrowed. Checkpoint 3's
+ * own file, `tests/_orders/AiRun/AiRun.js`, holds `11010001` upward and stays where it is: what it
+ * pins is what the schema accepts, not what a job does.
  */
 import './AiRunContentPurger.js'
 import './AiRunTracePurger.js'
 import './PurgeExpiredRunContentJobWorker.js'
 import './PurgeExpiredRunTracesJobWorker.js'
+import './ProviderUploadedFilePurger.js'
+import './PurgeExpiredProviderUploadsJobWorker.js'

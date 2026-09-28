@@ -2,6 +2,10 @@ import AssetMediaReadingFetcher from '../../../app/assetMediaExtraction/AssetMed
 
 import StubAiModelProcessor from '../../../app/tools/AiModelProcessor/StubAiModelProcessor.js'
 
+import AiModelResponse from '../../../app/tools/AiModelResponse.js'
+
+import SendMessageToGeminiCapsule from '../../../app/geminiClient/SendMessageToGeminiCapsule.js'
+
 import AiRun from '../../../sequelize/models/AiRun.js'
 
 /*
@@ -31,6 +35,15 @@ import AiRun from '../../../sequelize/models/AiRun.js'
  * already recorded staying recorded. It creates the one run it reads and borrows none, so its
  * position carries no dependency — and its run is accepted in November 2026, clear of the
  * September days every block above it uses.
+ *
+ * **The aborting of a call already in flight writes into this file last, in `11300001` upward.**
+ * That is §15's deferred item, built once a driver existed that opens a connection at all, and its
+ * two describes are the last two here. The first is the record a canceled run leaves behind — the
+ * tokens of the readings taken before the abort, and the zero-token row of the call that was
+ * abandoned; the second is the signal itself reaching every reading's driver call. Each creates
+ * the one run it reads and borrows none, so their position carries no dependency, and both runs
+ * are accepted in December 2026 — clear of the September days above and of November's block. The
+ * block is higher than every id written anywhere in this folder.
  */
 
 describe('AssetMediaReadingFetcher', () => {
@@ -1061,6 +1074,318 @@ describe('AssetMediaReadingFetcher', () => {
             inputTokenCount: 1409,
             outputTokenCount: 517,
           }))
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#fetchAssetMediaReadings()', () => {
+    /*
+     * specs/1.0.0 §15, the item deferred until a real vendor driver existed: a provider call
+     * already in flight is no longer waited out, and the tokens spent before it are still recorded.
+     *
+     * **The abort lands inside the second call rather than between two**, which is what makes this
+     * different from the describe above. There, the signal was raised while a call was being
+     * answered and that call still answered; here the second call comes back the way an abandoned
+     * vendor call comes back — as `SendMessageToGeminiCapsule.createWithError()`, the real capsule
+     * a rejected `generateContent()` produces, built here from an `AbortError`-shaped failure. No
+     * vendor is reached to produce it: the capsule is a value, and reading it is all this step does.
+     *
+     * **The first reading keeps its row and its counts.** §15's third criterion is that the tokens
+     * a run spent before it stopped are recorded and reported, and that is asserted on the rows
+     * rather than on the answer — `2101` and `803` are still there after the abort.
+     *
+     * **The aborted call is recorded too, and it records zero tokens.** That is not a gap in the
+     * record and it must not be read as one: `@google/genai` states that aborting is a client-only
+     * operation, that it does not cancel the request in the service, and that the usage is charged
+     * regardless. So Google billed for that second reading and this service has no token count for
+     * it, because a dropped connection brings back no usage figure. An operator reconciling an
+     * invoice against `ai_model_calls` meets the difference there.
+     *
+     * **The third reading is never taken.** The run stops at the reading boundary, which is §15's
+     * second criterion — a running run stops at the next step boundary, never mid-step — and it is
+     * unchanged by this feature. What this feature changed is only that the run no longer waits out
+     * the second call to reach that boundary.
+     *
+     * **`totalReadingCount` still answers three**, so one surviving reading cannot be taken for a
+     * unanimous consensus by the step that settles fields.
+     *
+     * The run is created here in this feature's own block, `11300001` upward — higher than every id
+     * written anywhere in this folder, and accepted in December 2026, clear of 2026-09-10 and of
+     * every other block's days.
+     */
+    describe('should keep the tokens spent before a call was aborted in flight', () => {
+      const cases = [
+        {
+          factoryParams: {
+            readingCount: 3,
+          },
+          input: {
+            aiRunRow: {
+              id: 11300001,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-11300001',
+              requestKey: 'request-key-11300001',
+              requestBodyHash: 'request-body-hash-11300001',
+              externalRef: 'external-ref-11300001',
+              subjectLabel: 'Subject label of run 11300001',
+              correlationId: 'correlation-id-11300001',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/11300001',
+              acceptedAt: new Date('2026-12-03T02:02:01.001Z'),
+              startedAt: new Date('2026-12-03T02:02:02.002Z'),
+              finishedAt: null,
+              cancelRequestedAt: new Date('2026-12-03T02:02:03.003Z'),
+            },
+            fetchParams: {
+              aiRunId: 11300001,
+              aiModelId: 10110001, // AI_MODEL.STUB.ID
+              aiAgent: {
+                id: 10150001,
+                name: 'asset-media-extraction-agent',
+              },
+              composedPrompt: {
+                instruction: 'Read the photographs and record what they show.',
+                role: 'You read photographs of a property.',
+                toolSchemas: [
+                  {
+                    name: 'record_field_readings',
+                  },
+                ],
+                instructionSavedAt: new Date('2026-09-24T00:00:03.003Z'),
+              },
+              attachedFiles: [
+                {
+                  id: 11300011,
+                  fileUrl: '/workspace/medium-11300011',
+                  fileType: 'image/png',
+                },
+              ],
+            },
+          },
+          expected: {
+            readings: [
+              [
+                {
+                  path: 'attributes.wallMaterial',
+                  value: 'brick',
+                  evidenceKindName: 'visible-text',
+                  reason: 'Visible across the front elevation.',
+                  sourceMediaKeys: [
+                    'media-key-11300011',
+                  ],
+                },
+              ],
+            ],
+            totalReadingCount: 3,
+          },
+        },
+      ]
+
+      test.each(cases)('runKey: $input.aiRunRow.runKey', async ({
+        factoryParams,
+        input,
+        expected,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const fetcher = AssetMediaReadingFetcher.create(factoryParams)
+        const aiRunWorkTerminator = new AbortController()
+
+        const answeredResponse = {
+          hasError: () => false,
+          extractInputTokenCount: () => 2101,
+          extractOutputTokenCount: () => 803,
+          extractFunctionCalls: () => [
+            {
+              name: 'record_field_readings',
+              arguments: {
+                readings: [
+                  {
+                    path: 'attributes.wallMaterial',
+                    value: 'brick',
+                    evidenceKindName: 'visible-text',
+                    reason: 'Visible across the front elevation.',
+                    sourceMediaKeys: [
+                      'media-key-11300011',
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        }
+        const abortedCapsule = SendMessageToGeminiCapsule.createWithError({
+          error: new Error('This operation was aborted'),
+        })
+        const abortedResponse = AiModelResponse.create({
+          aiResponseCapsule: abortedCapsule,
+        })
+
+        const aiModelProcessor = {
+          /**
+           * Stand in for a driver, and be replaced by the spy below.
+           *
+           * @returns {Promise<*>} The normalized response.
+           */
+          sendRequestToAi: async () => answeredResponse,
+        }
+        jest.spyOn(aiModelProcessor, 'sendRequestToAi')
+          .mockResolvedValueOnce(answeredResponse)
+          .mockImplementationOnce(async () => {
+            aiRunWorkTerminator.abort()
+
+            return abortedResponse
+          })
+        const saveAiModelCallSpy = jest.spyOn(fetcher.aiModelCallRecorder, 'saveAiModelCall')
+
+        const received = await fetcher.fetchAssetMediaReadings({
+          aiRunId: input.fetchParams.aiRunId,
+          aiModelId: input.fetchParams.aiModelId,
+          aiModelProcessor,
+          aiAgent: input.fetchParams.aiAgent,
+          composedPrompt: input.fetchParams.composedPrompt,
+          attachedFiles: input.fetchParams.attachedFiles,
+          signal: aiRunWorkTerminator.signal,
+        })
+
+        expect(received)
+          .toEqual(expected)
+        expect(saveAiModelCallSpy)
+          .toHaveBeenCalledTimes(2)
+        expect(saveAiModelCallSpy)
+          .toHaveBeenNthCalledWith(1, expect.objectContaining({
+            aiRunId: input.fetchParams.aiRunId,
+            aiModelId: input.fetchParams.aiModelId,
+            actionName: 'read-media',
+            readingIndex: 1,
+            inputTokenCount: 2101,
+            outputTokenCount: 803,
+          }))
+        expect(saveAiModelCallSpy)
+          .toHaveBeenNthCalledWith(2, expect.objectContaining({
+            aiRunId: input.fetchParams.aiRunId,
+            aiModelId: input.fetchParams.aiModelId,
+            actionName: 'read-media',
+            readingIndex: 2,
+            inputTokenCount: 0,
+            outputTokenCount: 0,
+            responseBody: null,
+          }))
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#fetchAssetMediaReadings()', () => {
+    /*
+     * The other half of the same crossing: every reading the step makes carries the run's own
+     * signal down to the driver, under the name the driver contract gives it.
+     *
+     * Asserted on both calls and by reference. A step that handed the signal to the first reading
+     * only, or that built a controller of its own, would leave a call in flight with nothing the
+     * run can raise — and would pass a test that merely checked a signal was present somewhere.
+     *
+     * The run is created here in this feature's own block, `11300002`.
+     */
+    describe('should hand the run own abort signal to every reading it takes', () => {
+      const cases = [
+        {
+          factoryParams: {
+            readingCount: 2,
+          },
+          input: {
+            aiRunRow: {
+              id: 11300002,
+              ApiClientId: 10000001,
+              AiRunCategoryId: 1, // AI_RUN_CATEGORY.ASSET_MEDIA_EXTRACTION.ID
+              AiRunStatusId: 2, // AI_RUN_STATUS.RUNNING.ID
+              runKey: 'run-key-11300002',
+              requestKey: 'request-key-11300002',
+              requestBodyHash: 'request-body-hash-11300002',
+              externalRef: 'external-ref-11300002',
+              subjectLabel: 'Subject label of run 11300002',
+              correlationId: 'correlation-id-11300002',
+              callbackUrl: 'https://signing.client.development.invalid/callbacks/11300002',
+              acceptedAt: new Date('2026-12-04T03:03:01.001Z'),
+              startedAt: new Date('2026-12-04T03:03:02.002Z'),
+              finishedAt: null,
+            },
+            fetchParams: {
+              aiRunId: 11300002,
+              aiModelId: 10110001, // AI_MODEL.STUB.ID
+              aiAgent: {
+                id: 10150001,
+                name: 'asset-media-extraction-agent',
+              },
+              composedPrompt: {
+                instruction: 'Read the photographs once more and record what they show.',
+                role: 'You read photographs of a property.',
+                toolSchemas: [
+                  {
+                    name: 'record_field_readings',
+                  },
+                ],
+                instructionSavedAt: new Date('2026-09-24T00:00:04.004Z'),
+              },
+              attachedFiles: [
+                {
+                  id: 11300021,
+                  fileUrl: '/workspace/medium-11300021',
+                  fileType: 'image/jpeg',
+                },
+              ],
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('runKey: $input.aiRunRow.runKey', async ({
+        factoryParams,
+        input,
+      }) => {
+        await AiRun.create(input.aiRunRow)
+
+        const fetcher = AssetMediaReadingFetcher.create(factoryParams)
+        const aiRunWorkTerminator = new AbortController()
+
+        const aiModelProcessor = {
+          /**
+           * Stand in for a driver, and answer a reading that found nothing.
+           *
+           * @returns {Promise<*>} The normalized response.
+           */
+          sendRequestToAi: async () => ({
+            hasError: () => false,
+            extractInputTokenCount: () => 1301,
+            extractOutputTokenCount: () => 401,
+            extractFunctionCalls: () => [],
+          }),
+        }
+        const sendRequestToAiSpy = jest.spyOn(aiModelProcessor, 'sendRequestToAi')
+        const expected = expect.objectContaining({
+          abortSignal: aiRunWorkTerminator.signal, // same reference
+        })
+
+        await fetcher.fetchAssetMediaReadings({
+          aiRunId: input.fetchParams.aiRunId,
+          aiModelId: input.fetchParams.aiModelId,
+          aiModelProcessor,
+          aiAgent: input.fetchParams.aiAgent,
+          composedPrompt: input.fetchParams.composedPrompt,
+          attachedFiles: input.fetchParams.attachedFiles,
+          signal: aiRunWorkTerminator.signal,
+        })
+
+        expect(sendRequestToAiSpy)
+          .toHaveBeenCalledTimes(2)
+        expect(sendRequestToAiSpy)
+          .toHaveBeenNthCalledWith(1, expected)
+        expect(sendRequestToAiSpy)
+          .toHaveBeenNthCalledWith(2, expected)
       })
     })
   })

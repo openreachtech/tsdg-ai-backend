@@ -1,6 +1,9 @@
 import AiModel from '../../sequelize/models/AiModel.js'
 import AiModelCapability from '../../sequelize/models/AiModelCapability.js'
 
+import AiModelResponse from './AiModelResponse.js'
+import AbortedAiCallCapsule from './AbortedAiCallCapsule.js'
+
 /**
  * Base class of a model processor — the one shape every driver in the provider set plugs into.
  *
@@ -70,6 +73,27 @@ export default class BaseAiModelProcessor {
   }
 
   /**
+   * get: the canonical response every driver answers in.
+   *
+   * Declared here rather than only on each driver, because the refusal below is built in this
+   * class and a driver added later must get it without writing a line.
+   *
+   * @returns {typeof AiModelResponse} The class.
+   */
+  static get AiModelResponseCtor () {
+    return AiModelResponse
+  }
+
+  /**
+   * get: the capsule a call refused before it left is answered through.
+   *
+   * @returns {typeof AbortedAiCallCapsule} The class.
+   */
+  static get AbortedAiCallCapsuleCtor () {
+    return AbortedAiCallCapsule
+  }
+
+  /**
    * get: own constructor, so a subclass's overrides are the ones that answer.
    *
    * @returns {typeof BaseAiModelProcessor} The class.
@@ -92,6 +116,23 @@ export default class BaseAiModelProcessor {
   /**
    * Send one request to the model and answer with the normalized response.
    *
+   * **`abortSignal` is the run's own signal, carried down to the call.** It is raised where the run
+   * went past its time limit and again where a client asked the run to stop, and a driver that is
+   * handed it is expected to do two things with it: refuse before calling where it is already
+   * raised, and hand it to whatever the driver waits on so a call already in flight stops being
+   * waited for. `#isAbortSignalRaised()` and `#createAbortedAiModelResponse()` below are how both
+   * are said once rather than per driver.
+   *
+   * **It defaults to null, so a driver that ignores it is still correct.** A caller that knows
+   * nothing about cancellation omits it, and a driver that has nothing to abort reads null and
+   * behaves exactly as it did before. Nothing here can make a driver honour it — what a driver
+   * does with it is that driver's own, and this class only names it.
+   *
+   * **What honouring it does not do.** Aborting stops *this service* waiting. It does not stop the
+   * provider doing the work and it does not stop the provider charging for it; `@google/genai`
+   * says so in the declaration of its own `abortSignal` field, in as many words. So a call
+   * abandoned in flight is billed and records no tokens, and that is not a defect in the record.
+   *
    * @abstract
    * @param {SendRequestToAiParams} params - Parameters.
    * @returns {Promise<import('./AiModelResponse.js').default>} The normalized response.
@@ -108,6 +149,7 @@ export default class BaseAiModelProcessor {
     toolChoices = [],
     isAutoHandleFunctionCall = true,
     extraToolOptions = {},
+    abortSignal = null,
   }) {
     throw new Error(`${this.constructor.name}#sendRequestToAi() must be inherited`)
   }
@@ -138,6 +180,48 @@ export default class BaseAiModelProcessor {
   }
 
   /**
+   * Check whether the run behind this call has already been told to stop.
+   *
+   * Asked of the signal rather than of the run, because a driver is never given a run: what it is
+   * handed is the one `AbortSignal` the whole work honours, and `aborted` is the only question
+   * that signal answers about itself.
+   *
+   * A caller that passed none is a caller with nothing to abort, so the absence answers false
+   * rather than raising — which is what makes the parameter's default safe to ignore.
+   *
+   * @param {{
+   *   abortSignal: AbortSignal | null
+   * }} params - Parameters.
+   * @returns {boolean} Whether the signal has been raised.
+   * @public
+   */
+  isAbortSignalRaised ({
+    abortSignal,
+  }) {
+    return abortSignal?.aborted
+      ?? false
+  }
+
+  /**
+   * Create the answer a driver refuses a call with, because the run was already told to stop.
+   *
+   * Every driver refuses in these same words, and that is the point of it being here: a caller
+   * cannot tell one driver from another, so the driver a keyless installation runs must answer a
+   * raised signal the way a vendor driver does. A stub that quietly answered as usual would leave
+   * this branch unexercised until the first key arrived.
+   *
+   * @returns {AiModelResponse} The refusal, in the shape every answer is read in.
+   * @public
+   */
+  createAbortedAiModelResponse () {
+    const aiResponseCapsule = this.Ctor.AbortedAiCallCapsuleCtor.create()
+
+    return this.Ctor.AiModelResponseCtor.create({
+      aiResponseCapsule,
+    })
+  }
+
+  /**
    * Prepare the files attached to a request before the payload is built.
    *
    * A driver whose vendor wants files uploaded ahead of the request overrides this and answers with
@@ -154,6 +238,45 @@ export default class BaseAiModelProcessor {
     fileUrls,
   }) {
     return fileUrls
+  }
+
+  /**
+   * Ask the provider to delete one file this service handed it.
+   *
+   * **The counterpart of `#prepareAttachedFiles()`, and it is on a driver for the same reason.**
+   * Only a driver knows its vendor's API: what a handle is, which call removes it, and — the part
+   * nothing above this layer could decide — which failure means the copy is already gone rather
+   * than that the vendor could not be reached. §19's third purge is a scheduled sweep calling this
+   * one member, and it branches on no vendor.
+   *
+   * **The contract is stated in what it does and does not raise, because a stamp depends on it.**
+   * Answering normally means one thing only: the copy no longer exists at the provider. A driver
+   * that deleted it and a driver told the handle is unknown both answer normally, because the
+   * question the caller is asking is about the copy and not about who removed it. Raising means
+   * the state of the copy is unknown, and the caller must then leave the row alone. There is no
+   * third answer: `provider_uploaded_files.provider_purged_at` records that a copy of somebody's
+   * personal data is gone, and a false entry there is worse than an empty one.
+   *
+   * **The default raises, and says why in as many words.** A driver that hands nothing to a vendor
+   * has no file at the far end to remove, so it owns no row of the egress record and this member is
+   * never reached on it — the stub is exactly that driver, and it deliberately does not override
+   * this. Being reached all the same means a row was recorded against a provider whose driver sends
+   * nothing, which is a wiring fault rather than a file to delete; raising leaves the row unstamped
+   * and puts the fault in a log, where answering "gone" would have quietly written the one false
+   * fact this whole job was deferred to avoid.
+   *
+   * @abstract
+   * @param {{
+   *   providerFileName: string
+   * }} params - Parameters.
+   * @returns {Promise<null>} Nothing, once the copy no longer exists at the provider.
+   * @throws {Error} When the driver hands nothing to a provider, so it holds nothing to delete.
+   * @public
+   */
+  async deleteProviderUploadedFile ({
+    providerFileName,
+  }) {
+    throw new Error(`${this.constructor.name}#deleteProviderUploadedFile() hands no file to a provider, so it holds none to delete: ${providerFileName}`)
   }
 
   /**
@@ -192,6 +315,7 @@ export default class BaseAiModelProcessor {
  *   toolChoices?: Array<Record<string, *>>
  *   isAutoHandleFunctionCall?: boolean
  *   extraToolOptions?: Record<string, *>
+ *   abortSignal?: AbortSignal | null
  * }} SendRequestToAiParams
  */
 

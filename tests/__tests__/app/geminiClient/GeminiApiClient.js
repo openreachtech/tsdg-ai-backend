@@ -687,3 +687,345 @@ describe('GeminiApiClient', () => {
     })
   })
 })
+
+describe('GeminiApiClient', () => {
+  describe('#sendMessageToGemini()', () => {
+    /*
+     * The abort signal reaching the vendor's own request config, which is the whole of what this
+     * class does with it.
+     *
+     * **What arrives is the very signal the caller handed over**, asserted by reference: a class
+     * that built a new controller of its own would hand the vendor something the run can never
+     * raise, and the call would be waited out to the end exactly as before.
+     *
+     * **What it buys is that this service stops waiting, and nothing more.** The vendor states in
+     * its own declaration of this field that aborting is a client-only operation, that it does not
+     * cancel the request in the service, and that the usage is charged regardless. No case here
+     * asserts otherwise, because no case here could.
+     */
+    describe('should carry the abort signal into the vendor request config', () => {
+      const cases = [
+        {
+          input: {
+            model: 'gemini-2.5-flash',
+            contents: [],
+            maxOutputTokens: 65536,
+            tools: null,
+            toolConfig: null,
+          },
+          tally: AbortSignal.abort('run-canceled-0001'),
+        },
+        {
+          input: {
+            model: 'gemini-2.5-pro',
+            contents: [],
+            maxOutputTokens: 8192,
+            tools: null,
+            toolConfig: null,
+          },
+          tally: AbortSignal.abort('run-past-its-time-limit-0002'),
+        },
+      ]
+
+      test.each(cases)('model: $input.model', async ({
+        input,
+        tally,
+      }) => {
+        const generateContentSpy = jest.fn()
+          .mockResolvedValue({
+            text: 'answer-0001',
+          })
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            models: {
+              generateContent: generateContentSpy,
+            },
+          },
+        })
+        const args = {
+          ...input,
+          abortSignal: tally,
+        }
+        const expected = expect.objectContaining({
+          config: expect.objectContaining({
+            abortSignal: tally, // same reference
+          }),
+        })
+
+        await client.sendMessageToGemini(args)
+
+        expect(generateContentSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+
+    describe('should send no abort key where the caller handed no signal', () => {
+      const cases = [
+        {
+          input: {
+            model: 'gemini-2.5-flash',
+            contents: [],
+            maxOutputTokens: 65536,
+            tools: null,
+            toolConfig: null,
+          },
+          expected: {
+            model: 'gemini-2.5-flash',
+            contents: [],
+            config: {
+              maxOutputTokens: 65536,
+            },
+          },
+        },
+        {
+          input: {
+            model: 'gemini-2.5-pro',
+            contents: [],
+            maxOutputTokens: 8192,
+            tools: null,
+            toolConfig: null,
+          },
+          expected: {
+            model: 'gemini-2.5-pro',
+            contents: [],
+            config: {
+              maxOutputTokens: 8192,
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('model: $input.model', async ({
+        input,
+        expected,
+      }) => {
+        const generateContentSpy = jest.fn()
+          .mockResolvedValue({
+            text: 'answer-0001',
+          })
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            models: {
+              generateContent: generateContentSpy,
+            },
+          },
+        })
+
+        await client.sendMessageToGemini(input)
+
+        expect(generateContentSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('GeminiApiClient', () => {
+  describe('#buildAbortSignalEntry()', () => {
+    describe('should carry the signal it was handed', () => {
+      const cases = [
+        {
+          tally: AbortSignal.abort('run-canceled-0011'),
+        },
+        {
+          tally: new AbortController().signal,
+        },
+      ]
+
+      test.each(cases)('abortSignal.aborted: $tally.aborted', ({
+        tally,
+      }) => {
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            label: 'gemini-client-0001', // Neutral; this member reads its argument only.
+          },
+        })
+        const args = {
+          abortSignal: tally,
+        }
+
+        const entry = client.buildAbortSignalEntry(args)
+        const received = entry.abortSignal
+
+        expect(received)
+          .toBe(tally) // same reference
+      })
+    })
+
+    /*
+     * The absence is expressed by the key not being there rather than by a null sitting in it:
+     * `abortSignal` is declared optional on the vendor's config, and the two are not the same
+     * thing to a vendor that reads it.
+     */
+    describe('should carry no key at all where no signal was handed', () => {
+      const cases = [
+        {
+          label: 'a caller that handed null',
+          input: {
+            abortSignal: null,
+          },
+        },
+        {
+          label: 'a caller that named the field and left it out',
+          input: {},
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+      }) => {
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            label: 'gemini-client-0001', // Neutral; this member reads its argument only.
+          },
+        })
+
+        const received = client.buildAbortSignalEntry(input)
+
+        expect(received)
+          .toEqual({})
+      })
+    })
+  })
+})
+
+describe('GeminiApiClient', () => {
+  describe('#deleteFileFromGemini()', () => {
+    /*
+     * The handle is what the Files API is given, and it is the handle rather than the uri - the two
+     * are separate members on the upload capsule for exactly this reason, and a delete named by the
+     * uri would ask the vendor about something it does not key files by.
+     */
+    describe('should hand the Files API the handle the upload answered with', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0001',
+          },
+          expected: {
+            name: 'files/provider-file-0001',
+          },
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0002',
+          },
+          expected: {
+            name: 'files/provider-file-0002',
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const deleteTally = jest.fn()
+          .mockResolvedValue({})
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            files: {
+              delete: deleteTally,
+            },
+          },
+        })
+
+        await client.deleteFileFromGemini(input)
+
+        expect(deleteTally)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('GeminiApiClient', () => {
+  describe('#deleteFileFromGemini()', () => {
+    describe('should answer what the Files API answered', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0001',
+          },
+          tally: {
+            sdkHttpResponse: 'sdk-http-response-0001',
+          },
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0002',
+          },
+          tally: {
+            sdkHttpResponse: 'sdk-http-response-0002',
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        tally,
+      }) => {
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            files: {
+              delete: jest.fn()
+                .mockResolvedValue(tally),
+            },
+          },
+        })
+
+        const received = await client.deleteFileFromGemini(input)
+
+        expect(received)
+          .toBe(tally) // same reference
+      })
+    })
+  })
+})
+
+describe('GeminiApiClient', () => {
+  describe('#deleteFileFromGemini()', () => {
+    /*
+     * A vendor that refuses is left to raise rather than being caught here: reading what a failure
+     * meant is the capsule's, and the one member that talks to Google does nothing but talk to
+     * Google. A 404 in particular must reach the capsule intact, because that is the answer the
+     * purge reads as "the copy is gone".
+     */
+    describe('when the Files API raised', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0003',
+          },
+          expected: 'delete-failure-0003',
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0004',
+          },
+          expected: 'delete-failure-0004',
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const client = GeminiApiClient.create({
+          geminiClient: {
+            files: {
+              delete: jest.fn()
+                .mockRejectedValue(new Error(expected)),
+            },
+          },
+        })
+
+        const received = () => client.deleteFileFromGemini(input)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
+      })
+    })
+  })
+})

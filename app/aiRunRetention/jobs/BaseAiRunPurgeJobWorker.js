@@ -544,8 +544,17 @@ export default class BaseAiRunPurgeJobWorker extends BaseJobWorker {
  */
 
 /**
+ * The purgers a concrete job of this family may be built around — §19's three rows.
+ *
+ * `ProviderUploadedFilePurger` is the third and the only one that leaves the machine, so it is the
+ * one whose outcome is counted in files rather than runs. A concrete job around it overrides the
+ * two members here that name a run's count; everything else this class holds — the instant read
+ * once per execution, the backlog warning, the four queue hooks, the one log file the three sweeps
+ * share — is the same job for all three.
+ *
  * @typedef {typeof import('../AiRunContentPurger.js').default
- *   | typeof import('../AiRunTracePurger.js').default} AiRunPurgerCtor
+ *   | typeof import('../AiRunTracePurger.js').default
+ *   | typeof import('../ProviderUploadedFilePurger.js').default} AiRunPurgerCtor
  */
 
 /**

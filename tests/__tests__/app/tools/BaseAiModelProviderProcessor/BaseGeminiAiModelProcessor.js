@@ -4,6 +4,7 @@ import BaseAiModelProcessor from '../../../../../app/tools/BaseAiModelProcessor.
 import AiModelResponse from '../../../../../app/tools/AiModelResponse.js'
 import GeminiMessagePayloadGenerator from '../../../../../app/tools/AiPayloadGenerator/GeminiMessagePayloadGenerator.js'
 
+import DeleteFileFromGeminiCapsule from '../../../../../app/geminiClient/DeleteFileFromGeminiCapsule.js'
 import GeminiApiClient from '../../../../../app/geminiClient/GeminiApiClient.js'
 import SendMessageToGeminiCapsule from '../../../../../app/geminiClient/SendMessageToGeminiCapsule.js'
 import UploadFileToGeminiCapsule from '../../../../../app/geminiClient/UploadFileToGeminiCapsule.js'
@@ -1291,6 +1292,588 @@ describe('BaseGeminiAiModelProcessor', () => {
         await expect(received)
           .rejects
           .toThrow('BaseGeminiAiModelProcessor#sendStreamRequestToAi() must be inherited')
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#sendRequestToAi()', () => {
+    /*
+     * specs/1.0.0 §15, the item deferred until a driver existed that opens a connection at all.
+     *
+     * **A run already told to stop is refused before anything is read, built or opened.** The two
+     * spies below are the two things that would otherwise have happened for nobody: a catalog row
+     * read, and a client built - which is where the key is read and the vendor SDK is loaded. Both
+     * are asserted as never called, so a guard that sat one statement lower would fail here.
+     *
+     * **What the caller gets back is the base's refusal, not a raise.** A raise travelling out of
+     * `AssetMediaReadingFetcher` would reach the worker as a thrown failure and be recorded as
+     * `PROVIDER_CALL_FAILED`, which is the wrong terminal reason for a run that was canceled.
+     *
+     * No case here reaches Google, and the refusal case could not: it is the case in which nothing
+     * is built to reach it with.
+     */
+    describe('should refuse a run already told to stop, before reading the catalog', () => {
+      const cases = [
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-canceled-0001'),
+          },
+        },
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-past-its-time-limit-0002'),
+          },
+        },
+      ]
+
+      test.each(cases)('abortSignal.reason: $input.abortSignal.reason', async ({
+        input,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        const findAiModelByNameSpy = jest.spyOn(processor, 'findAiModelByName')
+        const createGeminiApiClientSpy = jest.spyOn(processor, 'createGeminiApiClient')
+        const args = {
+          aiAgent: {}, // Neutral value; the member refuses before reading it
+          instruction: 'instruction-0001', // Neutral value; the member refuses before reading it
+          documents: [], // Neutral value; the member refuses before reading it
+          fileUrls: [], // Neutral value; the member refuses before reading it
+          abortSignal: input.abortSignal,
+        }
+
+        await processor.sendRequestToAi(args)
+
+        expect(findAiModelByNameSpy)
+          .not
+          .toHaveBeenCalled()
+        expect(createGeminiApiClientSpy)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+
+    describe('should answer a refusal that reads as a failed call', () => {
+      const cases = [
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-canceled-0011'),
+          },
+        },
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-past-its-time-limit-0012'),
+          },
+        },
+      ]
+
+      test.each(cases)('abortSignal.reason: $input.abortSignal.reason', async ({
+        input,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        const args = {
+          aiAgent: {}, // Neutral value; the member refuses before reading it
+          instruction: 'instruction-0002', // Neutral value; the member refuses before reading it
+          documents: [], // Neutral value; the member refuses before reading it
+          fileUrls: [], // Neutral value; the member refuses before reading it
+          abortSignal: input.abortSignal,
+        }
+
+        const aiModelResponse = await processor.sendRequestToAi(args)
+        const received = aiModelResponse.hasError()
+
+        expect(received)
+          .toBeTruthy()
+      })
+    })
+
+    /*
+     * Zero because this request never left the machine. A call that did leave and was abandoned in
+     * flight records zero as well: the vendor answers no usage figure to a connection that was
+     * dropped, and it charges for the work regardless - which is what its own declaration of
+     * `abortSignal` says in as many words.
+     */
+    describe('should answer a refusal that spent no input token', () => {
+      const cases = [
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-canceled-0021'),
+          },
+          expected: 0,
+        },
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-past-its-time-limit-0022'),
+          },
+          expected: 0,
+        },
+      ]
+
+      test.each(cases)('abortSignal.reason: $input.abortSignal.reason', async ({
+        input,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        const args = {
+          aiAgent: {}, // Neutral value; the member refuses before reading it
+          instruction: 'instruction-0003', // Neutral value; the member refuses before reading it
+          documents: [], // Neutral value; the member refuses before reading it
+          fileUrls: [], // Neutral value; the member refuses before reading it
+          abortSignal: input.abortSignal,
+        }
+
+        const aiModelResponse = await processor.sendRequestToAi(args)
+        const received = aiModelResponse.extractInputTokenCount()
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+
+    describe('should answer a refusal that spent no output token', () => {
+      const cases = [
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-canceled-0031'),
+          },
+          expected: 0,
+        },
+        {
+          input: {
+            abortSignal: AbortSignal.abort('run-past-its-time-limit-0032'),
+          },
+          expected: 0,
+        },
+      ]
+
+      test.each(cases)('abortSignal.reason: $input.abortSignal.reason', async ({
+        input,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        const args = {
+          aiAgent: {}, // Neutral value; the member refuses before reading it
+          instruction: 'instruction-0004', // Neutral value; the member refuses before reading it
+          documents: [], // Neutral value; the member refuses before reading it
+          fileUrls: [], // Neutral value; the member refuses before reading it
+          abortSignal: input.abortSignal,
+        }
+
+        const aiModelResponse = await processor.sendRequestToAi(args)
+        const received = aiModelResponse.extractOutputTokenCount()
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#sendMessageToGemini()', () => {
+    /*
+     * The run's signal reaching the client, beside the payload rather than inside it.
+     *
+     * Asserted by reference: a driver that built a controller of its own would hand the client
+     * something the run can never raise, and an in-flight call would be waited out to the end
+     * exactly as before the feature existed.
+     */
+    describe('should hand the client the signal beside the payload', () => {
+      const cases = [
+        {
+          input: {
+            payload: {
+              model: 'gemini-2.5-flash',
+              contents: [],
+              maxOutputTokens: 65536,
+              tools: null,
+              toolConfig: null,
+            },
+          },
+          tally: new AbortController().signal,
+        },
+        {
+          input: {
+            payload: {
+              model: 'gemini-2.5-pro',
+              contents: [],
+              maxOutputTokens: 8192,
+              tools: null,
+              toolConfig: null,
+            },
+          },
+          tally: new AbortController().signal,
+        },
+      ]
+
+      test.each(cases)('payload.model: $input.payload.model', async ({
+        input,
+        tally,
+      }) => {
+        const sendMessageToGeminiSpy = jest.fn()
+          .mockResolvedValue({
+            text: 'answer-0001',
+          })
+        const processor = BaseGeminiAiModelProcessor.create()
+        jest.spyOn(processor, 'createGeminiApiClient')
+          .mockReturnValue({
+            sendMessageToGemini: sendMessageToGeminiSpy,
+          })
+        const args = {
+          payload: input.payload,
+          abortSignal: tally,
+        }
+        const expected = expect.objectContaining({
+          abortSignal: tally, // same reference
+        })
+
+        await processor.sendMessageToGemini(args)
+
+        expect(sendMessageToGeminiSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+
+    /*
+     * An abort that lands while the call is in flight arrives here as the SDK's own rejection, and
+     * is answered as a failed call rather than raised - the same channel a timeout or a refused key
+     * arrives on. That is what lets the reading be recorded and the run settle on its own terms.
+     */
+    describe('should answer a capsule carrying an abort raised while the call was in flight', () => {
+      const cases = [
+        {
+          input: {
+            payload: {
+              model: 'gemini-2.5-flash',
+              contents: [],
+              maxOutputTokens: 65536,
+              tools: null,
+              toolConfig: null,
+            },
+          },
+          expected: 'This operation was aborted',
+        },
+        {
+          input: {
+            payload: {
+              model: 'gemini-2.5-pro',
+              contents: [],
+              maxOutputTokens: 8192,
+              tools: null,
+              toolConfig: null,
+            },
+          },
+          expected: 'signal is aborted without reason',
+        },
+      ]
+
+      test.each(cases)('payload.model: $input.payload.model', async ({
+        input,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        jest.spyOn(processor, 'createGeminiApiClient')
+          .mockReturnValue({
+            sendMessageToGemini: jest.fn()
+              .mockRejectedValue(new Error(expected)),
+          })
+        const args = {
+          payload: input.payload,
+          abortSignal: new AbortController().signal,
+        }
+
+        const capsule = await processor.sendMessageToGemini(args)
+        const received = capsule.extractErrorMessage()
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('.get:DeleteFileFromGeminiCapsuleCtor', () => {
+    describe('when called as is', () => {
+      test('should be fixed value', () => {
+        const received = BaseGeminiAiModelProcessor.DeleteFileFromGeminiCapsuleCtor
+
+        expect(received)
+          .toBe(DeleteFileFromGeminiCapsule) // same reference
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#deleteFileFromGemini()', () => {
+    /*
+     * The handle travels to the client untouched. It is `provider_uploaded_files.provider_file_name`
+     * and nothing is derived from it here - a delete asking about anything but what the upload
+     * answered with would name a file the vendor does not key by.
+     */
+    describe('should hand the client the handle it was given', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0001',
+          },
+          expected: {
+            providerFileName: 'files/provider-file-0001',
+          },
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0002',
+          },
+          expected: {
+            providerFileName: 'files/provider-file-0002',
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const deleteTally = jest.fn()
+          .mockResolvedValue({})
+        const processor = BaseGeminiAiModelProcessor.create()
+
+        await processor.deleteFileFromGemini({
+          providerFileName: input.providerFileName,
+          geminiApiClient: {
+            deleteFileFromGemini: deleteTally,
+          },
+        })
+
+        expect(deleteTally)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#deleteFileFromGemini()', () => {
+    /*
+     * A failure comes back as a capsule rather than raising, exactly as the upload's does: this
+     * member talks to the vendor and the member above it decides what the answer meant, so every
+     * answer a vendor can give is exercised without a network being involved in any of them.
+     */
+    describe('should answer a capsule carrying the failure rather than raising', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0003',
+          },
+          expected: 'delete-failure-0003',
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0004',
+          },
+          expected: 'delete-failure-0004',
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+
+        const capsule = await processor.deleteFileFromGemini({
+          providerFileName: input.providerFileName,
+          geminiApiClient: {
+            deleteFileFromGemini: jest.fn()
+              .mockRejectedValue(new Error(expected)),
+          },
+        })
+
+        const received = capsule.extractErrorMessage()
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#deleteProviderUploadedFile()', () => {
+    /*
+     * The copy is gone and the member answers, which is the signal `ProviderUploadedFilePurger`
+     * reads as permission to stamp `provider_uploaded_files.provider_purged_at`.
+     *
+     * Both ways a copy can be gone are cases, because they are the same answer and an
+     * implementation that raised on the second would leave every file whose stated expiry had
+     * passed unstamped for ever - and those are most of them, since Google drops its own copy after
+     * about forty-eight hours whether or not anybody asks.
+     */
+    describe('when the copy is gone', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0001',
+            deleteAnswer: {}, // The vendor carried the delete out
+          },
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0002',
+            deleteAnswer: {
+              sdkHttpResponse: 'sdk-http-response-0002',
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+
+        jest.spyOn(processor, 'createGeminiApiClient')
+          .mockResolvedValue({
+            deleteFileFromGemini: jest.fn()
+              .mockResolvedValue(input.deleteAnswer),
+          })
+
+        const received = await processor.deleteProviderUploadedFile({
+          providerFileName: input.providerFileName,
+        })
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#deleteProviderUploadedFile()', () => {
+    /*
+     * The vendor says it knows no such handle. The copy is gone, so this answers rather than
+     * raising - the whole reason the judgement lives in a Gemini class is that nothing above a
+     * driver could know that 404 means this.
+     */
+    describe('when the vendor holds no such file', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0003',
+            deleteFailure: {
+              message: 'delete-failure-0003',
+              status: 404,
+            },
+          },
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0004',
+            deleteFailure: {
+              message: 'delete-failure-0004',
+              status: 404,
+            },
+          },
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+
+        jest.spyOn(processor, 'createGeminiApiClient')
+          .mockResolvedValue({
+            deleteFileFromGemini: jest.fn()
+              .mockRejectedValue(input.deleteFailure),
+          })
+
+        const received = await processor.deleteProviderUploadedFile({
+          providerFileName: input.providerFileName,
+        })
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#deleteProviderUploadedFile()', () => {
+    /*
+     * Every other failure raises, and raising is what leaves the row unstamped. 403 is the case to
+     * read twice: a vendor answers it both for a file that is not yours and for a key that is not
+     * valid, so a driver treating it as "gone" would write the whole table's worth of stamps on the
+     * night a key expired. The last case never reached the vendor at all and carries no status.
+     */
+    describe('when the copy could not be established gone', () => {
+      const cases = [
+        {
+          input: {
+            providerFileName: 'files/provider-file-0005',
+            deleteFailure: {
+              message: 'delete-failure-0005',
+              status: 403,
+            },
+          },
+          expected: 'BaseGeminiAiModelProcessor#deleteProviderUploadedFile() could not establish that Gemini no longer holds a file: files/provider-file-0005, delete-failure-0005',
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0006',
+            deleteFailure: {
+              message: 'delete-failure-0006',
+              status: 429,
+            },
+          },
+          expected: 'BaseGeminiAiModelProcessor#deleteProviderUploadedFile() could not establish that Gemini no longer holds a file: files/provider-file-0006, delete-failure-0006',
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0007',
+            deleteFailure: {
+              message: 'delete-failure-0007',
+              status: 503,
+            },
+          },
+          expected: 'BaseGeminiAiModelProcessor#deleteProviderUploadedFile() could not establish that Gemini no longer holds a file: files/provider-file-0007, delete-failure-0007',
+        },
+        {
+          input: {
+            providerFileName: 'files/provider-file-0008',
+            deleteFailure: {
+              message: 'delete-failure-0008', // A failure that never reached the vendor
+            },
+          },
+          expected: 'BaseGeminiAiModelProcessor#deleteProviderUploadedFile() could not establish that Gemini no longer holds a file: files/provider-file-0008, delete-failure-0008',
+        },
+      ]
+
+      test.each(cases)('providerFileName: $input.providerFileName', async ({
+        input,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+
+        jest.spyOn(processor, 'createGeminiApiClient')
+          .mockResolvedValue({
+            deleteFileFromGemini: jest.fn()
+              .mockRejectedValue(input.deleteFailure),
+          })
+
+        const args = {
+          providerFileName: input.providerFileName,
+        }
+
+        const received = () => processor.deleteProviderUploadedFile(args)
+
+        await expect(received)
+          .rejects
+          .toThrow(expected)
       })
     })
   })

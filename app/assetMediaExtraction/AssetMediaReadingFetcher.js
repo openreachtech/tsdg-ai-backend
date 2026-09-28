@@ -65,8 +65,17 @@ const UNOFFERED_TOOL_MESSAGE = 'refused a run whose agent offers no reading tool
  * **The readings are taken one at a time, and the signal is asked between them** ([[Q113]]). Three
  * provider calls over twelve photographs are the other long half of a run, and a run past its time
  * limit stops at the reading boundary rather than making two more calls whose answer nothing will
- * read. The signal is not handed to the call itself, because `BaseAiModelProcessor` takes none -
- * the same gap `AiRunMediaCollector` records against `MediaFetchClient`.
+ * read.
+ *
+ * **The signal now goes into the call as well, and the two are different guarantees.** Asking it
+ * between readings is what makes a run stop at a step boundary and never mid-step, and that is
+ * unchanged: a reading is still taken whole or not at all. Handing it to the driver is what stops
+ * the run **waiting out** a call already in flight before it reaches that boundary — the item §15
+ * deferred until a driver existed that opens a connection at all. Aborting the wait is not
+ * aborting the work: `@google/genai` states that its `abortSignal` is client-only, does not cancel
+ * the request in the service, and does not stop the usage being charged. So a call dropped this
+ * way is recorded with zero tokens against a charge that was really incurred, while every reading
+ * that completed before it keeps the counts it was recorded with.
  *
  * **Nothing here judges what came back.** A reading is carried out of the tool call as it arrived
  * and handed on; whether the schema allows any of it is step 4's question, and whether the readings
@@ -433,6 +442,7 @@ export default class AssetMediaReadingFetcher {
       forcedToolSchema,
       attachedFiles,
       suppliedFunctionCalls,
+      signal,
     })
 
     if (fieldReadings === null) {
@@ -465,6 +475,7 @@ export default class AssetMediaReadingFetcher {
     forcedToolSchema,
     attachedFiles,
     suppliedFunctionCalls,
+    signal,
   }) {
     const calledAt = this.buildCurrentInstant()
 
@@ -474,6 +485,7 @@ export default class AssetMediaReadingFetcher {
       composedPrompt,
       forcedToolSchema,
       attachedFiles,
+      signal,
     })
 
     const respondedAt = this.buildCurrentInstant()
@@ -520,12 +532,27 @@ export default class AssetMediaReadingFetcher {
    * the driver to carry out on this service's behalf, and a driver that executed it would hand back
    * whatever it made of the call rather than the call itself.
    *
+   * **The run's signal goes with the request, under the name the driver contract gives it.** Inside
+   * this run it is `signal` — one signal the whole work honours, raised for either of two reasons —
+   * and `BaseAiModelProcessor#sendRequestToAi()` calls it `abortSignal`, because at that boundary it
+   * is a request option and nothing else. The rename happens here, once, at the crossing.
+   *
+   * **What handing it over buys, and what it does not.** A reading whose call is already in flight
+   * when the run is canceled stops being waited for, instead of holding the run open for the rest
+   * of a provider's answer nobody will read — which is the whole of what §15 deferred until a real
+   * vendor driver existed. It does **not** stop the provider doing the work and it does not stop
+   * the provider charging for it: `@google/genai` says so where it declares the field. Such a call
+   * is still recorded, and it records zero tokens, because a dropped connection brings back no
+   * usage figure. The readings taken before it keep the rows and the counts they were recorded
+   * with.
+   *
    * @param {{
    *   aiModelProcessor: *
    *   aiAgent: *
    *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
    *   forcedToolSchema: Record<string, *>
    *   attachedFiles: Array<Record<string, *>>
+   *   signal: AbortSignal
    * }} params - Parameters.
    * @returns {Promise<*>} The normalized response.
    * @public
@@ -536,6 +563,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    signal,
   }) {
     return aiModelProcessor.sendRequestToAi({
       aiAgent,
@@ -551,6 +579,7 @@ export default class AssetMediaReadingFetcher {
       ],
       isAutoHandleFunctionCall: false,
       extraToolOptions: {},
+      abortSignal: signal,
     })
   }
 
@@ -786,6 +815,7 @@ export default class AssetMediaReadingFetcher {
  *   forcedToolSchema: Record<string, *>
  *   attachedFiles: Array<Record<string, *>>
  *   suppliedFunctionCalls: Array<Record<string, *>> | null
+ *   signal: AbortSignal
  * }} FetchOneReadingParams
  */
 

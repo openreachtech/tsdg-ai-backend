@@ -645,3 +645,116 @@ describe('AssetMediaReadingFetcher', () => {
     })
   })
 })
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#sendReadingRequest()', () => {
+    /*
+     * specs/1.0.0 §15, the item deferred until a driver existed that opens a connection at all:
+     * the run's own abort signal reaching the provider call.
+     *
+     * **The whole argument is asserted, not the signal alone.** What travels to a driver is a
+     * contract every driver reads, and the two forced-tool fields and the `isAutoHandleFunctionCall`
+     * flag are what make a reading a reading. Pinning the object entire is what catches a signal
+     * added at the cost of one of them.
+     *
+     * **The signal is asserted by reference.** A fetcher that built a controller of its own would
+     * hand the driver something the run can never raise, and the call would be waited out to the
+     * end exactly as before — which is the defect this feature exists to remove, passing a test
+     * that only checked a signal was present.
+     *
+     * **It is named `signal` on this side and `abortSignal` on the driver's**, and this member is
+     * where the two meet: inside the run it is the one signal the whole work honours, and at the
+     * driver contract it is a request option. Nothing else renames it.
+     *
+     * Handing it over stops this service waiting for an answer nobody will read. It does not stop
+     * the provider doing the work and it does not stop the provider charging for it — no case here
+     * claims otherwise, because no case here could.
+     */
+    describe('should hand the driver the run own abort signal', () => {
+      const cases = [
+        {
+          input: {
+            aiAgent: {
+              id: 10150001,
+              name: 'asset-media-extraction-agent',
+            },
+            composedPrompt: {
+              instruction: 'Read the photographs and record what they show.',
+            },
+            forcedToolSchema: {
+              name: 'record_field_readings',
+            },
+            attachedFiles: [
+              {
+                fileUrl: '/workspace/medium-0001',
+                fileType: 'image/png',
+              },
+            ],
+          },
+          tally: new AbortController().signal,
+        },
+        {
+          input: {
+            aiAgent: {
+              id: 10150002,
+              name: 'asset-media-extraction-agent-second',
+            },
+            composedPrompt: {
+              instruction: 'Look again at the photographs and record what they show.',
+            },
+            forcedToolSchema: {
+              name: 'record_field_readings_second',
+            },
+            attachedFiles: [],
+          },
+          tally: AbortSignal.abort('run-canceled-0002'),
+        },
+      ]
+
+      test.each(cases)('composedPrompt.instruction: $input.composedPrompt.instruction', async ({
+        input,
+        tally,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+        const aiModelProcessor = {
+          /**
+           * Stand in for a driver, and answer nothing this member reads.
+           *
+           * @returns {Promise<null>} What the driver answered.
+           */
+          sendRequestToAi: async () => null,
+        }
+        const sendRequestToAiSpy = jest.spyOn(aiModelProcessor, 'sendRequestToAi')
+        const args = {
+          aiModelProcessor,
+          aiAgent: input.aiAgent,
+          composedPrompt: input.composedPrompt,
+          forcedToolSchema: input.forcedToolSchema,
+          attachedFiles: input.attachedFiles,
+          signal: tally,
+        }
+        const expected = {
+          aiAgent: input.aiAgent,
+          instruction: input.composedPrompt.instruction,
+          documents: [],
+          fileUrls: input.attachedFiles,
+          historyMessages: [],
+          tools: [
+            input.forcedToolSchema,
+          ],
+          toolChoices: [
+            input.forcedToolSchema,
+          ],
+          isAutoHandleFunctionCall: false,
+          extraToolOptions: {},
+          abortSignal: tally, // same reference
+        }
+
+        await fetcher.sendReadingRequest(args)
+
+        expect(sendRequestToAiSpy)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
