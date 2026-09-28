@@ -178,7 +178,7 @@ export default class AiRunMediaProviderUploader {
           aiProviderId,
           providerFileName: it.providerFileName,
           uploadedAt,
-          expiresAt: null,
+          expiresAt: it.providerFileExpiresAt ?? null,
         })
       )
     )

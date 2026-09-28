@@ -22,5 +22,19 @@ module.exports = {
       DISPLAY_ORDER: 10,
       IS_ACTIVE: true,
     },
+
+    /*
+     * The first real vendor. Its presence in the catalog changes nothing about what a default
+     * installation does: a provider is reached only through the model row that names it, and the
+     * model rows naming this one are not the default. Being active means "this vendor may be asked
+     * for", never "this vendor is asked".
+     */
+    GEMINI: {
+      ID: 11100001,
+      NAME: 'gemini',
+      DISPLAY_NAME: 'Gemini',
+      DISPLAY_ORDER: 20,
+      IS_ACTIVE: true,
+    },
   },
 }

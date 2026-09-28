@@ -186,9 +186,14 @@ describe('BulkAiModelProcessorsLoader', () => {
 describe('BulkAiModelProcessorsLoader', () => {
   describe('.loadProcessorCtors()', () => {
     /*
-     * A default installation ships exactly one model — the seeded `stub` row — so the pool holds
-     * exactly one processor. The count is the assertion that the filter admits processors and
-     * nothing else: a helper class dropped beside them would push it to two.
+     * Two processors live in the pool: the `stub` one a default installation answers on, and the
+     * `gemini-2-5-flash` one. The count is the assertion that the filter admits processors and
+     * nothing else — a helper class dropped beside them would push it to three, and the abstract
+     * `BaseGeminiAiModelProcessor` would too if it had been put in here rather than a directory up.
+     *
+     * Two processors is not two reachable models. Which model a request is answered by is the
+     * `ai_models` row carrying `is_default`, and that is still the stub's: a processor being
+     * discovered means only that a request naming it could be served.
      */
     describe('should discover the processors the pool holds', () => {
       test('with the pool the processors live in', async () => {
@@ -199,7 +204,7 @@ describe('BulkAiModelProcessorsLoader', () => {
         const received = await BulkAiModelProcessorsLoader.loadProcessorCtors(args)
 
         expect(received)
-          .toHaveLength(1)
+          .toHaveLength(2)
       })
     })
   })

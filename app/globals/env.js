@@ -35,5 +35,6 @@ export default /** @type {*} */ (
  *   DEVELOPMENT_INACTIVE_API_CLIENT_SECRET: string
  *   API_CLIENT_SECRET_ENCRYPTION_KEY: string
  *   DEVELOPMENT_API_CLIENT_SECRET: string
+ *   GEMINI_API_KEY: string
  * }} EnvType
  */

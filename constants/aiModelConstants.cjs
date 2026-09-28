@@ -33,5 +33,28 @@ module.exports = {
       IS_ACTIVE: true,
       DISPLAY_ORDER: 10,
     },
+
+    /*
+     * The first model that really calls a vendor.
+     *
+     * `IS_DEFAULT` is false, and that is the whole of what keeps §17's first use case and §22's
+     * second version criterion true: a default installation answers on the stub because the stub
+     * is the row carrying `is_default`, and this row is reached only by a request naming
+     * `gemini-2-5-flash`. Moving the default onto this row would make a machine with no key call
+     * Google on its first request.
+     *
+     * `NAME` and `TARGET_MODEL_NAME` differ the way the stub's do: the first is the key this
+     * application selects by and the processor answers for, the second is the vendor's own model
+     * id sent verbatim. Google revising the second is a change to this line and to nothing else.
+     */
+    GEMINI_2_5_FLASH: {
+      ID: 11110001,
+      AI_PROVIDER_ID: AI_PROVIDER.GEMINI.ID,
+      NAME: 'gemini-2-5-flash',
+      TARGET_MODEL_NAME: 'gemini-2.5-flash',
+      IS_DEFAULT: false,
+      IS_ACTIVE: true,
+      DISPLAY_ORDER: 20,
+    },
   },
 }
