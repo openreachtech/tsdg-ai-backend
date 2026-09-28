@@ -31,6 +31,12 @@ describe('BaseAiRunJobDispatcher', () => {
       const expected = {
         defaultJobOptions: {
           attempts: 1,
+          removeOnComplete: {
+            count: 90,
+          },
+          removeOnFail: {
+            count: 90,
+          },
         },
       }
 

@@ -39,6 +39,21 @@ const TERMINAL_CALLBACK_ATTEMPT_COUNT = 7
 const TERMINAL_CALLBACK_BACKOFF_TYPE = 'exponential'
 const TERMINAL_CALLBACK_BACKOFF_MILLISECONDS = 60000
 
+/*
+ * How many finished job records this queue keeps.
+ *
+ * BullMQ keeps every completed and every failed job forever unless told otherwise, and a failed
+ * record carries the thrown error's message. This queue posts the callback body, which is the run's
+ * own answer — so an unbounded failed set is a store of content that nothing purges, against
+ * section 22's rule that no log carries any. It is also simply unbounded growth: this queue
+ * attempts a delivery seven times, so it produces more records per run than any other.
+ *
+ * **The same ninety every other queue in this service keeps**, because one number a reader learns
+ * once is worth more than three tuned separately. Retention chose it first; the AI run queue now
+ * carries it too.
+ */
+const TERMINAL_CALLBACK_RETAINED_COUNT = 90
+
 /**
  * Dispatches the job that posts a run's terminal callback.
  *
@@ -86,6 +101,12 @@ export default class DeliverRunCallbackJobDispatcher extends BaseJobDispatcher {
         backoff: {
           type: TERMINAL_CALLBACK_BACKOFF_TYPE,
           delay: TERMINAL_CALLBACK_BACKOFF_MILLISECONDS,
+        },
+        removeOnComplete: {
+          count: TERMINAL_CALLBACK_RETAINED_COUNT,
+        },
+        removeOnFail: {
+          count: TERMINAL_CALLBACK_RETAINED_COUNT,
         },
       },
     }

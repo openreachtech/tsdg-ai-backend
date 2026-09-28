@@ -89,6 +89,12 @@ describe('DeliverRunCallbackJobDispatcher', () => {
               type: 'exponential',
               delay: 60000,
             },
+            removeOnComplete: {
+              count: 90,
+            },
+            removeOnFail: {
+              count: 90,
+            },
           },
         }
 
