@@ -11,6 +11,29 @@ const COLUMN_GAP = '  '
  */
 const ABSENT_MARKER = '-'
 
+/*
+ * Every character a terminal acts on rather than shows, and what each one is replaced with.
+ *
+ * The range is C0 (`\u0000`-`\u001f`) plus DEL (`\u007f`). Two printed fields — the correlation id
+ * and the external ref — are a caller's own text, and the rule that admits them bounds their
+ * length and nothing else, so an escape sequence is storable. It is the terminal, not this class,
+ * that would act on one: `ESC [ 2 K` clears the line the operator is reading and `ESC [ 1 A`
+ * moves the cursor over it, and a carriage return alone is enough to overwrite a row.
+ *
+ * **A report that can be edited by the data it reports is worse than no report**, and this one is
+ * read exactly when the service will not answer and there is nowhere else to look.
+ *
+ * The marker is visible on purpose. Stripping the character would leave a cell reading as ordinary
+ * text, and an operator who cannot see that somebody stored something strange cannot act on it.
+ *
+ * It is written as two code-point bounds rather than as a regular expression because a regular
+ * expression holding a control character is itself refused by this repository's lint, and the
+ * comment that would excuse it is refused too.
+ */
+const CONTROL_CHARACTER_CEILING_CODE_POINT = 0x20
+const DELETE_CODE_POINT = 0x7f
+const CONTROL_CHARACTER_MARKER = '?'
+
 const LAST_COMPLETED_STEP_SEPARATOR = ':'
 
 const NOTHING_FOUND_TEXT = 'no runs found'
@@ -262,6 +285,19 @@ export default class AiRunOperatorReporter {
    * An empty string is answered as absent rather than as a cell of no width, because a column of
    * invisible values is a column an operator cannot tell apart from a fault in the alignment.
    *
+   * **Every control character is replaced before the cell is returned, and this is the one place
+   * it happens.** Two of the fields printed here — the correlation id and the external ref — are
+   * written by a caller, and the rule that admits them bounds only their length: an escape
+   * sequence is storable text. Printed raw into a terminal, `ESC [ 2 K` erases the line the
+   * operator is reading and `ESC [ 1 A` puts the next one over the top of it, so a value stored
+   * months ago could make this report hide the very row it was run to find. **The operator has no
+   * second place to look** — this command exists for the case where the service will not answer —
+   * so a report that can be made to lie is worse than no report.
+   *
+   * The replacement is visible rather than silent: a stripped character would leave a cell that
+   * reads as ordinary text, and the operator should be able to tell that somebody stored something
+   * strange here.
+   *
    * @param {{
    *   value: string | null
    * }} params - Parameters.
@@ -279,7 +315,35 @@ export default class AiRunOperatorReporter {
       return ABSENT_MARKER
     }
 
-    return String(value)
+    return [
+      ...String(value),
+    ]
+      .map(character =>
+        (this.isControlCharacter({
+          character,
+        })
+          ? CONTROL_CHARACTER_MARKER
+          : character)
+      )
+      .join('')
+  }
+
+  /**
+   * Check whether one character is one a terminal acts on rather than shows.
+   *
+   * @param {{
+   *   character: string
+   * }} params - Parameters.
+   * @returns {boolean} true: the terminal would act on it.
+   * @public
+   */
+  isControlCharacter ({
+    character,
+  }) {
+    const codePoint = character.codePointAt(0)
+
+    return codePoint < CONTROL_CHARACTER_CEILING_CODE_POINT
+      || codePoint === DELETE_CODE_POINT
   }
 
   /**

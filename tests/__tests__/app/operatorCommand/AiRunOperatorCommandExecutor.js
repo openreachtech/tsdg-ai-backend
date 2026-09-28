@@ -948,14 +948,27 @@ describe('AiRunOperatorCommandExecutor', () => {
 describe('AiRunOperatorCommandExecutor', () => {
   describe('#reportFailure()', () => {
     describe('should write the line that says a command could not answer', () => {
+      /*
+       * The failure's **name** is logged and its message is not, and the third case is why.
+       *
+       * A Sequelize `DatabaseError` is built from its driver's message, and the driver appends the
+       * failing SQL — into which the `where` value has already been escaped inline. So a logged
+       * message carries the run key or correlation id the operator typed into a file with no
+       * retention clock. The third case gives the error exactly that shape and asserts the whole
+       * logged object, so the parameter appearing anywhere in the line fails the comparison.
+       *
+       * The first two carry different names so that a method logging a constant, or reaching for
+       * the wrong error, cannot pass both.
+       */
       const cases = [
         {
+          label: 'a connection failure under the stalled command',
           input: {
             commandSuiteCtor: StalledAiRunOperatorCommandSuite,
-            error: new Error('the database would not open'),
+            error: new RangeError('the database would not open'),
           },
           expected: {
-            message: 'AiRunOperatorCommandExecutor#executeCommand() could not answer stalled: the database would not open',
+            message: 'AiRunOperatorCommandExecutor#executeCommand() could not answer stalled: RangeError',
             tags: [
               'AiRunOperatorCommand',
               'UnansweredCommand',
@@ -963,12 +976,27 @@ describe('AiRunOperatorCommandExecutor', () => {
           },
         },
         {
+          label: 'a read failure under the run command',
           input: {
             commandSuiteCtor: RunKeyAiRunOperatorCommandSuite,
-            error: new Error('the read timed out'),
+            error: new TypeError('the read timed out'),
           },
           expected: {
-            message: 'AiRunOperatorCommandExecutor#executeCommand() could not answer run: the read timed out',
+            message: 'AiRunOperatorCommandExecutor#executeCommand() could not answer run: TypeError',
+            tags: [
+              'AiRunOperatorCommand',
+              'UnansweredCommand',
+            ],
+          },
+        },
+        {
+          label: 'a driver message carrying the operator\'s own parameter',
+          input: {
+            commandSuiteCtor: RunKeyAiRunOperatorCommandSuite,
+            error: new Error('Unknown column\nsql: SELECT * FROM `ai_runs` WHERE `run_key` = \'run-key-10010004\''),
+          },
+          expected: {
+            message: 'AiRunOperatorCommandExecutor#executeCommand() could not answer run: Error',
             tags: [
               'AiRunOperatorCommand',
               'UnansweredCommand',
@@ -977,7 +1005,7 @@ describe('AiRunOperatorCommandExecutor', () => {
         },
       ]
 
-      test.each(cases)('commandSuiteCtor: $input.commandSuiteCtor.name', ({
+      test.each(cases)('label: $label', ({
         input,
         expected,
       }) => {

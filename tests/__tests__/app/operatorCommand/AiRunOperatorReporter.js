@@ -1277,6 +1277,66 @@ describe('AiRunOperatorReporter', () => {
 
 describe('AiRunOperatorReporter', () => {
   describe('#generateTextCell()', () => {
+    /*
+     * A correlation id and an external ref are a caller's own text, and the rule that admits them
+     * bounds their length and nothing else — so an escape sequence is storable. Printed raw, the
+     * terminal acts on it: `ESC [ 2 K` clears the line the operator is reading and `ESC [ 1 A`
+     * puts the next one over the top of it. This command is read exactly when the service will
+     * not answer and there is nowhere else to look, so a report the reported data can edit is
+     * worse than no report.
+     *
+     * The marker is asserted as visible rather than as stripped: an operator should be able to
+     * see that somebody stored something strange, which a silently shortened cell would hide.
+     */
+    describe('with a control character in the text', () => {
+      const cases = [
+        {
+          label: 'an erase-line and cursor-up sequence',
+          input: {
+            value: 'corr\u001b[2K\u001b[1Aerased',
+          },
+          expected: 'corr?[2K?[1Aerased',
+        },
+        {
+          label: 'a bare carriage return',
+          input: {
+            value: 'ext\rcarriage',
+          },
+          expected: 'ext?carriage',
+        },
+        {
+          label: 'a line break forging a second row',
+          input: {
+            value: 'first\nsecond',
+          },
+          expected: 'first?second',
+        },
+        {
+          label: 'a delete character',
+          input: {
+            value: 'ref\u007fgone',
+          },
+          expected: 'ref?gone',
+        },
+      ]
+
+      test.each(cases)('label: $label', ({
+        input,
+        expected,
+      }) => {
+        const reporter = AiRunOperatorReporter.create({
+          sink: {
+            write: () => true,
+          },
+        })
+
+        const received = reporter.generateTextCell(input)
+
+        expect(received)
+          .toEqual(expected)
+      })
+    })
+
     describe('with text to print', () => {
       const cases = [
         {

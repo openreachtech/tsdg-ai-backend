@@ -115,7 +115,7 @@ export default class BaseAiRunOperatorCommandSuite {
    *
    * Which of the reporter's two answers a command uses is the command's own fact, so it is stated
    * by the command rather than decided by a flag read above it. Nothing here writes to a terminal:
-   * the reporter owns every character that leaves this process, which is what keeps the fields
+   * the reporter owns every character this command itself writes, which is what keeps the fields
    * section 7 counts as content out of a scrollback that has no retention clock.
    *
    * @abstract

@@ -45,13 +45,23 @@ const COMMAND_ARGUMENT_START_INDEX = 2
  * it inside the method puts the activation strictly first, with no ordering left for a caller to
  * get wrong.
  *
- * **Nothing here prints.** `AiRunOperatorReporter` owns every character that reaches standard
- * output, so this class writes none: `console` is refused by this repository's lint, and a second
- * place that wrote to the terminal would be a second place to audit against section 16's rule
- * about what a scrollback may hold. What this class emits is an exit code, and — when something
- * escapes that no code covers, such as a database that will not open at all — whatever the runtime
- * prints for an uncaught error. That is the reporting mechanism `scripts/stopJobSchedulers.js`
- * already relies on, and it still ends the process non-zero.
+ * **Nothing here prints.** `AiRunOperatorReporter` owns every character this command itself writes,
+ * so this class writes none: `console` is refused by this repository's lint, and a second place
+ * that wrote to the terminal would be a second place to audit against section 16's rule about what
+ * a scrollback may hold. What this class emits is an exit code, and — when something escapes that
+ * no code covers, such as a database that will not open at all — whatever the runtime prints for
+ * an uncaught error. That is the reporting mechanism `scripts/stopJobSchedulers.js` already relies
+ * on, and it still ends the process non-zero.
+ *
+ * **"Every character this command writes" is narrower than "every character on standard output",
+ * and the difference is Sequelize.** `sequelize/config.cjs` sets `logging: false` for development
+ * only; `live`, `staging` and `production` leave the key unset, and Sequelize then defaults it to
+ * `console.log`. So in those environments each of the three reads echoes an `Executing (default):
+ * SELECT …` line, interleaved with the report. **The content rule still holds** — those statements
+ * select no column section 7 counts as content, and carry none in any condition; what is lost is
+ * the single place to audit, and a report clean enough to paste into a runbook. Fixing it belongs
+ * to that config rather than here, because `SequelizeActivator.createAsync()` accepts no logging
+ * option to pass.
  */
 export default class AiRunOperatorCommandLauncher {
   /**

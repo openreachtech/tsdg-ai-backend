@@ -102,8 +102,10 @@ const mentsuLogger = MentsuLogger.create({
  * **The row an operator reads is the row a client reads.** `AiRunPageResponseBuilder` builds it,
  * and this class does not assemble a field of it: a second row shaper would be a second answer to
  * "what does a run look like" and the two would drift. The field section 16 forbids travels in
- * that row and is dropped by the reporter, which owns every character that leaves this process —
- * this class prints nothing, so there is no second place to audit.
+ * that row and is dropped by the reporter, which owns every character this command itself writes —
+ * this class prints nothing, so there is no second place to audit. (Outside development Sequelize
+ * echoes each query to standard output as well; `AiRunOperatorCommandLauncher` records why, and
+ * those statements carry no content.)
  *
  * **One clock reading answers the whole command.** The instant is taken once and handed both to
  * the read and to every row built from it, so a run's elapsed time is measured against the same
@@ -439,8 +441,19 @@ export default class AiRunOperatorCommandExecutor {
   /**
    * Write the line that says a command could not answer.
    *
-   * The command word and the failure's own message, and no parameter the operator typed: a
+   * The command word and the failure's **name**, and no parameter the operator typed: a
    * correlation id or a run key in a log line is a caller's value written where nothing purges it.
+   *
+   * **The message is deliberately not logged, and the reason is that it carries the parameter by
+   * a route nothing here controls.** A Sequelize `DatabaseError` is constructed from its driver's
+   * message, and the driver builds that message by appending the failing SQL — into which the
+   * `where` value has already been escaped inline. So logging `error.message` would write the run
+   * key or the correlation id the operator typed into a file with no retention clock, while this
+   * very docblock said it did not. `BaseAiRunPurgeJobWorker` reached the same conclusion for the
+   * same reason and logs the name alone.
+   *
+   * What is given up is the driver's own wording; what is kept is which class of failure it was,
+   * which is what tells a nightly job from an outage.
    *
    * @param {{
    *   commandSuite: import('./BaseAiRunOperatorCommandSuite.js').default
@@ -455,7 +468,7 @@ export default class AiRunOperatorCommandExecutor {
   }) {
     const message = [
       `${this.Ctor.name}#executeCommand() could not answer`,
-      `${commandSuite.Ctor.commandName}: ${error.message}`,
+      `${commandSuite.Ctor.commandName}: ${error.name}`,
     ].join(' ')
 
     this.Ctor.mentsuLogger.error({
