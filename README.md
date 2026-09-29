@@ -67,6 +67,9 @@ In production the servers run under PM2, whose configuration is `pm2.config.cjs`
 | command | what it does |
 | :-- | :-- |
 | `npm run dev` | run `server/` under nodemon with `NODE_ENV=development` |
+| `npm run schedulers:start` | write this repository's repeatable jobs into Redis (`scripts/startJobSchedulers.js`) |
+| `npm run schedulers:stop` | remove them from Redis again (`scripts/stopJobSchedulers.js`) |
+| `node scripts/readAiRuns.js <command> <parameter>` | read AI runs straight from the database, while the API is not serving |
 | `npm test` | rebuild the database, seed it, and run Jest (`test.sh`) |
 | `npm run test:live` | run Jest against the `live` environment, leaving the database alone (`test-live.sh`) |
 | `npm run lint` | ESLint over the repository (alias: `npm run l`) |
@@ -84,6 +87,41 @@ npm test -- --empty
 ```
 
 `sequelize/seeders/master/` holds the seeds meant for a real deployment. No script points at it — it is seeded deliberately, by hand.
+
+`npm run schedulers:start` is a deployment step rather than a process, which is why PM2 does not run it. The retention purges are started by a clock instead of by a request, and a repeatable job lives in Redis rather than in either of the two processes — so the job daemon reports itself listening on both purge queues whether or not anything will ever post to them. Nothing does until this has been run once against the same Redis. In production the daemon also asks Redis which schedules it actually holds when it starts, and logs the id of any declared one that is missing — the retention horizons are a promise about personal data, and a schedule that was never registered otherwise looks exactly like one that is working. Run it at deployment, and again whenever a scheduler's cron expression changes; it is an upsert keyed by the scheduler id, so re-running is safe. Renaming or retiring a scheduler needs `npm run schedulers:stop` **first**, while the old id is still in the source, otherwise the old schedule keeps firing under a name nothing knows.
+
+Neither script hardcodes an environment, because the Redis they write to is the deployment's. `NODE_ENV` therefore comes from the caller, and an unset one stops the script before it connects:
+
+```sh
+NODE_ENV=production npm run schedulers:start
+```
+
+### Reading AI runs from the command line
+
+`scripts/readAiRuns.js` answers four questions about AI runs, and changes nothing. It is the one way to read them that does not go through the API.
+
+```sh
+NODE_ENV=production node scripts/readAiRuns.js stalled 300
+NODE_ENV=production node scripts/readAiRuns.js failed-since 2026-09-27T00:00:00.000Z
+NODE_ENV=production node scripts/readAiRuns.js run <run key>
+NODE_ENV=production node scripts/readAiRuns.js correlation <correlation id>
+```
+
+`stalled` takes a number of seconds and answers with the runs that have been running longer than that. `failed-since` takes an instant and answers with the runs that failed after it. `run` takes a run key and answers with that one run and its steps in order. `correlation` takes a correlation id and answers with every run under it. All four read across every client, and none of them changes a run.
+
+It opens the database directly and imports nothing from `server/`, so it answers **while the API will not boot** — which is the situation it exists for. `NODE_ENV` comes from the caller for the reason the scheduler scripts give above: the database it reads is the deployment's, and an unset one stops the command before it connects rather than letting it read a developer's SQLite file and report that nothing is stalled.
+
+It ends under one of three codes, so a runbook step or a scheduled task can tell the cases apart without reading the output at all:
+
+| code | what it means |
+| :-- | :-- |
+| `0` | it answered — including the answer that nothing matched, which is a true answer |
+| `1` | it could not answer: the database would not open, or the read failed |
+| `2` | the arguments were not one of the four commands |
+
+Run it with `node` rather than through `npm run`. npm prints its own error block on any non-zero exit, and here `1` and `2` are both ordinary outcomes rather than faults — so npm would bury a real answer under `npm ERR!` lines and give a scheduled task a second thing to parse.
+
+It never prints a request body, a result body, raw model output, or the subject label. A terminal scrollback and a scheduled task's log have no retention clock; the database gives those fields a thirty-day one.
 
 ### Where the application code goes
 

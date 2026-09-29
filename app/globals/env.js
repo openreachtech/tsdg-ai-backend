@@ -14,16 +14,28 @@ export default /** @type {*} */ (
 /**
  * @typedef {import('@openreachtech/renchan-env').EnvironmentFacade.EnvironmentFacadeInterface & {
  *   NODE_ENV: string
+ *   PORT: string
  *   DATABASE_NAME: string
  *   DATABASE_USERNAME: string
  *   DATABASE_PASSWORD: string
  *   DATABASE_DIALECT: string
  *   DATABASE_HOST: string
  *   DATABASE_PORT: string
+ *   REDIS_HOST: string
+ *   REDIS_PORT: string
+ *   REDIS_PASSWORD: string
+ *   MEDIA_FETCH_ALLOWED_HOSTS: string
+ *   REDIS_TLS: string
  *   AUTH_REFRESH_TOKEN_TTL_DAYS: string
  *   AUTH_COOKIE_SECURE: string
  *   AUTH_COOKIE_SAME_SITE: string
  *   AUTH_COOKIE_PATH: string
  *   AUTH_COOKIE_DOMAIN: string
+ *   DEVELOPMENT_ROTATING_API_CLIENT_SECRET: string
+ *   DEVELOPMENT_ROTATING_API_CLIENT_PREVIOUS_SECRET: string
+ *   DEVELOPMENT_INACTIVE_API_CLIENT_SECRET: string
+ *   API_CLIENT_SECRET_ENCRYPTION_KEY: string
+ *   DEVELOPMENT_API_CLIENT_SECRET: string
+ *   GEMINI_API_KEY: string
  * }} EnvType
  */

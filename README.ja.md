@@ -67,6 +67,9 @@ curl -X POST http://127.0.0.1:3900/graphql-customer \
 | コマンド | 内容 |
 | :-- | :-- |
 | `npm run dev` | `NODE_ENV=development` で `server/` を nodemon 実行する |
+| `npm run schedulers:start` | このリポジトリの繰り返しジョブを Redis に登録する（`scripts/startJobSchedulers.js`） |
+| `npm run schedulers:stop` | 登録した繰り返しジョブを Redis から削除する（`scripts/stopJobSchedulers.js`） |
+| `node scripts/readAiRuns.js <コマンド> <パラメータ>` | API が応答していない状態でも、データベースから直接 AI run を読む |
 | `npm test` | データベースを作り直し、シードを投入して Jest を実行する（`test.sh`） |
 | `npm run test:live` | データベースには手を付けず、`live` 環境に対して Jest を実行する（`test-live.sh`） |
 | `npm run lint` | リポジトリ全体に ESLint をかける（別名: `npm run l`） |
@@ -84,6 +87,41 @@ npm test -- --empty
 ```
 
 `sequelize/seeders/master/` には、実際のデプロイ向けのシードが入ります。どのスクリプトからも参照されていません。意図的に、手で投入するものです。
+
+`npm run schedulers:start` は常駐プロセスではなくデプロイ手順です。PM2 が動かさないのはそのためです。リテンションの purge はリクエストではなく時計から始まり、繰り返しジョブは二つのプロセスのどちらでもなく Redis に存在します。つまり job daemon は、誰も投入しないキューであっても両方の purge キューを待ち受けていると報告します。同じ Redis に対してこのコマンドを一度実行するまで、そこには何も投入されません。production では、job daemon は起動時に Redis が実際に保持しているスケジュールを問い合わせ、宣言されているのに登録されていないものがあれば、その id をログに出します。リテンションの保持期間は個人データについての約束であり、一度も登録されなかったスケジュールは、正しく動いているスケジュールと見分けがつかないからです。デプロイ時に実行し、スケジューラの cron 式を変えたときにも実行してください。scheduler id をキーとした upsert なので、再実行しても安全です。スケジューラの改名や廃止のときは、古い id がまだソースに残っているうちに **先に** `npm run schedulers:stop` を実行してください。さもないと、古いスケジュールが誰も知らない名前で動き続けます。
+
+どちらのスクリプトも環境を決め打ちしません。書き込む先の Redis はデプロイ先のものだからです。したがって `NODE_ENV` は呼び出す側が与えます。未設定の場合、スクリプトは接続する前に停止します。
+
+```sh
+NODE_ENV=production npm run schedulers:start
+```
+
+### コマンドラインから AI run を読む
+
+`scripts/readAiRuns.js` は AI run についての四つの問いに答えます。何も変更しません。API を経由せずに AI run を読む唯一の方法です。
+
+```sh
+NODE_ENV=production node scripts/readAiRuns.js stalled 300
+NODE_ENV=production node scripts/readAiRuns.js failed-since 2026-09-27T00:00:00.000Z
+NODE_ENV=production node scripts/readAiRuns.js run <run key>
+NODE_ENV=production node scripts/readAiRuns.js correlation <correlation id>
+```
+
+`stalled` は秒数を取り、その秒数より長く実行され続けている run を答えます。`failed-since` は時刻を取り、その時刻以降に失敗した run を答えます。`run` は run key を取り、その run ひとつを、ステップを順番に付けて答えます。`correlation` は correlation id を取り、その id に属する全ての run を答えます。四つとも全てのクライアントを横断して読み、どれも run を変更しません。
+
+このコマンドはデータベースを直接開き、`server/` からは何も import しません。したがって **API が起動しない状態でも答えます**。そのための機能です。`NODE_ENV` は呼び出す側が与えます。理由は上のスケジューラのスクリプトと同じで、読む先のデータベースはデプロイ先のものだからです。未設定の場合、コマンドは接続する前に停止します。開発者の SQLite ファイルを読んで「stalled な run は無い」と報告してしまうより、その方が正しい失敗です。
+
+終了コードは三つのいずれかです。これにより、runbook の手順やスケジュールされたタスクは、出力を読まずに状況を区別できます。
+
+| コード | 意味 |
+| :-- | :-- |
+| `0` | 答えた。該当する run が無かったという答えも含む。これも正しい答えである |
+| `1` | 答えられなかった。データベースが開かなかったか、読み取りが失敗した |
+| `2` | 引数が四つのコマンドのいずれでもなかった |
+
+`npm run` ではなく `node` で実行してください。npm は終了コードが 0 以外のとき独自のエラーブロックを出力しますが、ここでは `1` と `2` は異常ではなく通常の結果です。npm 経由では、本来の答えが `npm ERR!` の行に埋もれ、スケジュールされたタスクに解析対象がもう一つ増えてしまいます。
+
+request body、result body、モデルの生出力、subject label は一切出力しません。ターミナルのスクロールバックやスケジュールされたタスクのログには保持期限がありませんが、データベースはそれらの項目に 30 日の期限を与えているからです。
 
 ### アプリケーションのコードを置く場所
 

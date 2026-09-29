@@ -1,7 +1,7 @@
 {
-  "name": "TODO: Fulfill here ❌️",
+  "name": "tsdg-ai-backend",
   "version": "0.0.0",
-  "description": "TODO: Fulfill here",
+  "description": "AI service reached over REST by a partner backend. Each request becomes an asynchronous run whose result is posted back on a signed callback.",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -13,6 +13,8 @@
     "db:refresh": "export NODE_ENV=development; npm run db:teardown; npm run db:setup; npm run db:seed:master; npm run db:seed:dev;",
     "r": "npm run db:refresh",
     "dev": "export NODE_ENV=development; nodemon server",
+    "schedulers:start": "node scripts/startJobSchedulers.js",
+    "schedulers:stop": "node scripts/stopJobSchedulers.js",
     "jest": "jest --detectOpenHandles --passWithNoTests",
     "l": "npm run lint",
     "lint": "eslint .",
@@ -36,11 +38,14 @@
     "node": ">=22.18.0"
   },
   "dependencies": {
+    "@google/genai": "^2.23.0",
     "@graphql-tools/schema": "^10.1.0",
     "@graphql-tools/utils": "^10.11.0",
     "@openreachtech/mentsu-logger": "^2.0.3",
+    "@openreachtech/mentsu-schema": "^1.2.2",
     "@openreachtech/renchan": "^2.9.3",
     "@openreachtech/renchan-env": "^1.0.6",
+    "@openreachtech/renchan-job-bullmq": "^1.1.3",
     "@openreachtech/renchan-sequelize": "^2.3.0",
     "@steweucen/fertile-forest-sequelize": "^0.1.3",
     "cookie": "^0.7.2",
