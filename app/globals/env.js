@@ -14,6 +14,7 @@ export default /** @type {*} */ (
 /**
  * @typedef {import('@openreachtech/renchan-env').EnvironmentFacade.EnvironmentFacadeInterface & {
  *   NODE_ENV: string
+ *   PORT: string
  *   DATABASE_NAME: string
  *   DATABASE_USERNAME: string
  *   DATABASE_PASSWORD: string

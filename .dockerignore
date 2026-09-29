@@ -1,0 +1,31 @@
+# Keep out of the image what must never be in it, and what only makes it larger.
+
+# Every env file. The repository's .env.development carries working values for a local
+# stack, and this repository is public, so they must not travel into a production image.
+# The Dockerfile writes the empty .env the framework requires instead.
+.env
+.env.*
+
+.git
+.github
+node_modules
+
+# Tests, fixtures and the local database never run in the image.
+tests
+sequelize/storage
+coverage
+
+logs
+.worktrees
+.hora
+
+.vscode
+.idea
+
+# Developer tooling that has no part in a running container.
+eslint.config.js
+jest.config.js
+pm2.config.cjs
+test.sh
+test-live.sh
+docker-compose.development.yml
