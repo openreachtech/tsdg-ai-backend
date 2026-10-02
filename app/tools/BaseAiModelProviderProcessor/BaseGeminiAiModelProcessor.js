@@ -11,7 +11,7 @@ import {
   env,
 } from '../../globals/_.js'
 
-const MISSING_API_KEY_MESSAGE = 'refused to call Gemini with no API key'
+const MISSING_CREDENTIAL_MESSAGE = 'refused to call Gemini with neither a Vertex AI project nor an API key'
 const UNKNOWN_AI_MODEL_MESSAGE = 'refused a model name the catalog does not carry'
 const FAILED_UPLOAD_MESSAGE = 'failed to hand a file to Gemini'
 const FAILED_DELETE_MESSAGE = 'could not establish that Gemini no longer holds a file'
@@ -315,20 +315,73 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
   /**
    * Create the client this call speaks to Google through.
    *
-   * The key is read here and nowhere else, which is the moment a request has already resolved to
-   * this driver by name. A missing key raises rather than calling with none: an unauthenticated
-   * call would come back as an ordinary provider failure, and an operator reading that would go
-   * looking at Google for a fault that is in this machine's configuration.
+   * **Two ways in, and the configuration decides which — never a flag.** A deployment that states
+   * a Vertex AI project and region is calling as itself, through the identity the platform already
+   * gave the process, and holds no key at all. A deployment that states neither falls back to an
+   * API key. Preferring Vertex where it is configured means the safer arrangement is the one that
+   * wins by default, and the fallback is what has to be asked for.
    *
-   * @returns {GeminiApiClient} The client.
-   * @throws {Error} When no key is configured.
+   * **Nothing is read before a request has resolved to this driver by name.** A default
+   * installation answers on the stub, reaches none of this, and reads neither a project nor a key.
+   *
+   * **Configured with neither, this raises rather than calling with nothing.** An unauthenticated
+   * call comes back as an ordinary provider failure, and an operator reading that would go looking
+   * at Google for a fault that is in this machine's configuration.
+   *
+   * @returns {Promise<GeminiApiClient>} The client.
+   * @throws {Error} When neither a Vertex AI project nor an API key is configured.
    * @public
    */
   async createGeminiApiClient () {
+    const vertexAiClient = await this.createVertexAiGeminiApiClient()
+
+    if (vertexAiClient) {
+      return vertexAiClient
+    }
+
+    return this.createApiKeyGeminiApiClient()
+  }
+
+  /**
+   * Create the client that authenticates as this process, or answer null when Vertex is not
+   * configured.
+   *
+   * **Both values are required together**, because one without the other cannot address anything:
+   * the SDK builds `https://<location>-aiplatform.googleapis.com` and asks it about a project. A
+   * deployment that set only one of them has a half-finished configuration, and falling back to a
+   * key would hide that rather than report it.
+   *
+   * @returns {Promise<GeminiApiClient | null>} The client, or null when Vertex is not configured.
+   * @public
+   */
+  async createVertexAiGeminiApiClient () {
+    const projectId = this.extractVertexAiProjectId()
+    const location = this.extractVertexAiLocation()
+
+    if (!projectId || !location) {
+      return null
+    }
+
+    const geminiApiClientCtor = await this.resolveGeminiApiClientCtor()
+
+    return geminiApiClientCtor.createWithVertexAi({
+      projectId,
+      location,
+    })
+  }
+
+  /**
+   * Create the client that authenticates with a key.
+   *
+   * @returns {Promise<GeminiApiClient>} The client.
+   * @throws {Error} When no key is configured.
+   * @public
+   */
+  async createApiKeyGeminiApiClient () {
     const apiKey = this.extractApiKey()
 
     if (!apiKey) {
-      throw new Error(`${this.Ctor.name}#createGeminiApiClient() ${MISSING_API_KEY_MESSAGE}: model ${this.aiModel}`)
+      throw new Error(`${this.Ctor.name}#createGeminiApiClient() ${MISSING_CREDENTIAL_MESSAGE}: model ${this.aiModel}`)
     }
 
     const geminiApiClientCtor = await this.resolveGeminiApiClientCtor()
@@ -372,6 +425,28 @@ export default class BaseGeminiAiModelProcessor extends BaseAiModelProcessor {
    */
   extractApiKey () {
     return this.Ctor.environment.GEMINI_API_KEY
+      ?? null
+  }
+
+  /**
+   * Extract the Vertex AI project from the environment.
+   *
+   * @returns {string | null} The project id, or null when none is configured.
+   * @public
+   */
+  extractVertexAiProjectId () {
+    return this.Ctor.environment.VERTEX_AI_PROJECT_ID
+      ?? null
+  }
+
+  /**
+   * Extract the Vertex AI region from the environment.
+   *
+   * @returns {string | null} The region, or null when none is configured.
+   * @public
+   */
+  extractVertexAiLocation () {
+    return this.Ctor.environment.VERTEX_AI_LOCATION
       ?? null
   }
 

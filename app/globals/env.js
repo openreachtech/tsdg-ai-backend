@@ -37,5 +37,7 @@ export default /** @type {*} */ (
  *   API_CLIENT_SECRET_ENCRYPTION_KEY: string
  *   DEVELOPMENT_API_CLIENT_SECRET: string
  *   GEMINI_API_KEY: string
+ *   VERTEX_AI_PROJECT_ID: string
+ *   VERTEX_AI_LOCATION: string
  * }} EnvType
  */
