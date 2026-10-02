@@ -329,13 +329,13 @@ describe('BaseGeminiAiModelProcessor', () => {
           override: {
             aiModel: 'gemini-2-5-flash',
           },
-          expected: 'refused to call Gemini with no API key: model gemini-2-5-flash',
+          expected: 'refused to call Gemini with neither a Vertex AI project nor an API key: model gemini-2-5-flash',
         },
         {
           override: {
             aiModel: 'gemini-2-5-pro',
           },
-          expected: 'refused to call Gemini with no API key: model gemini-2-5-pro',
+          expected: 'refused to call Gemini with neither a Vertex AI project nor an API key: model gemini-2-5-pro',
         },
       ]
 
@@ -1874,6 +1874,282 @@ describe('BaseGeminiAiModelProcessor', () => {
         await expect(received)
           .rejects
           .toThrow(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#extractVertexAiProjectId()', () => {
+    describe('should answer null where the environment declares none', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_LOCATION: 'asia-northeast1',
+          },
+        },
+        {
+          mockEnvironment: {
+            GEMINI_API_KEY: 'not-a-key-0101',
+          },
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', ({
+        mockEnvironment,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        const received = processor.extractVertexAiProjectId()
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#extractVertexAiProjectId()', () => {
+    describe('should answer the project the environment declares', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0101',
+          },
+          expected: 'example-project-0101',
+        },
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0102',
+          },
+          expected: 'example-project-0102',
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', ({
+        mockEnvironment,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        const received = processor.extractVertexAiProjectId()
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#extractVertexAiLocation()', () => {
+    describe('should answer null where the environment declares none', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0103',
+          },
+        },
+        {
+          mockEnvironment: {
+            GEMINI_API_KEY: 'not-a-key-0104',
+          },
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', ({
+        mockEnvironment,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        const received = processor.extractVertexAiLocation()
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#extractVertexAiLocation()', () => {
+    describe('should answer the region the environment declares', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_LOCATION: 'asia-northeast1',
+          },
+          expected: 'asia-northeast1',
+        },
+        {
+          mockEnvironment: {
+            VERTEX_AI_LOCATION: 'us-central1',
+          },
+          expected: 'us-central1',
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', ({
+        mockEnvironment,
+        expected,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create()
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        const received = processor.extractVertexAiLocation()
+
+        expect(received)
+          .toBe(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#createVertexAiGeminiApiClient()', () => {
+    /*
+     * One of the two alone addresses nothing: the SDK builds a host out of the location and asks it
+     * about the project. A half-finished configuration answers null, so the caller falls back to a
+     * key and the deployment finds out which arrangement it actually got.
+     */
+    describe('should answer null where Vertex is half configured or not configured', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0105',
+          },
+        },
+        {
+          mockEnvironment: {
+            VERTEX_AI_LOCATION: 'asia-northeast1',
+          },
+        },
+        {
+          mockEnvironment: {
+            GEMINI_API_KEY: 'not-a-key-0106',
+          },
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', async ({
+        mockEnvironment,
+      }) => {
+        const processor = BaseGeminiAiModelProcessor.create({
+          geminiApiClientCtor: {
+            createWithVertexAi: () => 'must not be reached',
+          },
+        })
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        const received = await processor.createVertexAiGeminiApiClient()
+
+        expect(received)
+          .toBeNull()
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#createVertexAiGeminiApiClient()', () => {
+    describe('should hand the client class both values', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0107',
+            VERTEX_AI_LOCATION: 'asia-northeast1',
+          },
+          expected: {
+            projectId: 'example-project-0107',
+            location: 'asia-northeast1',
+          },
+        },
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0108',
+            VERTEX_AI_LOCATION: 'us-central1',
+          },
+          expected: {
+            projectId: 'example-project-0108',
+            location: 'us-central1',
+          },
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', async ({
+        mockEnvironment,
+        expected,
+      }) => {
+        const createWithVertexAiTally = jest.fn()
+        const processor = BaseGeminiAiModelProcessor.create({
+          geminiApiClientCtor: {
+            createWithVertexAi: createWithVertexAiTally,
+          },
+        })
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        await processor.createVertexAiGeminiApiClient()
+
+        expect(createWithVertexAiTally)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('BaseGeminiAiModelProcessor', () => {
+  describe('#createGeminiApiClient()', () => {
+    /*
+     * Configured both ways, the arrangement that holds no secret is the one that wins. A key left
+     * behind in an environment must not quietly take precedence over an identity the platform
+     * already granted.
+     */
+    describe('should prefer Vertex over a key when both are configured', () => {
+      const cases = [
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0109',
+            VERTEX_AI_LOCATION: 'asia-northeast1',
+            GEMINI_API_KEY: 'not-a-key-0109',
+          },
+        },
+        {
+          mockEnvironment: {
+            VERTEX_AI_PROJECT_ID: 'example-project-0110',
+            VERTEX_AI_LOCATION: 'us-central1',
+            GEMINI_API_KEY: 'not-a-key-0110',
+          },
+        },
+      ]
+
+      test.each(cases)('mockEnvironment: $mockEnvironment', async ({
+        mockEnvironment,
+      }) => {
+        const createWithApiKeyTally = jest.fn()
+        const processor = BaseGeminiAiModelProcessor.create({
+          geminiApiClientCtor: {
+            createWithVertexAi: () => 'the vertex client',
+            createWithApiKey: createWithApiKeyTally,
+          },
+        })
+        jest.spyOn(BaseGeminiAiModelProcessor, 'environment', 'get')
+          .mockReturnValue(mockEnvironment)
+
+        await processor.createGeminiApiClient()
+
+        expect(createWithApiKeyTally)
+          .not
+          .toHaveBeenCalled()
       })
     })
   })
