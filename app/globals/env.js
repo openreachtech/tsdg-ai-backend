@@ -20,6 +20,8 @@ export default /** @type {*} */ (
  *   DATABASE_PASSWORD: string
  *   DATABASE_DIALECT: string
  *   DATABASE_HOST: string
+ *   DATABASE_SSL: string
+ *   DATABASE_SSL_CA: string
  *   DATABASE_PORT: string
  *   REDIS_HOST: string
  *   REDIS_PORT: string
