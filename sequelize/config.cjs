@@ -2,6 +2,8 @@
 
 const env = require('../app/globals/env.cjs')
 
+const DatabaseDialectOptionsBuilder = require('./tools/DatabaseDialectOptionsBuilder.cjs')
+
 /*
  * What every SQL connection that is not the local SQLite file is given, and why it exists.
  *
@@ -26,6 +28,27 @@ const env = require('../app/globals/env.cjs')
 const SQL_DIALECT_OPTION_HASH = {
   logParam: false,
 }
+
+/*
+ * How the driver reaches a database whose address comes from the environment - `production`,
+ * the one profile below that reads one.
+ *
+ * **Cloud SQL on Cloud Run is a unix socket, not a host, and handing it over as a host does not
+ * connect.** The platform mounts it at `/cloudsql/<connection name>` and that path arrives in
+ * `DATABASE_HOST` where a host name would. No host name begins with `/`, so one that does is a
+ * socket path and belongs in `socketPath` - the option both `mysql2` and `mariadb` read.
+ *
+ * `live` and `staging` get none of it on purpose: their connection is written in this file, to a
+ * loopback database the suite stands up or to a host that resolves nowhere, so there is no
+ * address for an environment key to change and no transport for TLS to protect.
+ */
+const environmentDialectOptionsBuilder = DatabaseDialectOptionsBuilder.create({
+  databaseHost: env.DATABASE_HOST,
+  databaseSsl: env.DATABASE_SSL,
+  databaseSslCa: env.DATABASE_SSL_CA,
+})
+
+const environmentDialectOptions = environmentDialectOptionsBuilder.buildDialectOptions()
 
 module.exports = {
   development: {
@@ -65,6 +88,9 @@ module.exports = {
     dialect: env.DATABASE_DIALECT,
     host: env.DATABASE_HOST,
     port: env.DATABASE_PORT,
-    dialectOptions: SQL_DIALECT_OPTION_HASH,
+    dialectOptions: {
+      ...SQL_DIALECT_OPTION_HASH,
+      ...environmentDialectOptions,
+    },
   },
 }
