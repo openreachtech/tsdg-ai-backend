@@ -1029,3 +1029,121 @@ describe('GeminiApiClient', () => {
     })
   })
 })
+
+describe('GeminiApiClient', () => {
+  describe('.createGoogleGenAiOnVertexAi()', () => {
+    /*
+     * `vertexai` and `project` are the vendor's own option names. What this pins is that the SDK is
+     * built in Vertex mode and given both values - a client built without `vertexai` would quietly
+     * go on expecting a key.
+     */
+    describe('should build the SDK in Vertex mode with both values', () => {
+      const cases = [
+        {
+          params: {
+            projectId: 'example-project-0201',
+            location: 'asia-northeast1',
+          },
+          expected: {
+            vertexai: true,
+            project: 'example-project-0201',
+            location: 'asia-northeast1',
+          },
+        },
+        {
+          params: {
+            projectId: 'example-project-0202',
+            location: 'us-central1',
+          },
+          expected: {
+            vertexai: true,
+            project: 'example-project-0202',
+            location: 'us-central1',
+          },
+        },
+      ]
+
+      test.each(cases)('projectId: $params.projectId', ({
+        params,
+        expected,
+      }) => {
+        const googleGenAiTally = jest.fn()
+        jest.spyOn(GeminiApiClient, 'GoogleGenAiCtor', 'get')
+          .mockReturnValue(/** @type {*} */ (googleGenAiTally))
+
+        GeminiApiClient.createGoogleGenAiOnVertexAi(params)
+
+        expect(googleGenAiTally)
+          .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('GeminiApiClient', () => {
+  describe('.createWithVertexAi()', () => {
+    describe('should be instance of own class', () => {
+      const cases = [
+        {
+          params: {
+            projectId: 'example-project-0203',
+            location: 'asia-northeast1',
+          },
+        },
+        {
+          params: {
+            projectId: 'example-project-0204',
+            location: 'us-central1',
+          },
+        },
+      ]
+
+      test.each(cases)('projectId: $params.projectId', ({
+        params,
+      }) => {
+        jest.spyOn(GeminiApiClient, 'GoogleGenAiCtor', 'get')
+          .mockReturnValue(/** @type {*} */ (jest.fn()))
+
+        const received = GeminiApiClient.createWithVertexAi(params)
+
+        expect(received)
+          .toBeInstanceOf(GeminiApiClient)
+      })
+    })
+  })
+})
+
+describe('GeminiApiClient', () => {
+  describe('.createWithVertexAi()', () => {
+    describe('should carry the Vertex SDK instance it built', () => {
+      const cases = [
+        {
+          params: {
+            projectId: 'example-project-0205',
+            location: 'asia-northeast1',
+          },
+        },
+        {
+          params: {
+            projectId: 'example-project-0206',
+            location: 'us-central1',
+          },
+        },
+      ]
+
+      test.each(cases)('projectId: $params.projectId', ({
+        params,
+      }) => {
+        const tally = {}
+
+        jest.spyOn(GeminiApiClient, 'createGoogleGenAiOnVertexAi')
+          .mockReturnValue(/** @type {*} */ (tally))
+
+        const received = GeminiApiClient.createWithVertexAi(params)
+
+        expect(received.geminiClient)
+          .toBe(tally) // same reference
+      })
+    })
+  })
+})

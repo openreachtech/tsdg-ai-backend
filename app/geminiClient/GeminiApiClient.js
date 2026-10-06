@@ -77,6 +77,42 @@ export default class GeminiApiClient {
   }
 
   /**
+   * Factory method building the vendor SDK instance against Vertex AI.
+   *
+   * **The difference from the key factory is that there is no secret.** Vertex authenticates the
+   * calling process by its own Google Cloud identity, so the deployment holds no key to store, to
+   * rotate, or to leak - and a dump of every secret this service owns hands nobody the ability to
+   * call a model. What takes the key's place is a project and a region, neither of which is
+   * sensitive.
+   *
+   * **The location has to be a region, and `global` will not do.** The SDK addresses
+   * `https://<location>-aiplatform.googleapis.com`, so a model served only globally is not
+   * reachable under any location string.
+   *
+   * @template {X extends typeof GeminiApiClient ? X : never} T, X
+   * @param {{
+   *   projectId: string
+   *   location: string
+   * }} params - Parameters for the factory method.
+   * @returns {InstanceType<T>} Instance of this class.
+   * @this {T}
+   * @public
+   */
+  static createWithVertexAi ({
+    projectId,
+    location,
+  }) {
+    const geminiClient = this.createGoogleGenAiOnVertexAi({
+      projectId,
+      location,
+    })
+
+    return this.create({
+      geminiClient,
+    })
+  }
+
+  /**
    * get: the vendor SDK class, reached through a getter so a test may stand in for it.
    *
    * @returns {typeof GoogleGenAI} The class.
@@ -98,6 +134,30 @@ export default class GeminiApiClient {
   }) {
     return new this.GoogleGenAiCtor({
       apiKey,
+    })
+  }
+
+  /**
+   * Create the vendor SDK instance bound to Vertex AI.
+   *
+   * `vertexai` and `project` are the vendor's own option names and are written as the vendor
+   * spells them; this repository's naming rules govern the names it chooses, not the ones a
+   * library already fixed.
+   *
+   * @param {{
+   *   projectId: string
+   *   location: string
+   * }} params - Parameters.
+   * @returns {GoogleGenAI} The SDK instance.
+   */
+  static createGoogleGenAiOnVertexAi ({
+    projectId,
+    location,
+  }) {
+    return new this.GoogleGenAiCtor({
+      vertexai: true,
+      project: projectId,
+      location,
     })
   }
 
