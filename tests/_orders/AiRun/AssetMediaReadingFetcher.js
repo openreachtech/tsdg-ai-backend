@@ -261,6 +261,7 @@ describe('AssetMediaReadingFetcher', () => {
           aiAgent: params.fetchParams.aiAgent,
           composedPrompt: params.fetchParams.composedPrompt,
           attachedFiles: params.fetchParams.attachedFiles,
+          readableMediaKeys: [],
           signal: AbortSignal.timeout(60000),
         })
 
@@ -375,6 +376,7 @@ describe('AssetMediaReadingFetcher', () => {
           aiAgent: params.fetchParams.aiAgent,
           composedPrompt: params.fetchParams.composedPrompt,
           attachedFiles: params.fetchParams.attachedFiles,
+          readableMediaKeys: [],
           signal: AbortSignal.abort(),
         })
 
@@ -392,10 +394,13 @@ describe('AssetMediaReadingFetcher', () => {
   describe('#fetchAssetMediaReadings()', () => {
     /*
      * A reading whose call failed contributes nothing and is still recorded: the call was made and
-     * the tokens were spent, so a run billed by its calls must see it. `totalReadingCount` still
-     * answers three, which is what stops the one surviving reading from looking unanimous.
+     * the tokens were spent, so a run billed by its calls must see it.
+     *
+     * A run in which no call answered is refused. This case used to expect `readings: []` back,
+     * which pinned the defect it now guards against: every failed call was read downstream as a
+     * photograph with nothing in it, and the run was answered succeeded with no fields.
      */
-    describe('should record a reading whose call failed and carry none of it forward', () => {
+    describe('should record the call that failed and then refuse a run no call answered', () => {
       const cases = [
         {
           factoryParams: {
@@ -438,10 +443,7 @@ describe('AssetMediaReadingFetcher', () => {
               attachedFiles: [],
             },
           },
-          expected: {
-            readings: [],
-            totalReadingCount: 1,
-          },
+          expected: 'every call to the model failed: AiRunId 10610964',
         },
       ]
 
@@ -470,18 +472,20 @@ describe('AssetMediaReadingFetcher', () => {
         }
         const saveAiModelCallSpy = jest.spyOn(fetcher.aiModelCallRecorder, 'saveAiModelCall')
 
-        const actual = await fetcher.fetchAssetMediaReadings({
+        const actual = () => fetcher.fetchAssetMediaReadings({
           aiRunId: params.fetchParams.aiRunId,
           aiModelId: params.fetchParams.aiModelId,
           aiModelProcessor,
           aiAgent: params.fetchParams.aiAgent,
           composedPrompt: params.fetchParams.composedPrompt,
           attachedFiles: params.fetchParams.attachedFiles,
+          readableMediaKeys: [],
           signal: AbortSignal.timeout(60000),
         })
 
-        expect(actual)
-          .toEqual(expected)
+        await expect(actual)
+          .rejects
+          .toThrow(expected)
         expect(saveAiModelCallSpy)
           .toHaveBeenCalledWith(expect.objectContaining({
             aiRunId: 10610964,
@@ -1058,6 +1062,7 @@ describe('AssetMediaReadingFetcher', () => {
           aiAgent: params.fetchParams.aiAgent,
           composedPrompt: params.fetchParams.composedPrompt,
           attachedFiles: params.fetchParams.attachedFiles,
+          readableMediaKeys: [],
           signal: aiRunWorkTerminator.signal,
         })
 
@@ -1248,6 +1253,7 @@ describe('AssetMediaReadingFetcher', () => {
           aiAgent: input.fetchParams.aiAgent,
           composedPrompt: input.fetchParams.composedPrompt,
           attachedFiles: input.fetchParams.attachedFiles,
+          readableMediaKeys: [],
           signal: aiRunWorkTerminator.signal,
         })
 
@@ -1377,6 +1383,7 @@ describe('AssetMediaReadingFetcher', () => {
           aiAgent: input.fetchParams.aiAgent,
           composedPrompt: input.fetchParams.composedPrompt,
           attachedFiles: input.fetchParams.attachedFiles,
+          readableMediaKeys: [],
           signal: aiRunWorkTerminator.signal,
         })
 
