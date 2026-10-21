@@ -690,6 +690,21 @@ describe('AssetMediaReadingFetcher', () => {
                 fileType: 'image/png',
               },
             ],
+            documents: [
+              {
+                fieldSchema: [
+                  {
+                    path: 'brand',
+                  },
+                ],
+                photos: [
+                  {
+                    mediaKey: 'media-key-10640001',
+                    attachedAs: 1,
+                  },
+                ],
+              },
+            ],
           },
           tally: new AbortController().signal,
         },
@@ -706,6 +721,12 @@ describe('AssetMediaReadingFetcher', () => {
               name: 'record_field_readings_second',
             },
             attachedFiles: [],
+            documents: [
+              {
+                fieldSchema: [],
+                photos: [],
+              },
+            ],
           },
           tally: AbortSignal.abort('run-canceled-0002'),
         },
@@ -731,12 +752,13 @@ describe('AssetMediaReadingFetcher', () => {
           composedPrompt: input.composedPrompt,
           forcedToolSchema: input.forcedToolSchema,
           attachedFiles: input.attachedFiles,
+          documents: input.documents,
           signal: tally,
         }
         const expected = {
           aiAgent: input.aiAgent,
           instruction: input.composedPrompt.instruction,
-          documents: [],
+          documents: input.documents,
           fileUrls: input.attachedFiles,
           historyMessages: [],
           tools: [
@@ -754,6 +776,221 @@ describe('AssetMediaReadingFetcher', () => {
 
         expect(sendRequestToAiSpy)
           .toHaveBeenCalledWith(expected)
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#buildReadingDocuments()', () => {
+    /*
+     * The model is told what was asked and what the photographs are called. Without these the
+     * instruction's "only the fields of the schema you were sent" and "name the photos" refer to
+     * nothing, and every value is discarded as coming from a photograph that was never sent.
+     */
+    describe('should list the schema and the photographs in the order they are attached', () => {
+      const cases = [
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'brand',
+                label: 'Brand',
+                valueKind: 'text',
+                isRequired: false,
+              },
+              {
+                path: 'net_weight',
+                label: 'Net weight',
+                valueKind: 'text',
+                isRequired: true,
+              },
+            ],
+            readableMediaKeys: [
+              'media-key-10640011',
+              'media-key-10640012',
+            ],
+          },
+          expected: [
+            {
+              fieldSchema: [
+                {
+                  path: 'brand',
+                  label: 'Brand',
+                  valueKind: 'text',
+                  isRequired: false,
+                },
+                {
+                  path: 'net_weight',
+                  label: 'Net weight',
+                  valueKind: 'text',
+                  isRequired: true,
+                },
+              ],
+              photos: [
+                {
+                  mediaKey: 'media-key-10640011',
+                  attachedAs: 1,
+                },
+                {
+                  mediaKey: 'media-key-10640012',
+                  attachedAs: 2,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          params: {
+            fieldSchema: [
+              {
+                path: 'product_name',
+                label: 'Product name',
+                valueKind: 'text',
+                isRequired: false,
+              },
+            ],
+            readableMediaKeys: [
+              'media-key-10640021',
+            ],
+          },
+          expected: [
+            {
+              fieldSchema: [
+                {
+                  path: 'product_name',
+                  label: 'Product name',
+                  valueKind: 'text',
+                  isRequired: false,
+                },
+              ],
+              photos: [
+                {
+                  mediaKey: 'media-key-10640021',
+                  attachedAs: 1,
+                },
+              ],
+            },
+          ],
+        },
+      ]
+
+      test.each(cases)('readableMediaKeys[0]: $params.readableMediaKeys.0', ({
+        params,
+        expected,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+
+        const actual = fetcher.buildReadingDocuments(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#ensureSomeReadingTaken()', () => {
+    /*
+     * A failed call contributes no reading, so a model that was unreachable, gone or out of quota
+     * left the run with none - and none was read downstream as "the photographs showed nothing":
+     * the run was answered succeeded with no fields. That is the defect these cases hold shut.
+     */
+    describe('should raise when no call answered and the run was not stopped', () => {
+      const cases = [
+        {
+          params: {
+            readings: [],
+            aiRunId: 10640031,
+            signal: new AbortController().signal,
+          },
+          expected: 'every call to the model failed: AiRunId 10640031',
+        },
+        {
+          params: {
+            readings: [],
+            aiRunId: 10640032,
+            signal: new AbortController().signal,
+          },
+          expected: 'every call to the model failed: AiRunId 10640032',
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+        expected,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+
+        const actual = () => fetcher.ensureSomeReadingTaken(params)
+
+        expect(actual)
+          .toThrow(expected)
+      })
+    })
+
+    describe('should accept a run in which at least one call answered', () => {
+      const cases = [
+        {
+          params: {
+            readings: [
+              [],
+            ],
+            aiRunId: 10640041,
+            signal: new AbortController().signal,
+          },
+        },
+        {
+          params: {
+            readings: [
+              [
+                {
+                  path: 'brand',
+                },
+              ],
+              [],
+            ],
+            aiRunId: 10640042,
+            signal: new AbortController().signal,
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+
+        const actual = () => fetcher.ensureSomeReadingTaken(params)
+
+        expect(actual)
+          .not
+          .toThrow()
+      })
+    })
+
+    describe('should not blame the model for a run that was told to stop', () => {
+      const cases = [
+        {
+          params: {
+            readings: [],
+            aiRunId: 10640051,
+            signal: AbortSignal.abort('run-canceled-10640051'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+
+        const actual = () => fetcher.ensureSomeReadingTaken(params)
+
+        expect(actual)
+          .not
+          .toThrow()
       })
     })
   })

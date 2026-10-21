@@ -51,7 +51,7 @@ module.exports = {
       ID: 11110001,
       AI_PROVIDER_ID: AI_PROVIDER.GEMINI.ID,
       NAME: 'gemini-2-5-flash',
-      TARGET_MODEL_NAME: 'gemini-2.5-flash',
+      TARGET_MODEL_NAME: 'gemini-3.8-flash',
       IS_DEFAULT: false,
       IS_ACTIVE: true,
       DISPLAY_ORDER: 20,
