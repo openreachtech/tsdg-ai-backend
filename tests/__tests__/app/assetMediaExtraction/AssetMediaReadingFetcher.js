@@ -995,3 +995,126 @@ describe('AssetMediaReadingFetcher', () => {
     })
   })
 })
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#fetchReadingsConcurrently()', () => {
+    /*
+     * The calls are started together, so a call that never answers must not hold back the others from
+     * starting. A chain that took them one after another would have made one call here, not three -
+     * and the figure is read before anything has been waited for, which is what tells the two apart.
+     */
+    describe('should start every reading before waiting for any', () => {
+      const cases = [
+        {
+          params: {
+            readingIndexes: [1, 2, 3],
+            aiRunId: 10650001,
+            signal: new AbortController().signal,
+          },
+          expected: 3,
+        },
+        {
+          params: {
+            readingIndexes: [1, 2, 3, 4, 5],
+            aiRunId: 10650002,
+            signal: new AbortController().signal,
+          },
+          expected: 5,
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', ({
+        params,
+        expected,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+        const fetchOneReadingSpy = jest.spyOn(fetcher, 'fetchOneReading')
+          .mockReturnValue(new Promise(() => {}))
+
+        fetcher.fetchReadingsConcurrently(params) // Act: left pending on purpose
+
+        expect(fetchOneReadingSpy)
+          .toHaveBeenCalledTimes(expected)
+      })
+    })
+
+    describe('should answer the readings that answered, in the order of their indexes', () => {
+      const cases = [
+        {
+          params: {
+            readingIndexes: [1, 2, 3],
+            aiRunId: 10650011,
+            signal: new AbortController().signal,
+          },
+          expected: [
+            [
+              {
+                path: 'reading-1',
+              },
+            ],
+            [
+              {
+                path: 'reading-3',
+              },
+            ],
+          ],
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+        expected,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+        jest.spyOn(fetcher, 'takeOneReading')
+          .mockResolvedValueOnce([
+            {
+              path: 'reading-1',
+            },
+          ])
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce([
+            {
+              path: 'reading-3',
+            },
+          ])
+
+        const actual = await fetcher.fetchReadingsConcurrently(params)
+
+        expect(actual)
+          .toEqual(expected)
+      })
+    })
+  })
+})
+
+describe('AssetMediaReadingFetcher', () => {
+  describe('#takeOneReading()', () => {
+    describe('should take no reading once the run has been told to stop', () => {
+      const cases = [
+        {
+          params: {
+            readingIndex: 1,
+            aiRunId: 10650021,
+            signal: AbortSignal.abort('run-canceled-10650021'),
+          },
+        },
+      ]
+
+      test.each(cases)('aiRunId: $params.aiRunId', async ({
+        params,
+      }) => {
+        const fetcher = AssetMediaReadingFetcher.create()
+        const fetchOneReadingSpy = jest.spyOn(fetcher, 'fetchOneReading')
+
+        const actual = await fetcher.takeOneReading(params)
+
+        expect(actual)
+          .toBeNull()
+        expect(fetchOneReadingSpy)
+          .not
+          .toHaveBeenCalled()
+      })
+    })
+  })
+})
