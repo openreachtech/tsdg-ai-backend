@@ -1,9 +1,18 @@
+import {
+  MentsuLogger,
+} from '@openreachtech/mentsu-logger'
+
 import StubAssetFieldReadingSupplier from './StubAssetFieldReadingSupplier.js'
 
 import AiModelCallRecorder from '../aiRun/AiModelCallRecorder.js'
 
 import AI_MODEL_CONSTANT_HASH from '../constants/aiModelConstants.js'
 import ASSET_MEDIA_EXTRACTION_TOOL_CONSTANT_HASH from '../constants/assetMediaExtractionToolConstants.js'
+
+import {
+  env,
+  rootPath,
+} from '../globals/_.js'
 
 const {
   AI_MODEL,
@@ -44,6 +53,34 @@ const READ_MEDIA_ACTION_NAME = 'read-media'
 const READINGS_ARGUMENT_NAME = 'readings'
 
 const UNOFFERED_TOOL_MESSAGE = 'refused a run whose agent offers no reading tool'
+
+const EVERY_READING_FAILED_MESSAGE = 'took no reading because every call to the model failed'
+
+const LOG_FILE_PATH = rootPath.to('logs/asset-media-reading-')
+
+const FAILED_READING_TAGS = [
+  'AssetMediaReading',
+  'FailedReading',
+]
+
+/*
+ * How much of a provider's own error message is written to the log.
+ *
+ * What the provider says about a failed call is a status and a reason - a model that is gone, a
+ * quota that is spent, a key that is refused - and that is the whole of what makes a failure
+ * diagnosable. It is bounded so that a provider answering with something long cannot make a log
+ * line of it.
+ */
+const MAXIMUM_LOGGED_ERROR_MESSAGE_LENGTH = 300
+
+/*
+ * One logger client per process, for the reason `MediaFetchClient` holds one: the client owns a
+ * rotating file, and a provider outage fails every reading of every run at once.
+ */
+const mentsuLogger = MentsuLogger.create({
+  filePath: LOG_FILE_PATH,
+  env,
+})
 
 /**
  * Step 3 of an asset-media-extraction run: reads the media once per reading, and records each.
@@ -184,6 +221,15 @@ export default class AssetMediaReadingFetcher {
   }
 
   /**
+   * get: the logger a failed reading is written through.
+   *
+   * @returns {MentsuLogger} Logger client.
+   */
+  static get mentsuLogger () {
+    return mentsuLogger
+  }
+
+  /**
    * get: own constructor, so a subclass's overrides are the ones that answer.
    *
    * @returns {typeof AssetMediaReadingFetcher} The class.
@@ -230,6 +276,11 @@ export default class AssetMediaReadingFetcher {
       readableMediaKeys,
     })
 
+    const documents = this.buildReadingDocuments({
+      fieldSchema,
+      readableMediaKeys,
+    })
+
     const readings = await this.fetchReadingsSequentially({
       readingIndexes,
       aiRunId,
@@ -239,7 +290,14 @@ export default class AssetMediaReadingFetcher {
       composedPrompt,
       forcedToolSchema,
       attachedFiles,
+      documents,
       suppliedFunctionCalls,
+      signal,
+    })
+
+    this.ensureSomeReadingTaken({
+      readings,
+      aiRunId,
       signal,
     })
 
@@ -247,6 +305,83 @@ export default class AssetMediaReadingFetcher {
       readings,
       totalReadingCount: this.readingCount,
     }
+  }
+
+  /**
+   * Build the documents every reading of a run is sent beside the photographs.
+   *
+   * **Without this the model is told nothing about the request.** The composed instruction says to
+   * answer "only with the fields of the schema you were sent" and to "name the photos it came
+   * from", and both of those refer to things sent with the call. A model given only the photographs
+   * does not know which fields were asked for, and names a photograph by whatever the vendor calls
+   * the attached file - which is not the caller's `mediaKey`, so step 4 discards every value it
+   * read as coming from a photograph that was never sent.
+   *
+   * The photographs are listed in the order they are attached, and that order is what ties a
+   * `mediaKey` to the file the vendor holds: the keys and the attached files are both taken from the
+   * readable media in the order the request declared them. The caller's own schema travels as the
+   * caller wrote it. Nothing of the caller's URL goes - only the key step 4 will check against.
+   *
+   * @param {{
+   *   fieldSchema: Array<*>
+   *   readableMediaKeys: Array<string>
+   * }} params - Parameters.
+   * @returns {Array<Record<string, *>>} The documents.
+   * @public
+   */
+  buildReadingDocuments ({
+    fieldSchema,
+    readableMediaKeys,
+  }) {
+    const photos = readableMediaKeys.map((mediaKey, index) => ({
+      mediaKey,
+      attachedAs: index + 1,
+    }))
+
+    return [
+      {
+        fieldSchema,
+        photos,
+      },
+    ]
+  }
+
+  /**
+   * Refuse a run in which no call to the model answered.
+   *
+   * **A run every call of which failed is a failed run, and it used to be a succeeded one.** A
+   * failed call contributes no reading, so a model that was unreachable, gone, or out of quota
+   * left the run with none, and none was read downstream as "the photographs showed nothing": the
+   * run was answered `succeeded` with no fields and its trace said the readings were returned. The
+   * caller could not tell that from a photograph with nothing in it.
+   *
+   * A plain error is raised, which `BaseAiRunJobWorker` answers as `PROVIDER_CALL_FAILED` - the
+   * code its contract entry gives to exactly this. A run stopped by its signal has no readings
+   * either and is not this: nothing failed, the work was told to stop.
+   *
+   * @param {{
+   *   readings: Array<Array<*>>
+   *   aiRunId: number
+   *   signal: AbortSignal
+   * }} params - Parameters.
+   * @returns {void}
+   * @throws {Error} When no reading was taken and the run was not stopped.
+   * @public
+   */
+  ensureSomeReadingTaken ({
+    readings,
+    aiRunId,
+    signal,
+  }) {
+    if (readings.length > 0) {
+      return
+    }
+
+    if (signal.aborted) {
+      return
+    }
+
+    throw new Error(`${this.Ctor.name}#fetchAssetMediaReadings() ${EVERY_READING_FAILED_MESSAGE}: AiRunId ${aiRunId}`)
   }
 
   /**
@@ -371,6 +506,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    documents,
     suppliedFunctionCalls,
     signal,
   }) {
@@ -388,6 +524,7 @@ export default class AssetMediaReadingFetcher {
           composedPrompt,
           forcedToolSchema,
           attachedFiles,
+          documents,
           suppliedFunctionCalls,
           signal,
         })
@@ -425,6 +562,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    documents,
     suppliedFunctionCalls,
     signal,
   }) {
@@ -441,6 +579,7 @@ export default class AssetMediaReadingFetcher {
       composedPrompt,
       forcedToolSchema,
       attachedFiles,
+      documents,
       suppliedFunctionCalls,
       signal,
     })
@@ -474,6 +613,7 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    documents,
     suppliedFunctionCalls,
     signal,
   }) {
@@ -485,6 +625,7 @@ export default class AssetMediaReadingFetcher {
       composedPrompt,
       forcedToolSchema,
       attachedFiles,
+      documents,
       signal,
     })
 
@@ -507,11 +648,49 @@ export default class AssetMediaReadingFetcher {
     })
 
     if (aiModelResponse.hasError()) {
+      this.logFailedReading({
+        aiRunId,
+        readingIndex,
+        aiModelResponse,
+      })
+
       return null
     }
 
     return this.extractReadingItems({
       functionCalls,
+    })
+  }
+
+  /**
+   * Write the line a failed reading leaves behind.
+   *
+   * The call is already recorded on its own row, but that row holds tokens and timings and never
+   * the reason, so before this a provider that refused every call left a run with nothing anywhere
+   * saying why. The reason is the provider's own message, bounded; the photographs and what was
+   * read from them are not written.
+   *
+   * @param {{
+   *   aiRunId: number
+   *   readingIndex: number
+   *   aiModelResponse: *
+   * }} params - Parameters.
+   * @returns {void}
+   * @public
+   */
+  logFailedReading ({
+    aiRunId,
+    readingIndex,
+    aiModelResponse,
+  }) {
+    const errorMessage = String(aiModelResponse.extractErrorMessage() ?? '')
+      .slice(0, MAXIMUM_LOGGED_ERROR_MESSAGE_LENGTH)
+
+    const message = `${this.Ctor.name} a reading failed: AiRunId ${aiRunId}, reading ${readingIndex}, ${errorMessage}`
+
+    this.Ctor.mentsuLogger.error({
+      message,
+      tags: FAILED_READING_TAGS,
     })
   }
 
@@ -552,6 +731,7 @@ export default class AssetMediaReadingFetcher {
    *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
    *   forcedToolSchema: Record<string, *>
    *   attachedFiles: Array<Record<string, *>>
+   *   documents: Array<Record<string, *>>
    *   signal: AbortSignal
    * }} params - Parameters.
    * @returns {Promise<*>} The normalized response.
@@ -563,12 +743,13 @@ export default class AssetMediaReadingFetcher {
     composedPrompt,
     forcedToolSchema,
     attachedFiles,
+    documents,
     signal,
   }) {
     return aiModelProcessor.sendRequestToAi({
       aiAgent,
       instruction: composedPrompt.instruction,
-      documents: [],
+      documents,
       fileUrls: attachedFiles,
       historyMessages: [],
       tools: [
@@ -783,6 +964,7 @@ export default class AssetMediaReadingFetcher {
  *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
  *   forcedToolSchema: Record<string, *>
  *   attachedFiles: Array<Record<string, *>>
+ *   documents: Array<Record<string, *>>
  *   suppliedFunctionCalls: Array<Record<string, *>> | null
  *   signal: AbortSignal
  * }} FetchReadingsSequentiallyParams
@@ -799,6 +981,7 @@ export default class AssetMediaReadingFetcher {
  *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
  *   forcedToolSchema: Record<string, *>
  *   attachedFiles: Array<Record<string, *>>
+ *   documents: Array<Record<string, *>>
  *   suppliedFunctionCalls: Array<Record<string, *>> | null
  *   signal: AbortSignal
  * }} AppendOneReadingParams
@@ -814,6 +997,7 @@ export default class AssetMediaReadingFetcher {
  *   composedPrompt: import('../aiAgent/AiAgentPromptComposer.js').ComposedAiAgentPrompt
  *   forcedToolSchema: Record<string, *>
  *   attachedFiles: Array<Record<string, *>>
+ *   documents: Array<Record<string, *>>
  *   suppliedFunctionCalls: Array<Record<string, *>> | null
  *   signal: AbortSignal
  * }} FetchOneReadingParams
