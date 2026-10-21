@@ -99,14 +99,18 @@ const mentsuLogger = MentsuLogger.create({
  * reads. Anything else the model answers with is left where it is: the call this class reads back
  * is the one carrying that name, and a second call is not read.
  *
- * **The readings are taken one at a time, and the signal is asked between them** ([[Q113]]). Three
- * provider calls over twelve photographs are the other long half of a run, and a run past its time
- * limit stops at the reading boundary rather than making two more calls whose answer nothing will
- * read.
+ * **The readings are taken at once, and the signal is asked before each is started** ([[Q113]]).
+ * Three provider calls made one after another were the longest part of a run - on a measured
+ * request, about twenty of its twenty-four seconds - and the readings do not depend on one
+ * another: each is the same request, and step 5 settles by comparing them afterwards. They are
+ * started together, so the wait is the slowest of the three rather than their sum. What that costs
+ * is stated rather than hidden: a run puts three calls on the provider at one instant instead of
+ * one, and a run told to stop can no longer skip a reading it has not yet begun, because all of
+ * them have. What stops it waiting on those is the signal handed to each call, below.
  *
  * **The signal now goes into the call as well, and the two are different guarantees.** Asking it
- * between readings is what makes a run stop at a step boundary and never mid-step, and that is
- * unchanged: a reading is still taken whole or not at all. Handing it to the driver is what stops
+ * before a reading starts keeps a run that is already stopped from making any call at all, and a
+ * reading is still taken whole or not at all. Handing it to the driver is what stops
  * the run **waiting out** a call already in flight before it reaches that boundary — the item §15
  * deferred until a driver existed that opens a connection at all. Aborting the wait is not
  * aborting the work: `@google/genai` states that its `abortSignal` is client-only, does not cancel
@@ -281,7 +285,7 @@ export default class AssetMediaReadingFetcher {
       readableMediaKeys,
     })
 
-    const readings = await this.fetchReadingsSequentially({
+    const readings = await this.fetchReadingsConcurrently({
       readingIndexes,
       aiRunId,
       aiModelId,
@@ -487,17 +491,24 @@ export default class AssetMediaReadingFetcher {
   }
 
   /**
-   * Take the readings one at a time, stopping where the run is told its time is up.
+   * Take every reading at once, and answer what each one that answered found.
    *
-   * Through a `reduce` rather than a loop, and sequentially rather than at once: three calls made
-   * together would triple this run's instantaneous load on a provider for no gain, and the signal
-   * between them is what makes stopping possible at all.
+   * Through `Promise.all` over a `map`, so the readings are all started before any is waited for and
+   * the run waits for the slowest of them. This used to be a `reduce` that chained one call after the
+   * next, for two reasons that were written down: three calls together would triple the instantaneous
+   * load on the provider, and asking the signal between calls was what made stopping possible. The
+   * first is a cost this accepts - three calls is a small number against the rate the service admits
+   * runs at - and the second is kept in the one place that still has anything to ask, the start of
+   * each reading.
    *
-   * @param {FetchReadingsSequentiallyParams} params - Parameters.
+   * The readings come back in the order of their indexes, which is the order step 4 numbers them by,
+   * and a reading whose call failed is left out exactly as it was before.
+   *
+   * @param {FetchReadingsConcurrentlyParams} params - Parameters.
    * @returns {Promise<Array<Array<*>>>} What each reading that answered found.
    * @public
    */
-  async fetchReadingsSequentially ({
+  async fetchReadingsConcurrently ({
     readingIndexes,
     aiRunId,
     aiModelId,
@@ -510,12 +521,9 @@ export default class AssetMediaReadingFetcher {
     suppliedFunctionCalls,
     signal,
   }) {
-    return readingIndexes.reduce(
-      async (accumulatedReadingsPromise, readingIndex) => {
-        const accumulatedReadings = await accumulatedReadingsPromise
-
-        return this.appendOneReading({
-          accumulatedReadings,
+    const takenReadings = await Promise.all(
+      readingIndexes.map(readingIndex =>
+        this.takeOneReading({
           readingIndex,
           aiRunId,
           aiModelId,
@@ -528,32 +536,27 @@ export default class AssetMediaReadingFetcher {
           suppliedFunctionCalls,
           signal,
         })
-      },
-      Promise.resolve(
-        /** @type {Array<Array<*>>} */ ([])
       )
     )
+
+    return takenReadings.filter(it => it !== null)
   }
 
   /**
-   * Take one reading and add what it found, or leave the readings as they were.
-   *
-   * Its own method rather than the body of the callback above, because a higher-order function may
-   * carry no `if` - and both of the guards here are early returns that say nothing more than which
-   * readings do not add anything.
+   * Take one reading, or none where the run has already been told to stop.
    *
    * **The signal is asked before the reading rather than after it**, because whichever of the two
    * things raised it, nobody is waiting for what another call would produce. A run whose time
    * limit has won is a run whose row is already settled. A run whose client asked it to stop is
-   * one whose row is **not** settled yet — the settle happens after this work returns — but the
+   * one whose row is **not** settled yet - the settle happens after this work returns - but the
    * answer is about to be discarded either way. Asking afterwards would spend the call first.
    *
-   * @param {AppendOneReadingParams} params - Parameters.
-   * @returns {Promise<Array<Array<*>>>} The readings, with this one added if it found anything.
+   * @param {TakeOneReadingParams} params - Parameters.
+   * @returns {Promise<Array<*> | null>} What the reading found, or null when none was taken or its
+   * call failed.
    * @public
    */
-  async appendOneReading ({
-    accumulatedReadings,
+  async takeOneReading ({
     readingIndex,
     aiRunId,
     aiModelId,
@@ -567,10 +570,10 @@ export default class AssetMediaReadingFetcher {
     signal,
   }) {
     if (signal.aborted) {
-      return accumulatedReadings
+      return null
     }
 
-    const fieldReadings = await this.fetchOneReading({
+    return this.fetchOneReading({
       readingIndex,
       aiRunId,
       aiModelId,
@@ -583,15 +586,6 @@ export default class AssetMediaReadingFetcher {
       suppliedFunctionCalls,
       signal,
     })
-
-    if (fieldReadings === null) {
-      return accumulatedReadings
-    }
-
-    return [
-      ...accumulatedReadings,
-      fieldReadings,
-    ]
   }
 
   /**
@@ -967,12 +961,11 @@ export default class AssetMediaReadingFetcher {
  *   documents: Array<Record<string, *>>
  *   suppliedFunctionCalls: Array<Record<string, *>> | null
  *   signal: AbortSignal
- * }} FetchReadingsSequentiallyParams
+ * }} FetchReadingsConcurrentlyParams
  */
 
 /**
  * @typedef {{
- *   accumulatedReadings: Array<Array<*>>
  *   readingIndex: number
  *   aiRunId: number
  *   aiModelId: number
@@ -984,7 +977,7 @@ export default class AssetMediaReadingFetcher {
  *   documents: Array<Record<string, *>>
  *   suppliedFunctionCalls: Array<Record<string, *>> | null
  *   signal: AbortSignal
- * }} AppendOneReadingParams
+ * }} TakeOneReadingParams
  */
 
 /**
